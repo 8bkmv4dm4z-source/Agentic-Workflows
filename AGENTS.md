@@ -1,69 +1,124 @@
- Agent Instructions
+# Agent Instructions
 
-> This file is mirrored across CLAUDE.md, AGENTS.md, and GEMINI.md so the same instructions load in any AI environment.
+> This file is mirrored across `CLAUDE.md`, `AGENTS.md`, and `GEMINI.md` so the same instructions load in any AI environment.
 
-You operate within a 3-layer architecture that separates concerns to maximize reliability. LLMs are probabilistic, whereas most business logic is deterministic and requires consistency. This system fixes that mismatch.
+This repo follows the transition plan in `deep-research-report.md`: learn agent engineering by moving from a manual loop to framework orchestration, then toward production hardening.
 
-## The 3-Layer Architecture
+## Mission and Phase Context
 
-**Layer 1: Directive (What to do)**
-- Basically just SOPs written in Markdown, live in `directives/`
-- Define the goals, inputs, tools/scripts to use, outputs, and edge cases
-- Natural language instructions, like you'd give a mid-level employee
+Primary mission:
+- Build a reliable, stateful, tool-using agent stack with strict schemas, deterministic execution, and auditability.
 
-**Layer 2: Orchestration (Decision making)**
-- This is you. Your job: intelligent routing.
-- Read directives, call execution tools in the right order, handle errors, ask for clarification, update directives with learnings
-- You're the glue between intent and execution. E.g you don't try scraping websites yourself—you read `directives/scrape_website.md` and come up with inputs/outputs and then run `execution/scrape_single_site.py`
+Phase status (source of truth: `deep-research-report.md`):
+- Completed: Phase 0 (`p0/` manual loop baseline)
+- Completed: Phase 1 (`execution/langgraph/` LangGraph implementation + notebooks)
+- Next: Phase 2 (rebuild hardened orchestrator components)
+- Later: Phase 3 (production TypeScript infra)
 
-**Layer 3: Execution (Doing the work)**
-- Deterministic Python scripts in `execution/`
-- Environment variables, api tokens, etc are stored in `.env`
-- Handle API calls, data processing, file operations, database interactions
-- Reliable, testable, fast. Use scripts instead of manual work. Commented well.
+Default targeting rule:
+- Work on the highest implemented phase unless the user explicitly asks for a lower one.
+- In this repo that means default to Phase 1 paths under `execution/langgraph/`.
 
-**Why this works:** if you do everything yourself, errors compound. 90% accuracy per step = 59% success over 5 steps. The solution is push complexity into deterministic code. That way you just focus on decision-making.
+## Start Here (Context Load Order)
 
-## Operating Principles
+When starting work, load context in this order:
+1. `deep-research-report.md` (overall mission, roadmap, risk model)
+2. `P1_WALKTHROUGH.md` (current Phase 1 architecture, known bugs, run guidance)
+3. `directives/phase1_langgraph.md` (Phase 1 SOP)
+4. `execution/langgraph/` code + `tests/test_langgraph_flow.py`
 
-**1. Check for tools first**
-Before writing a script, check `execution/` per your directive. Only create new scripts if none exist.
+## Notebook-First Working Mode (Phase 1)
 
-**2. Self-anneal when things break**
-- Read error message and stack trace
-- Fix the script and test it again (unless it uses paid tokens/credits/etc—in which case you check w user first)
-- Update the directive with what you learned (API limits, timing, edge cases)
-- Example: you hit an API rate limit → you then look into API → find a batch endpoint that would fix → rewrite script to accommodate → test → update directive.
+For walkthrough and learning tasks, follow the notebook path:
+1. `execution/notebooks/phase1_langgraph_walkthrough.ipynb`
+2. `execution/notebooks/p1_state_schema.ipynb`
+3. `execution/notebooks/p1_provider.ipynb`
+4. `execution/notebooks/p1_policy.ipynb`
+5. `execution/notebooks/p1_memo_store.ipynb`
+6. `execution/notebooks/p1_checkpoint_store.ipynb`
+7. `execution/notebooks/p1_tools_registry.ipynb`
+8. `execution/notebooks/p1_graph_orchestrator.ipynb`
 
-**3. Update directives as you learn**
-Directives are living documents. When you discover API constraints, better approaches, common errors, or timing expectations—update the directive. But don't create or overwrite directives without asking unless explicitly told to. Directives are your instruction set and must be preserved (and improved upon over time, not extemporaneously used and then discarded).
+Use notebooks for explainability and verification, but keep production logic in `execution/langgraph/*.py`.
 
-## Self-annealing loop
+## 3-Layer Architecture (Operating Model)
 
-Errors are learning opportunities. When something breaks:
-1. Fix it
-2. Update the tool
-3. Test tool, make sure it works
-4. Update directive to include new flow
-5. System is now stronger
+Layer 1: Directive (what to do)
+- SOPs in `directives/`
+- Defines goals, inputs, tools/scripts, outputs, and edge cases
+
+Layer 2: Orchestration (decision-making)
+- Read directives and route execution
+- Handle retries, failures, recovery, and stop conditions
+- Keep behavior aligned with phase goals and constraints
+
+Layer 3: Execution (deterministic doing)
+- Deterministic Python code in `execution/`
+- Tool execution, persistence, data handling, and IO
+- Env/config via `.env`
+
+Why this matters:
+- Keep probabilistic reasoning in orchestration.
+- Push repeated logic and side effects into deterministic code.
+
+## Working Rules
+
+1. Check for existing tools first
+- Before writing new code, inspect `execution/` and existing tools.
+
+2. Self-anneal on failures
+- Read stack traces and logs.
+- Fix root cause, rerun, and verify.
+- Capture learnings in SOP/walkthrough docs when requested.
+
+3. Update docs with operational learnings
+- `P1_WALKTHROUGH.md` is the active operational handoff for Phase 1.
+- Add known failure modes, mitigations, and prompt guidance there.
+- Do not create/overwrite directives without explicit user request.
+
+4. Preserve phase isolation
+- Keep Phase 0 legacy in `p0/`.
+- Keep Phase 1 changes in `execution/langgraph/`, `tests/`, and docs.
+
+5. Reliability defaults
+- Enforce strict action schemas.
+- Bound retries and fail closed when necessary.
+- Keep duplicate-call protections and mission/task progress state explicit.
+
+## Known Phase 1 Reality (Current)
+
+- Provider/model outputs may violate JSON-only contracts (for example XML-ish tool-call envelopes).
+- Mission progress can drift if planner ignores system feedback.
+- Duplicate tool retries must be bounded and observable.
+
+When this happens:
+1. Capture logs and failing step.
+2. Harden parser/policy/stop conditions in orchestrator code.
+3. Add regression tests in `tests/test_langgraph_flow.py`.
+4. Update `P1_WALKTHROUGH.md` with the bug and fix.
 
 ## File Organization
 
-**Deliverables vs Intermediates:**
-- **Deliverables**: Google Sheets, Google Slides, or other cloud-based outputs that the user can access
-- **Intermediates**: Temporary files needed during processing
+- `.tmp/`: intermediates and local stores (regenerable)
+- `p0/`: legacy Phase 0 baseline
+- `execution/`: deterministic implementation code
+- `execution/langgraph/`: Phase 1 orchestration runtime
+- `execution/notebooks/`: walkthrough notebooks
+- `directives/`: SOPs
+- `tests/`: automated tests
+- `.env`: provider/config secrets
 
-**Directory structure:**
-- `.tmp/` - All intermediate files (dossiers, scraped data, temp exports). Never commit, always regenerated.
-- `execution/` - Python scripts (the deterministic tools)
-- `directives/` - SOPs in Markdown (the instruction set)
-- `.env` - Environment variables and API keys
-- `credentials.json`, `token.json` - Google OAuth credentials (required files, in `.gitignore`)
+## Practical Commands
 
-**Key principle:** Local files are only for processing. Deliverables live in cloud services (Google Sheets, Slides, etc.) where the user can access them. Everything in `.tmp/` can be deleted and regenerated.
+- Run Phase 1 demo:
+  - `.venv/bin/python -m execution.langgraph.run`
+- Run tests:
+  - `.venv/bin/python -m unittest discover -s tests -p 'test_*.py' -q`
 
 ## Summary
 
-You sit between human intent (directives) and deterministic execution (Python scripts). Read instructions, make decisions, call tools, handle errors, continuously improve the system.
-
-Be pragmatic. Be reliable. Self-anneal.
+Operate as an orchestration engineer:
+- route intent through directives,
+- execute deterministic code paths,
+- harden reliability with tests and stop conditions,
+- keep documentation synchronized with observed behavior.

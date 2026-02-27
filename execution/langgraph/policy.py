@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Memoization policy rules for Phase 1 orchestration."""
+
 from dataclasses import dataclass
 from typing import Any
 
@@ -8,6 +10,8 @@ from execution.langgraph.state_schema import hash_json
 
 @dataclass(frozen=True)
 class MemoizationPolicy:
+    """Deterministic rules for deciding when memoization must occur."""
+
     max_policy_retries: int = 2
 
     def requires_memoization(
@@ -17,6 +21,7 @@ class MemoizationPolicy:
         args: dict[str, Any],
         result: dict[str, Any],
     ) -> bool:
+        """Return True when a tool result should be memoized before progress."""
         if tool_name != "write_file":
             return False
 
@@ -36,6 +41,7 @@ class MemoizationPolicy:
         return False
 
     def suggested_memo_key(self, *, tool_name: str, args: dict[str, Any], result: dict[str, Any]) -> str:
+        """Generate a stable key for memo write/read consistency."""
         if tool_name == "write_file":
             path = str(args.get("path", "")).strip()
             if path:

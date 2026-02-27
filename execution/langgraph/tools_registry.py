@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Tool registry and memo-specific tool adapters for Phase 1."""
+
 from typing import Any
 
 from tools.base import Tool
@@ -13,6 +15,8 @@ from execution.langgraph.memo_store import SQLiteMemoStore
 
 
 class MemoizeStoreTool(Tool):
+    """Tool wrapper that writes memo entries through the SQLiteMemoStore."""
+
     name = "memoize"
     description = "Memoize key/value in run-scoped store. Required args: key, value, run_id."
 
@@ -52,6 +56,8 @@ class MemoizeStoreTool(Tool):
 
 
 class RetrieveMemoTool(Tool):
+    """Tool wrapper that retrieves memo entries by run/key."""
+
     name = "retrieve_memo"
     description = "Retrieve memoized value by key. Required args: key, run_id."
 
@@ -83,6 +89,7 @@ class RetrieveMemoTool(Tool):
 
 
 def build_tool_registry(store: SQLiteMemoStore) -> dict[str, Tool]:
+    """Build the full tool map used by graph execution nodes."""
     return {
         "repeat_message": EchoTool(),
         "sort_array": SortArrayTool(),

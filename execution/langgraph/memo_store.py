@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+"""Schema-backed memoization store for Phase 1.
+
+The store tracks memo entries per run and namespace, enabling deterministic
+verification that memoization occurred during execution.
+"""
+
 from dataclasses import dataclass
 from pathlib import Path
 import json
@@ -7,10 +13,13 @@ import sqlite3
 from typing import Any
 
 from execution.langgraph.state_schema import hash_json
+from logger import get_logger
 
 
 @dataclass(frozen=True)
 class PutResult:
+    """Metadata returned after writing a memo entry."""
+
     inserted: bool
     run_id: str
     key: str
@@ -20,6 +29,8 @@ class PutResult:
 
 @dataclass(frozen=True)
 class MemoLookupResult:
+    """Lookup result used by retrieval tools and diagnostics."""
+
     found: bool
     run_id: str
     key: str
@@ -29,9 +40,12 @@ class MemoLookupResult:
 
 
 class SQLiteMemoStore:
+    """SQLite implementation of run-scoped memo storage."""
+
     def __init__(self, db_path: str = ".tmp/memo_store.db") -> None:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.logger = get_logger("langgraph.memo_store")
         self._initialize_schema()
 
     def _connect(self) -> sqlite3.Connection:
@@ -40,6 +54,7 @@ class SQLiteMemoStore:
         return conn
 
     def _initialize_schema(self) -> None:
+        """Create memo table/index schema if absent."""
         with self._connect() as conn:
             conn.executescript(
                 """
@@ -71,6 +86,7 @@ class SQLiteMemoStore:
         step: int = 0,
         created_at: str = "",
     ) -> PutResult:
+        """Insert or update a memo entry with deterministic hash metadata."""
         value_json = json.dumps(value, sort_keys=True, default=str)
         value_hash = hash_json(value)
         timestamp = created_at or ""
@@ -95,6 +111,16 @@ class SQLiteMemoStore:
                 (run_id, namespace, key, value_json, value_hash, source_tool, step, timestamp),
             )
 
+        self.logger.info(
+            "MEMO PUT run_id=%s namespace=%s key=%s value_hash=%s source_tool=%s step=%s",
+            run_id,
+            namespace,
+            key,
+            value_hash,
+            source_tool,
+            step,
+        )
+
         return PutResult(
             inserted=True,
             run_id=run_id,
@@ -104,6 +130,7 @@ class SQLiteMemoStore:
         )
 
     def get(self, *, run_id: str, key: str, namespace: str = "run") -> MemoLookupResult:
+        """Retrieve a memoized value for a specific run and key."""
         with self._connect() as conn:
             row = conn.execute(
                 """
@@ -115,6 +142,7 @@ class SQLiteMemoStore:
             ).fetchone()
 
         if row is None:
+            self.logger.info("MEMO GET MISS run_id=%s namespace=%s key=%s", run_id, namespace, key)
             return MemoLookupResult(
                 found=False,
                 run_id=run_id,
@@ -124,6 +152,7 @@ class SQLiteMemoStore:
                 value_hash=None,
             )
 
+        self.logger.info("MEMO GET HIT run_id=%s namespace=%s key=%s", run_id, namespace, key)
         return MemoLookupResult(
             found=True,
             run_id=run_id,
@@ -132,3 +161,24 @@ class SQLiteMemoStore:
             value=json.loads(row["value_json"]),
             value_hash=row["value_hash"],
         )
+
+    def list_entries(self, *, run_id: str, namespace: str = "run") -> list[dict[str, Any]]:
+        """List memo metadata for visibility/reporting (no model call required)."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT key, value_hash, source_tool, step, created_at
+                FROM memo_entries
+                WHERE run_id = ? AND namespace = ?
+                ORDER BY step ASC, id ASC
+                """,
+                (run_id, namespace),
+            ).fetchall()
+        entries = [dict(row) for row in rows]
+        self.logger.info(
+            "MEMO LIST run_id=%s namespace=%s count=%s",
+            run_id,
+            namespace,
+            len(entries),
+        )
+        return entries

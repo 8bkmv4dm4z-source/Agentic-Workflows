@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+"""Durable checkpoint persistence for Phase 1 graph runs.
+
+This store is intentionally simple (SQLite) while keeping a stable interface for
+future backend replacement (for example Postgres).
+"""
+
 from pathlib import Path
 import json
 import sqlite3
@@ -9,6 +15,8 @@ from execution.langgraph.state_schema import RunState, utc_now_iso
 
 
 class SQLiteCheckpointStore:
+    """Persist node-level state snapshots for replay and debugging."""
+
     def __init__(self, db_path: str = ".tmp/langgraph_checkpoints.db") -> None:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -20,6 +28,7 @@ class SQLiteCheckpointStore:
         return conn
 
     def _initialize_schema(self) -> None:
+        """Create checkpoint table/index if absent."""
         with self._connect() as conn:
             conn.executescript(
                 """
@@ -38,6 +47,7 @@ class SQLiteCheckpointStore:
             )
 
     def save(self, *, run_id: str, step: int, node_name: str, state: RunState) -> None:
+        """Write a checkpoint snapshot for a specific node transition."""
         with self._connect() as conn:
             conn.execute(
                 """
@@ -54,6 +64,7 @@ class SQLiteCheckpointStore:
             )
 
     def load_latest(self, run_id: str) -> RunState | None:
+        """Load the most recent checkpointed state for a run."""
         with self._connect() as conn:
             row = conn.execute(
                 """
@@ -70,6 +81,7 @@ class SQLiteCheckpointStore:
         return json.loads(row["state_json"])
 
     def list_checkpoints(self, run_id: str) -> list[dict[str, Any]]:
+        """Return lightweight checkpoint metadata for timeline inspection."""
         with self._connect() as conn:
             rows = conn.execute(
                 """

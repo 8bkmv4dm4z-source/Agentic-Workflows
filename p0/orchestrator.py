@@ -3,7 +3,7 @@
 from typing import Dict, Any
 import json
 
-from llm_provider import LLMProvider
+from p0.llm_provider import LLMProvider
 from tools.echo import EchoTool
 from tools.sort_array import SortArrayTool
 from tools.string_ops import StringOpsTool
@@ -24,7 +24,7 @@ from errors import (
     RetryableAgentError,
 )
 
-from agent_state import AgentState, AgentMessage
+from p0.agent_state import AgentState, AgentMessage
 
 
 class Orchestrator:

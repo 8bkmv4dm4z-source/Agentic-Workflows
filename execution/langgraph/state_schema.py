@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+"""Typed state contract for Phase 1 graph orchestration.
+
+The graph can re-enter nodes with partially populated state snapshots. This file
+keeps the canonical schema and provides a defaulting function that hardens state
+before each node executes.
+"""
+
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, TypedDict, cast
 from uuid import uuid4
 
 
@@ -28,17 +35,36 @@ class MemoEvent(TypedDict):
     created_at: str
 
 
+class MissionReport(TypedDict):
+    mission_id: int
+    mission: str
+    used_tools: list[str]
+    tool_results: list[dict[str, Any]]
+    result: str
+
+
 class RunState(TypedDict):
+    # Run identity and step position.
     run_id: str
     step: int
+    # Full conversation transcript used by the planning model.
     messages: list[AgentMessage]
+    # Logical mission tracking used for per-mission reporting.
     completed_tasks: list[str]
+    # Tool execution audit trail.
     tool_history: list[ToolRecord]
     memo_events: list[MemoEvent]
+    # Retry counters for diagnostics and guardrail enforcement.
     retry_counts: dict[str, int]
     policy_flags: dict[str, Any]
+    # Duplicate-call prevention and tool usage telemetry.
     seen_tool_signatures: list[str]
     tool_call_counts: dict[str, int]
+    # Human-readable mission-level report data.
+    missions: list[str]
+    mission_reports: list[MissionReport]
+    active_mission_index: int
+    # Planned action and terminal answer.
     pending_action: dict[str, Any] | None
     final_answer: str
 
@@ -53,6 +79,7 @@ def hash_json(value: Any) -> str:
 
 
 def new_run_state(system_prompt: str, user_input: str, run_id: str | None = None) -> RunState:
+    """Build the initial state shape for a new run."""
     return {
         "run_id": run_id or str(uuid4()),
         "step": 0,
@@ -63,7 +90,7 @@ def new_run_state(system_prompt: str, user_input: str, run_id: str | None = None
         "completed_tasks": [],
         "tool_history": [],
         "memo_events": [],
-        "retry_counts": {"invalid_json": 0, "memo_policy": 0},
+        "retry_counts": {"invalid_json": 0, "memo_policy": 0, "content_validation": 0},
         "policy_flags": {
             "memo_required": False,
             "memo_required_key": "",
@@ -71,47 +98,64 @@ def new_run_state(system_prompt: str, user_input: str, run_id: str | None = None
         },
         "seen_tool_signatures": [],
         "tool_call_counts": {},
+        "missions": [],
+        "mission_reports": [],
+        "active_mission_index": -1,
         "pending_action": None,
         "final_answer": "",
     }
 
 
-def ensure_state_defaults(state: dict[str, Any], *, system_prompt: str = "") -> RunState:
-    if "run_id" not in state:
-        state["run_id"] = str(uuid4())
-    if "step" not in state:
-        state["step"] = 0
-    if "messages" not in state:
-        state["messages"] = []
-    if system_prompt and not state["messages"]:
-        state["messages"] = [{"role": "system", "content": system_prompt}]
-    if "completed_tasks" not in state:
-        state["completed_tasks"] = []
-    if "tool_history" not in state:
-        state["tool_history"] = []
-    if "memo_events" not in state:
-        state["memo_events"] = []
-    if "retry_counts" not in state:
-        state["retry_counts"] = {}
-    if "policy_flags" not in state:
-        state["policy_flags"] = {}
-    if "seen_tool_signatures" not in state:
-        state["seen_tool_signatures"] = []
-    if "tool_call_counts" not in state:
-        state["tool_call_counts"] = {}
-    if "pending_action" not in state:
-        state["pending_action"] = None
-    if "final_answer" not in state:
-        state["final_answer"] = ""
+def ensure_state_defaults(state: RunState | dict[str, Any], *, system_prompt: str = "") -> RunState:
+    """Repair missing state keys so node handlers can run safely.
 
-    retry_counts = state["retry_counts"]
+    Accepts either a raw dict or a typed RunState because graph frameworks and
+    serializers may hand back partially-typed mapping objects.
+    """
+    state_dict = cast(dict[str, Any], state)
+
+    if "run_id" not in state_dict:
+        state_dict["run_id"] = str(uuid4())
+    if "step" not in state_dict:
+        state_dict["step"] = 0
+    if "messages" not in state_dict:
+        state_dict["messages"] = []
+    if system_prompt and not state_dict["messages"]:
+        state_dict["messages"] = [{"role": "system", "content": system_prompt}]
+    if "completed_tasks" not in state_dict:
+        state_dict["completed_tasks"] = []
+    if "tool_history" not in state_dict:
+        state_dict["tool_history"] = []
+    if "memo_events" not in state_dict:
+        state_dict["memo_events"] = []
+    if "retry_counts" not in state_dict:
+        state_dict["retry_counts"] = {}
+    if "policy_flags" not in state_dict:
+        state_dict["policy_flags"] = {}
+    if "seen_tool_signatures" not in state_dict:
+        state_dict["seen_tool_signatures"] = []
+    if "tool_call_counts" not in state_dict:
+        state_dict["tool_call_counts"] = {}
+    if "missions" not in state_dict:
+        state_dict["missions"] = []
+    if "mission_reports" not in state_dict:
+        state_dict["mission_reports"] = []
+    if "active_mission_index" not in state_dict:
+        state_dict["active_mission_index"] = -1
+    if "pending_action" not in state_dict:
+        state_dict["pending_action"] = None
+    if "final_answer" not in state_dict:
+        state_dict["final_answer"] = ""
+
+    retry_counts = state_dict["retry_counts"]
     retry_counts.setdefault("invalid_json", 0)
     retry_counts.setdefault("memo_policy", 0)
     retry_counts.setdefault("duplicate_tool", 0)
+    retry_counts.setdefault("content_validation", 0)
 
-    policy_flags = state["policy_flags"]
+    policy_flags = state_dict["policy_flags"]
     policy_flags.setdefault("memo_required", False)
     policy_flags.setdefault("memo_required_key", "")
     policy_flags.setdefault("memo_required_reason", "")
 
-    return state  # type: ignore[return-value]
+    return cast(RunState, state_dict)

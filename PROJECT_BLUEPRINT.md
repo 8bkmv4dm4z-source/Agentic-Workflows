@@ -14,18 +14,24 @@ agent_phase0/
 ├── PROJECT_BLUEPRINT.md
 ├── deep-research-report.md
 ├── requirements.txt
-├── main.py
-├── orchestrator.py
-├── llm_provider.py
-├── agent_state.py
+├── p0/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── orchestrator.py
+│   ├── llm_provider.py
+│   ├── agent_state.py
+│   └── tests/
+│       ├── groq_test.py
+│       └── testenv.py
 ├── schemas.py
 ├── errors.py
 ├── logger.py
 ├── scripts/
 │   └── list_models.py
 ├── tests/
-│   ├── groq_test.py
-│   └── testenv.py
+│   ├── test_langgraph_flow.py
+│   ├── test_memo_policy.py
+│   └── test_memo_store.py
 ├── tools/
 │   ├── __init__.py
 │   ├── base.py
@@ -48,19 +54,19 @@ Current system is a deterministic tool-using CLI agent with strict JSON output c
 ## 4. Subsystems
 
 ### 4.1 Entry Layer
-- `main.py`
+- `p0/main.py`
 - Responsibility: bootstraps `Orchestrator`, passes user input, starts run.
 
 ### 4.2 Orchestration Layer
-- `orchestrator.py`
+- `p0/orchestrator.py`
 - Responsibility: run loop, prompt policy, model call, schema validation, tool dispatch, retry/fail semantics.
 
 ### 4.3 Model Provider Layer
-- `llm_provider.py`
+- `p0/llm_provider.py`
 - Responsibility: load API key, call Groq chat completions, normalize model output.
 
 ### 4.4 State Layer
-- `agent_state.py`
+- `p0/agent_state.py`
 - Responsibility: conversation state, step tracking, repeated tool-call prevention via signature hashing.
 
 ### 4.5 Contract Layer

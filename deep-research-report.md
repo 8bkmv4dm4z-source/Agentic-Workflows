@@ -19,7 +19,7 @@ A practical transition path that consistently works is:
 ### Phase completion (this repo)
 
 - [x] Phase 0: Python sandbox agent loop exists (`main.py`, `orchestrator.py`, `tools/`)
-- [ ] Phase 1: Framework literacy implementations (LangGraph/LlamaIndex/Haystack/etc.)
+- [x] Phase 1: Framework literacy implementation completed in this repo via LangGraph (`execution/langgraph/`, `execution/notebooks/p1_*.ipynb`)
 - [ ] Phase 2: Rebuild core pieces (audit schema, replayable runs, hardened tool boundary)
 - [ ] Phase 3: Production TypeScript infrastructure (service boundaries, tracing, budgets, CI evals)
 
