@@ -90,11 +90,21 @@ def new_run_state(system_prompt: str, user_input: str, run_id: str | None = None
         "completed_tasks": [],
         "tool_history": [],
         "memo_events": [],
-        "retry_counts": {"invalid_json": 0, "memo_policy": 0, "content_validation": 0},
+        "retry_counts": {
+            "invalid_json": 0,
+            "memo_policy": 0,
+            "provider_timeout": 0,
+            "content_validation": 0,
+        },
         "policy_flags": {
             "memo_required": False,
             "memo_required_key": "",
             "memo_required_reason": "",
+            "memo_retrieve_hits": 0,
+            "memo_retrieve_misses": 0,
+            "cache_reuse_hits": 0,
+            "cache_reuse_misses": 0,
+            "planner_timeout_mode": False,
         },
         "seen_tool_signatures": [],
         "tool_call_counts": {},
@@ -150,6 +160,7 @@ def ensure_state_defaults(state: RunState | dict[str, Any], *, system_prompt: st
     retry_counts = state_dict["retry_counts"]
     retry_counts.setdefault("invalid_json", 0)
     retry_counts.setdefault("memo_policy", 0)
+    retry_counts.setdefault("provider_timeout", 0)
     retry_counts.setdefault("duplicate_tool", 0)
     retry_counts.setdefault("content_validation", 0)
 
@@ -157,5 +168,10 @@ def ensure_state_defaults(state: RunState | dict[str, Any], *, system_prompt: st
     policy_flags.setdefault("memo_required", False)
     policy_flags.setdefault("memo_required_key", "")
     policy_flags.setdefault("memo_required_reason", "")
+    policy_flags.setdefault("memo_retrieve_hits", 0)
+    policy_flags.setdefault("memo_retrieve_misses", 0)
+    policy_flags.setdefault("cache_reuse_hits", 0)
+    policy_flags.setdefault("cache_reuse_misses", 0)
+    policy_flags.setdefault("planner_timeout_mode", False)
 
     return cast(RunState, state_dict)

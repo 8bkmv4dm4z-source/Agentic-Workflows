@@ -31,7 +31,12 @@ class RunSummary:
     invalid_json_retries: int
     duplicate_tool_retries: int
     memo_policy_retries: int
+    provider_timeout_retries: int
     content_validation_retries: int
+    memo_retrieve_hits: int
+    memo_retrieve_misses: int
+    cache_reuse_hits: int
+    cache_reuse_misses: int
     issue_flags: str
     finalized_at: str
 
@@ -152,6 +157,7 @@ def summarize_runs(
         run_id = str(row["run_id"])
         tools_str, tools_count = _tools_by_step(state)
         retries = dict(state.get("retry_counts", {}))
+        policy_flags = dict(state.get("policy_flags", {}))
         final_answer = str(state.get("final_answer", ""))
         issue_flags: list[str] = []
         fib_issue = _fibonacci_issue_from_state(state)
@@ -159,6 +165,8 @@ def summarize_runs(
             issue_flags.append(fib_issue)
         if retries.get("invalid_json", 0):
             issue_flags.append("invalid_json_retry")
+        if retries.get("provider_timeout", 0):
+            issue_flags.append("provider_timeout_retry")
         if retries.get("duplicate_tool", 0):
             issue_flags.append("duplicate_tool_retry")
 
@@ -173,7 +181,12 @@ def summarize_runs(
                 invalid_json_retries=int(retries.get("invalid_json", 0)),
                 duplicate_tool_retries=int(retries.get("duplicate_tool", 0)),
                 memo_policy_retries=int(retries.get("memo_policy", 0)),
+                provider_timeout_retries=int(retries.get("provider_timeout", 0)),
                 content_validation_retries=int(retries.get("content_validation", 0)),
+                memo_retrieve_hits=int(policy_flags.get("memo_retrieve_hits", 0)),
+                memo_retrieve_misses=int(policy_flags.get("memo_retrieve_misses", 0)),
+                cache_reuse_hits=int(policy_flags.get("cache_reuse_hits", 0)),
+                cache_reuse_misses=int(policy_flags.get("cache_reuse_misses", 0)),
                 issue_flags=",".join(issue_flags),
                 finalized_at=str(row["created_at"]),
             )
@@ -196,7 +209,12 @@ def _print_table(rows: list[RunSummary]) -> None:
         "invalid_json",
         "dup_tool",
         "memo_policy",
+        "provider_timeout",
         "content_validation",
+        "memo_hit",
+        "memo_miss",
+        "cache_hit",
+        "cache_miss",
         "issue_flags",
         "tools_by_step",
     ]
@@ -212,7 +230,12 @@ def _print_table(rows: list[RunSummary]) -> None:
                 str(row.invalid_json_retries),
                 str(row.duplicate_tool_retries),
                 str(row.memo_policy_retries),
+                str(row.provider_timeout_retries),
                 str(row.content_validation_retries),
+                str(row.memo_retrieve_hits),
+                str(row.memo_retrieve_misses),
+                str(row.cache_reuse_hits),
+                str(row.cache_reuse_misses),
                 row.issue_flags,
                 row.tools_by_step,
             ]
@@ -248,7 +271,12 @@ def _write_csv(rows: list[RunSummary], csv_path: str) -> None:
                 "invalid_json_retries",
                 "duplicate_tool_retries",
                 "memo_policy_retries",
+                "provider_timeout_retries",
                 "content_validation_retries",
+                "memo_retrieve_hits",
+                "memo_retrieve_misses",
+                "cache_reuse_hits",
+                "cache_reuse_misses",
                 "issue_flags",
                 "finalized_at",
             ]
@@ -265,7 +293,12 @@ def _write_csv(rows: list[RunSummary], csv_path: str) -> None:
                     row.invalid_json_retries,
                     row.duplicate_tool_retries,
                     row.memo_policy_retries,
+                    row.provider_timeout_retries,
                     row.content_validation_retries,
+                    row.memo_retrieve_hits,
+                    row.memo_retrieve_misses,
+                    row.cache_reuse_hits,
+                    row.cache_reuse_misses,
                     row.issue_flags,
                     row.finalized_at,
                 ]
@@ -280,6 +313,9 @@ def _print_run_details(run_id: str, rows: list[RunSummary], checkpoint_db_path: 
         return
     print(f"\nRun detail: {run_id}")
     print(f"status={target.status} steps={target.step_count} memo={target.memo_entry_count}")
+    print(f"provider_timeout_retries={target.provider_timeout_retries}")
+    print(f"memo_retrieve_hits={target.memo_retrieve_hits} memo_retrieve_misses={target.memo_retrieve_misses}")
+    print(f"cache_reuse_hits={target.cache_reuse_hits} cache_reuse_misses={target.cache_reuse_misses}")
     print(f"issues={target.issue_flags or 'none'}")
 
     with _connect(checkpoint_db_path) as conn:

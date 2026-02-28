@@ -8,7 +8,10 @@ run/mission reports using only local state for final snapshots.
 """
 
 import json
+import os
+import queue
 import re
+import threading
 from typing import Any
 
 from pydantic import ValidationError
@@ -16,7 +19,7 @@ from pydantic import ValidationError
 from execution.langgraph.checkpoint_store import SQLiteCheckpointStore
 from execution.langgraph.memo_store import SQLiteMemoStore
 from execution.langgraph.policy import MemoizationPolicy
-from execution.langgraph.provider import ChatProvider, build_provider
+from execution.langgraph.provider import ChatProvider, ProviderTimeoutError, build_provider
 from execution.langgraph.state_schema import (
     MemoEvent,
     RunState,
@@ -55,6 +58,8 @@ class LangGraphOrchestrator:
         policy: MemoizationPolicy | None = None,
         max_steps: int = 40,
         max_invalid_plan_retries: int = 8,
+        max_provider_timeout_retries: int = 3,
+        plan_call_timeout_seconds: float | None = None,
         max_content_validation_retries: int = 2,
     ) -> None:
         self.provider = provider or build_provider()
@@ -64,6 +69,12 @@ class LangGraphOrchestrator:
         self.logger = get_logger("langgraph.orchestrator")
         self.max_steps = max_steps
         self.max_invalid_plan_retries = max_invalid_plan_retries
+        self.max_provider_timeout_retries = max_provider_timeout_retries
+        self.plan_call_timeout_seconds = (
+            plan_call_timeout_seconds
+            if plan_call_timeout_seconds is not None
+            else self._env_float("P1_PLAN_CALL_TIMEOUT_SECONDS", 45.0)
+        )
         self.max_content_validation_retries = max_content_validation_retries
         self.tools: dict[str, Tool] = build_tool_registry(self.memo_store)
         self.system_prompt = self._build_system_prompt()
@@ -91,7 +102,10 @@ class LangGraphOrchestrator:
             "Memoization policy:\n"
             "- For heavy deterministic writes, memoize result before continuing.\n"
             '- Use tool "memoize" with args: key, value, run_id, optional namespace.\n'
-            '- To lookup prior values, use "retrieve_memo" with args: key, run_id.\n'
+            '- Use "retrieve_memo" only when explicitly needed for task context.\n'
+            "- For write_file tasks, the orchestrator auto-checks memo keys before writing.\n"
+            "- For recurring write tasks, the orchestrator may auto-reuse cached write inputs from prior runs.\n"
+            "- Do not emit extra planning subtasks; output the next concrete tool call only.\n"
             "Always obey system feedback messages."
         )
 
@@ -171,21 +185,142 @@ class LangGraphOrchestrator:
         if pending_action.get("action") == "finish":
             return state
         state["step"] = state.get("step", 0) + 1
+        if self._maybe_complete_next_write_from_cache(state):
+            if self._all_missions_completed(state):
+                state["pending_action"] = {
+                    "action": "finish",
+                    "answer": self._build_auto_finish_answer(state),
+                }
+            self.checkpoint_store.save(
+                run_id=state["run_id"],
+                step=state["step"],
+                node_name="plan_cache_reuse",
+                state=state,
+            )
+            return state
+        if bool(state.get("policy_flags", {}).get("planner_timeout_mode", False)):
+            fallback_action = self._deterministic_fallback_action(state)
+            if fallback_action is not None:
+                self.logger.warning(
+                    "PLAN TIMEOUT MODE step=%s action=%s",
+                    state["step"],
+                    fallback_action,
+                )
+                state["pending_action"] = fallback_action
+                self.checkpoint_store.save(
+                    run_id=state["run_id"],
+                    step=state["step"],
+                    node_name="plan_timeout_mode",
+                    state=state,
+                )
+                return state
         progress_message = self._progress_hint_message(state)
         if progress_message:
             state["messages"].append({"role": "system", "content": progress_message})
 
         try:
-            model_output = self.provider.generate(state["messages"]).strip()
+            self.logger.info(
+                "PLAN PROVIDER CALL step=%s timeout_seconds=%.2f",
+                state["step"],
+                self.plan_call_timeout_seconds,
+            )
+            model_output = self._generate_with_hard_timeout(state["messages"]).strip()
             self.logger.info("MODEL OUTPUT step=%s output=%s", state["step"], model_output[:500])
             state["messages"].append({"role": "assistant", "content": model_output})
+            state["policy_flags"]["planner_timeout_mode"] = False
             action = self._validate_action(model_output)
+            if action.get("action") == "finish" and not self._all_missions_completed(state):
+                next_mission = self._next_incomplete_mission(state)
+                state["messages"].append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "Finish rejected: missions remain incomplete. "
+                            f"Next task: {next_mission or 'unknown'}"
+                        ),
+                    }
+                )
+                state["pending_action"] = None
+                self.checkpoint_store.save(
+                    run_id=state["run_id"],
+                    step=state["step"],
+                    node_name="plan_finish_rejected",
+                    state=state,
+                )
+                return state
             self.logger.info("PLANNED ACTION step=%s action=%s", state["step"], action)
             state["pending_action"] = action
             self.checkpoint_store.save(
                 run_id=state["run_id"],
                 step=state["step"],
                 node_name="plan",
+                state=state,
+            )
+            return state
+        except ProviderTimeoutError as exc:
+            error_text = str(exc)
+            timeout_count = int(state["retry_counts"].get("provider_timeout", 0)) + 1
+            state["retry_counts"]["provider_timeout"] = timeout_count
+            self.logger.warning(
+                "PLAN PROVIDER TIMEOUT step=%s timeout_count=%s error=%s",
+                state["step"],
+                timeout_count,
+                error_text,
+            )
+
+            fallback_action = self._deterministic_fallback_action(state)
+            if fallback_action is not None:
+                self.logger.warning(
+                    "PLAN TIMEOUT FALLBACK step=%s action=%s",
+                    state["step"],
+                    fallback_action,
+                )
+                state["messages"].append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "Provider timeout during planning. Orchestrator selected a deterministic fallback action."
+                        ),
+                    }
+                )
+                state["policy_flags"]["planner_timeout_mode"] = True
+                state["pending_action"] = fallback_action
+                self.checkpoint_store.save(
+                    run_id=state["run_id"],
+                    step=state["step"],
+                    node_name="plan_timeout_fallback",
+                    state=state,
+                )
+                return state
+
+            if timeout_count >= self.max_provider_timeout_retries:
+                fail_message = (
+                    "Planner failed after provider timeout retries: "
+                    f"{error_text}. Stopping."
+                )
+                state["messages"].append({"role": "system", "content": fail_message})
+                state["pending_action"] = {"action": "finish", "answer": fail_message}
+                self.checkpoint_store.save(
+                    run_id=state["run_id"],
+                    step=state["step"],
+                    node_name="plan_fail_provider_timeout",
+                    state=state,
+                )
+                return state
+
+            state["messages"].append(
+                {
+                    "role": "system",
+                    "content": (
+                        "Provider timeout while planning. Retry and return exactly one valid JSON object."
+                    ),
+                }
+            )
+            state["pending_action"] = None
+            self.checkpoint_store.save(
+                run_id=state["run_id"],
+                step=state["step"],
+                node_name="plan_provider_timeout",
                 state=state,
             )
             return state
@@ -249,6 +384,45 @@ class LangGraphOrchestrator:
             )
             return state
 
+    def _env_float(self, name: str, default: float) -> float:
+        raw = (os.getenv(name) or "").strip()
+        if not raw:
+            return default
+        try:
+            value = float(raw)
+        except ValueError:
+            return default
+        return value if value > 0 else default
+
+    def _generate_with_hard_timeout(self, messages: list[dict[str, str]]) -> str:
+        """Protect planner generate() call with a hard wall-clock timeout."""
+        timeout_seconds = self.plan_call_timeout_seconds
+        if timeout_seconds <= 0:
+            return self.provider.generate(messages)
+
+        outbox: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
+
+        def _run() -> None:
+            try:
+                outbox.put(("ok", self.provider.generate(messages)))
+            except Exception as exc:  # noqa: BLE001
+                outbox.put(("err", exc))
+
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
+        try:
+            kind, payload = outbox.get(timeout=timeout_seconds)
+        except queue.Empty as exc:
+            raise ProviderTimeoutError(
+                f"planner call exceeded hard timeout of {timeout_seconds:.2f}s"
+            ) from exc
+
+        if kind == "err":
+            if isinstance(payload, Exception):
+                raise payload
+            raise RuntimeError(str(payload))
+        return str(payload)
+
     def _execute_action(self, state: RunState) -> RunState:
         """Execute planned tool action, including duplicate and policy checks."""
         state = ensure_state_defaults(state, system_prompt=self.system_prompt)
@@ -263,6 +437,37 @@ class LangGraphOrchestrator:
 
         tool_name = str(action.get("tool_name", ""))
         tool_args = self._normalize_tool_args(tool_name, dict(action.get("args", {})))
+
+        lookup_candidates = self._memo_lookup_candidates_for_action(tool_name=tool_name, tool_args=tool_args)
+        if lookup_candidates and tool_name != "retrieve_memo":
+            if not self._has_attempted_memo_lookup(state=state, candidate_keys=lookup_candidates):
+                self.logger.info(
+                    "MEMO LOOKUP AUTO step=%s attempted_tool=%s keys=%s",
+                    state["step"],
+                    tool_name,
+                    lookup_candidates,
+                )
+                memo_hit = self._auto_lookup_before_write(state=state, candidate_keys=lookup_candidates)
+                if memo_hit:
+                    if tool_name == "write_file":
+                        self._mark_next_mission_complete_from_memo_hit(state=state, memo_hit=memo_hit)
+                    state["messages"].append(
+                        {
+                            "role": "system",
+                            "content": (
+                                "Memo hit found for this deterministic write. "
+                                "Skip recomputation and continue with remaining tasks."
+                            ),
+                        }
+                    )
+                    state["pending_action"] = None
+                    self.checkpoint_store.save(
+                        run_id=state["run_id"],
+                        step=state["step"],
+                        node_name="execute_lookup_hit_skip",
+                        state=state,
+                    )
+                    return state
 
         if state["policy_flags"].get("memo_required") and tool_name != "memoize":
             retry_count = int(state["retry_counts"].get("memo_policy", 0)) + 1
@@ -362,6 +567,8 @@ class LangGraphOrchestrator:
         self.logger.info("TOOL EXEC step=%s tool=%s args=%s", state["step"], tool_name, tool_args)
         tool_result = self.tools[tool_name].execute(tool_args)
         self.logger.info("TOOL RESULT step=%s tool=%s result=%s", state["step"], tool_name, tool_result)
+        if tool_name == "retrieve_memo":
+            self._record_retrieve_memo_trace(state=state, tool_result=tool_result)
         validation_error = self._validate_tool_result_for_active_mission(
             state=state,
             tool_name=tool_name,
@@ -428,6 +635,9 @@ class LangGraphOrchestrator:
                 state=state,
             )
             return state
+
+        if tool_name == "write_file":
+            self._cache_write_file_inputs(state=state, tool_args=tool_args)
 
         if tool_name == "memoize" and "value_hash" in tool_result:
             state["memo_events"].append(
@@ -556,7 +766,22 @@ class LangGraphOrchestrator:
     def _validate_action(self, model_output: str) -> dict[str, Any]:
         """Validate model output against strict ToolAction/FinishAction schema."""
         data = self._parse_action_json(model_output)
-        action = data.get("action")
+        action_alias = str(data.get("action", "")).strip().lower()
+        if (
+            "tool_name" not in data
+            and isinstance(data.get("action"), str)
+            and action_alias in self.tools
+        ):
+            data = {
+                "action": "tool",
+                "tool_name": action_alias,
+                "args": dict(data.get("args", {})),
+            }
+        if data.get("action") == "tool" and "tool_name" not in data and isinstance(data.get("name"), str):
+            data["tool_name"] = data["name"]
+        action = str(data.get("action", "")).strip().lower()
+        if action in {"tool", "finish"}:
+            data["action"] = action
         if action == "tool":
             try:
                 parsed = ToolAction(**data)
@@ -620,6 +845,104 @@ class LangGraphOrchestrator:
                     return text[start : index + 1]
         return None
 
+    def _deterministic_fallback_action(self, state: RunState) -> dict[str, Any] | None:
+        """Build a safe tool/finish action from local state when provider times out."""
+        policy_flags = state.get("policy_flags", {})
+        if policy_flags.get("memo_required"):
+            key = str(policy_flags.get("memo_required_key", "")).strip()
+            if key:
+                source_tool = str(policy_flags.get("last_tool_name", "memoize")).strip() or "memoize"
+                last_result = dict(policy_flags.get("last_tool_result", {}))
+                value: Any = last_result if last_result else {"status": "memoized_by_fallback"}
+                return {
+                    "action": "tool",
+                    "tool_name": "memoize",
+                    "args": {
+                        "key": key,
+                        "value": value,
+                        "run_id": state["run_id"],
+                        "source_tool": source_tool,
+                    },
+                }
+
+        if self._all_missions_completed(state):
+            return {"action": "finish", "answer": self._build_auto_finish_answer(state)}
+
+        mission = self._next_incomplete_mission(state).strip()
+        if not mission:
+            return {"action": "finish", "answer": self._build_auto_finish_answer(state)}
+        mission_lower = mission.lower()
+
+        repeat_text = self._extract_quoted_text(mission)
+        if "repeat" in mission_lower and repeat_text:
+            return {"action": "tool", "tool_name": "repeat_message", "args": {"message": repeat_text}}
+
+        if "sort" in mission_lower:
+            numbers = self._extract_numbers_from_text(mission)
+            if numbers:
+                order = "desc" if "desc" in mission_lower else "asc"
+                return {"action": "tool", "tool_name": "sort_array", "args": {"items": numbers, "order": order}}
+
+        if "uppercase" in mission_lower and repeat_text:
+            return {
+                "action": "tool",
+                "tool_name": "string_ops",
+                "args": {"text": repeat_text, "operation": "uppercase"},
+            }
+        if "lowercase" in mission_lower and repeat_text:
+            return {
+                "action": "tool",
+                "tool_name": "string_ops",
+                "args": {"text": repeat_text, "operation": "lowercase"},
+            }
+        if "reverse" in mission_lower and repeat_text:
+            return {
+                "action": "tool",
+                "tool_name": "string_ops",
+                "args": {"text": repeat_text, "operation": "reverse"},
+            }
+
+        if "fibonacci" in mission_lower and ("write" in mission_lower or "write_file" in mission_lower):
+            path = self._extract_write_path_from_mission(mission) or "fib.txt"
+            count = self._extract_fibonacci_count(mission)
+            return {
+                "action": "tool",
+                "tool_name": "write_file",
+                "args": {"path": path, "content": self._fibonacci_csv(count)},
+            }
+
+        return None
+
+    def _extract_quoted_text(self, text: str) -> str:
+        match = re.search(r"""["']([^"']+)["']""", text)
+        if not match:
+            return ""
+        return match.group(1).strip()
+
+    def _extract_numbers_from_text(self, text: str) -> list[int]:
+        return [int(token) for token in re.findall(r"-?\d+", text)]
+
+    def _extract_fibonacci_count(self, mission: str) -> int:
+        patterns = (
+            r"(\d+)(?:st|nd|rd|th)\s+number",
+            r"first\s+(\d+)\s+(?:numbers|terms)",
+            r"until\s+the\s+(\d+)\s+(?:number|numbers|terms)",
+            r"(\d+)\s+(?:numbers|terms)",
+        )
+        mission_lower = mission.lower()
+        for pattern in patterns:
+            match = re.search(pattern, mission_lower)
+            if match:
+                value = int(match.group(1))
+                return max(2, value)
+        return 100
+
+    def _fibonacci_csv(self, count: int) -> str:
+        numbers = [0, 1]
+        while len(numbers) < count:
+            numbers.append(numbers[-1] + numbers[-2])
+        return ", ".join(str(value) for value in numbers[:count])
+
     def _extract_missions(self, user_input: str) -> list[str]:
         """Extract mission lines from user input for per-mission reporting."""
         lines = [line.strip() for line in user_input.splitlines() if line.strip()]
@@ -647,7 +970,14 @@ class LangGraphOrchestrator:
             for index, mission in enumerate(missions)
         ]
 
-    def _record_mission_tool_event(self, state: RunState, tool_name: str, tool_result: dict[str, Any]) -> None:
+    def _record_mission_tool_event(
+        self,
+        state: RunState,
+        tool_name: str,
+        tool_result: dict[str, Any],
+        *,
+        mission_index: int | None = None,
+    ) -> None:
         """Attach tool usage/results to current mission report."""
         reports = state.get("mission_reports", [])
         if not reports:
@@ -658,10 +988,18 @@ class LangGraphOrchestrator:
 
         helper_tools = {"memoize", "retrieve_memo"}
         completed_tasks = state.get("completed_tasks", [])
-        if tool_name in helper_tools:
+        if mission_index is not None:
+            index = min(max(mission_index, 0), len(reports) - 1)
+        elif tool_name in helper_tools:
             index = int(state.get("active_mission_index", -1))
-            if index < 0:
-                index = min(max(len(completed_tasks) - 1, 0), len(reports) - 1)
+            memo_required = bool(state.get("policy_flags", {}).get("memo_required", False))
+            next_mission = self._next_incomplete_mission(state).lower()
+            if tool_name == "memoize" and "memo" in next_mission:
+                index = min(len(completed_tasks), len(reports) - 1)
+            elif tool_name == "memoize" and memo_required and 0 <= index < len(reports):
+                pass
+            else:
+                index = min(len(completed_tasks), len(reports) - 1)
         else:
             index = min(len(completed_tasks), len(reports) - 1)
 
@@ -670,9 +1008,17 @@ class LangGraphOrchestrator:
         mission["used_tools"].append(tool_name)
         mission["tool_results"].append({"tool": tool_name, "result": tool_result})
         mission["result"] = str(tool_result)
-        if tool_name not in helper_tools and "error" not in tool_result:
+        if "error" not in tool_result:
             mission_text = str(mission.get("mission", "")).strip()
-            if mission_text and mission_text not in completed_tasks:
+            mission_text_lower = mission_text.lower()
+            should_mark_complete = tool_name not in helper_tools
+            if tool_name == "retrieve_memo" and any(
+                marker in mission_text_lower for marker in ("retrieve", "lookup", "memo")
+            ):
+                should_mark_complete = True
+            if tool_name == "memoize" and "memo" in mission_text_lower:
+                should_mark_complete = True
+            if should_mark_complete and mission_text and mission_text not in completed_tasks:
                 completed_tasks.append(mission_text)
 
     def _next_incomplete_mission(self, state: RunState) -> str:
@@ -743,6 +1089,43 @@ class LangGraphOrchestrator:
                 normalized["value"] = normalized.pop("data")
         return normalized
 
+    def _memo_lookup_candidates_for_action(self, *, tool_name: str, tool_args: dict[str, Any]) -> list[str]:
+        """Build exact/fallback memo lookup keys that should be attempted before recompute."""
+        if tool_name != "write_file":
+            return []
+        path = str(tool_args.get("path", "")).strip()
+        if not path:
+            return []
+        exact_key = self.policy.suggested_memo_key(
+            tool_name=tool_name,
+            args={"path": path},
+            result={},
+        )
+        candidates = [exact_key]
+        basename = path.replace("\\", "/").rsplit("/", 1)[-1].strip()
+        if basename and basename != path:
+            candidates.append(
+                self.policy.suggested_memo_key(
+                    tool_name=tool_name,
+                    args={"path": basename},
+                    result={},
+                )
+            )
+        return candidates
+
+    def _has_attempted_memo_lookup(self, *, state: RunState, candidate_keys: list[str]) -> bool:
+        """Whether retrieve_memo has already been attempted for any candidate key in this run."""
+        if not candidate_keys:
+            return True
+        for event in state.get("tool_history", []):
+            if str(event.get("tool", "")) != "retrieve_memo":
+                continue
+            args = dict(event.get("args", {}))
+            key = str(args.get("key", ""))
+            if key in candidate_keys:
+                return True
+        return False
+
     def _build_derived_snapshot(
         self,
         state: RunState,
@@ -759,8 +1142,266 @@ class LangGraphOrchestrator:
             "mission_count": len(state.get("mission_reports", [])),
             "duplicate_tool_retries": state.get("retry_counts", {}).get("duplicate_tool", 0),
             "memo_policy_retries": state.get("retry_counts", {}).get("memo_policy", 0),
+            "provider_timeout_retries": state.get("retry_counts", {}).get("provider_timeout", 0),
             "content_validation_retries": state.get("retry_counts", {}).get("content_validation", 0),
+            "memo_retrieve_hits": state.get("policy_flags", {}).get("memo_retrieve_hits", 0),
+            "memo_retrieve_misses": state.get("policy_flags", {}).get("memo_retrieve_misses", 0),
+            "cache_reuse_hits": state.get("policy_flags", {}).get("cache_reuse_hits", 0),
+            "cache_reuse_misses": state.get("policy_flags", {}).get("cache_reuse_misses", 0),
         }
+
+    def _record_retrieve_memo_trace(self, *, state: RunState, tool_result: dict[str, Any]) -> None:
+        """Track memo retrieval hit/miss and emit explicit trace logs/events."""
+        found = bool(tool_result.get("found", False))
+        key = str(tool_result.get("key", ""))
+        namespace = str(tool_result.get("namespace", "run"))
+        value_hash = str(tool_result.get("value_hash", ""))
+
+        if found:
+            state["policy_flags"]["memo_retrieve_hits"] = int(
+                state["policy_flags"].get("memo_retrieve_hits", 0)
+            ) + 1
+            source_tool = "retrieve_memo_hit"
+            self.logger.info(
+                "MEMO RETRIEVE HIT step=%s key=%s namespace=%s value_hash=%s",
+                state["step"],
+                key,
+                namespace,
+                value_hash,
+            )
+        else:
+            state["policy_flags"]["memo_retrieve_misses"] = int(
+                state["policy_flags"].get("memo_retrieve_misses", 0)
+            ) + 1
+            source_tool = "retrieve_memo_miss"
+            self.logger.info(
+                "MEMO RETRIEVE MISS step=%s key=%s namespace=%s",
+                state["step"],
+                key,
+                namespace,
+            )
+
+        state["memo_events"].append(
+            MemoEvent(
+                key=key,
+                namespace=namespace,
+                source_tool=source_tool,
+                step=state["step"],
+                value_hash=value_hash if value_hash else "n/a",
+                created_at=utc_now_iso(),
+            )
+        )
+
+    def _auto_lookup_before_write(self, *, state: RunState, candidate_keys: list[str]) -> dict[str, Any] | None:
+        """Execute retrieve_memo for candidate keys before deterministic write recompute."""
+        progress_hint = self._progress_hint_message(state) or "Continue with the next task or finish when all tasks are complete."
+        for key in candidate_keys:
+            retrieve_args: dict[str, Any] = {"key": key, "run_id": state["run_id"]}
+            self.logger.info("TOOL EXEC step=%s tool=%s args=%s", state["step"], "retrieve_memo", retrieve_args)
+            tool_result = self.tools["retrieve_memo"].execute(retrieve_args)
+            self.logger.info("TOOL RESULT step=%s tool=%s result=%s", state["step"], "retrieve_memo", tool_result)
+            self._record_retrieve_memo_trace(state=state, tool_result=tool_result)
+            state["tool_call_counts"]["retrieve_memo"] = int(state["tool_call_counts"].get("retrieve_memo", 0)) + 1
+            call_number = len(state["tool_history"]) + 1
+            state["tool_history"].append(
+                {
+                    "call": call_number,
+                    "tool": "retrieve_memo",
+                    "args": retrieve_args,
+                    "result": tool_result,
+                }
+            )
+            self._record_mission_tool_event(state, "retrieve_memo", tool_result)
+            state["messages"].append(
+                {
+                    "role": "system",
+                    "content": (
+                        f"TOOL_RESULT #{call_number} (retrieve_memo): {json.dumps(tool_result)}\n"
+                        f"{progress_hint}"
+                    ),
+                }
+            )
+            if bool(tool_result.get("found", False)):
+                return tool_result
+        return None
+
+    def _mark_next_mission_complete_from_memo_hit(self, *, state: RunState, memo_hit: dict[str, Any]) -> None:
+        """Treat memo hit as completion for the next deterministic write mission."""
+        mission_text = self._next_incomplete_mission(state).strip()
+        if not mission_text:
+            return
+        completed_tasks = state.get("completed_tasks", [])
+        if mission_text not in completed_tasks:
+            completed_tasks.append(mission_text)
+        reports = state.get("mission_reports", [])
+        if not reports:
+            return
+        index = min(max(len(completed_tasks) - 1, 0), len(reports) - 1)
+        state["active_mission_index"] = index
+        reports[index]["result"] = str(memo_hit)
+
+    def _cache_key_for_path(self, path: str) -> str:
+        """Build cache key for reusable write_file inputs."""
+        return f"write_file_input:{path}"
+
+    def _write_cache_candidates(self, path: str) -> list[str]:
+        """Return exact and basename keys for reusable write inputs."""
+        if not path.strip():
+            return []
+        keys = [self._cache_key_for_path(path)]
+        basename = path.replace("\\", "/").rsplit("/", 1)[-1].strip()
+        if basename and basename != path:
+            keys.append(self._cache_key_for_path(basename))
+        return keys
+
+    def _extract_write_path_from_mission(self, mission: str) -> str:
+        """Extract target file path from mission text when present."""
+        quoted = re.search(r"""["']([^"']+\.[A-Za-z0-9]+)["']""", mission)
+        if quoted:
+            return quoted.group(1).strip()
+        unquoted = re.search(r"(/?[A-Za-z0-9_./\\-]+\.[A-Za-z0-9]+)", mission)
+        if unquoted:
+            return unquoted.group(1).strip().rstrip(".,;:")
+        return ""
+
+    def _maybe_complete_next_write_from_cache(self, state: RunState) -> bool:
+        """Auto-complete next write mission from cross-run cached inputs when available."""
+        mission = self._next_incomplete_mission(state).strip()
+        if not mission:
+            return False
+        mission_lower = mission.lower()
+        if "write_file" not in mission_lower and "write" not in mission_lower:
+            return False
+        target_path = self._extract_write_path_from_mission(mission)
+        if not target_path:
+            return False
+        reports = state.get("mission_reports", [])
+        if reports:
+            target_index = min(len(state.get("completed_tasks", [])), len(reports) - 1)
+            if str(reports[target_index].get("mission", "")).strip() != mission:
+                for idx, report in enumerate(reports):
+                    if str(report.get("mission", "")).strip() == mission:
+                        target_index = idx
+                        break
+        else:
+            target_index = 0
+
+        for key in self._write_cache_candidates(target_path):
+            lookup = self.memo_store.get_latest(key=key, namespace="cache")
+            if not lookup.found:
+                continue
+            payload = lookup.value if isinstance(lookup.value, dict) else {}
+            cached_content = payload.get("content")
+            if not isinstance(cached_content, str) or not cached_content:
+                continue
+
+            write_args = {"path": target_path, "content": cached_content}
+            self.logger.info(
+                "CACHE REUSE HIT step=%s mission=%s key=%s source_run=%s",
+                state["step"],
+                mission,
+                key,
+                lookup.run_id,
+            )
+            tool_result = self.tools["write_file"].execute(write_args)
+            validation_error = self._validate_tool_result_for_active_mission(
+                state=state,
+                tool_name="write_file",
+                tool_args=write_args,
+                tool_result=tool_result,
+            )
+            if validation_error:
+                self.logger.warning(
+                    "CACHE REUSE INVALID step=%s key=%s reason=%s",
+                    state["step"],
+                    key,
+                    validation_error,
+                )
+                continue
+
+            state["policy_flags"]["cache_reuse_hits"] = int(
+                state["policy_flags"].get("cache_reuse_hits", 0)
+            ) + 1
+            state["active_mission_index"] = target_index
+            state["tool_call_counts"]["write_file"] = int(state["tool_call_counts"].get("write_file", 0)) + 1
+            call_number = len(state["tool_history"]) + 1
+            state["tool_history"].append(
+                {
+                    "call": call_number,
+                    "tool": "write_file",
+                    "args": write_args,
+                    "result": tool_result,
+                }
+            )
+            self._record_mission_tool_event(
+                state,
+                "write_file",
+                tool_result,
+                mission_index=target_index,
+            )
+            progress_hint = self._progress_hint_message(state) or "Continue with the next task or finish when all tasks are complete."
+            state["messages"].append(
+                {
+                    "role": "system",
+                    "content": (
+                        f"TOOL_RESULT #{call_number} (write_file): {json.dumps(tool_result)}\n"
+                        f"{progress_hint}"
+                    ),
+                }
+            )
+            state["memo_events"].append(
+                MemoEvent(
+                    key=key,
+                    namespace="cache",
+                    source_tool="cache_reuse_hit",
+                    step=state["step"],
+                    value_hash=str(lookup.value_hash or "n/a"),
+                    created_at=utc_now_iso(),
+                )
+            )
+            return True
+
+        state["policy_flags"]["cache_reuse_misses"] = int(state["policy_flags"].get("cache_reuse_misses", 0)) + 1
+        self.logger.info(
+            "CACHE REUSE MISS step=%s mission=%s path=%s",
+            state["step"],
+            mission,
+            target_path,
+        )
+        return False
+
+    def _cache_write_file_inputs(self, *, state: RunState, tool_args: dict[str, Any]) -> None:
+        """Persist reusable write_file inputs so later runs can skip recomputation."""
+        path = str(tool_args.get("path", "")).strip()
+        content = str(tool_args.get("content", ""))
+        if not path or not content:
+            return
+
+        for key in self._write_cache_candidates(path):
+            put_result = self.memo_store.put(
+                run_id="shared",
+                key=key,
+                value={"path": path, "content": content},
+                namespace="cache",
+                source_tool="write_file_cache",
+                step=state["step"],
+            )
+            state["memo_events"].append(
+                MemoEvent(
+                    key=put_result.key,
+                    namespace=put_result.namespace,
+                    source_tool="write_file_cache",
+                    step=state["step"],
+                    value_hash=put_result.value_hash,
+                    created_at=utc_now_iso(),
+                )
+            )
+            self.logger.info(
+                "CACHE WRITE INPUT STORED step=%s key=%s hash=%s",
+                state["step"],
+                put_result.key,
+                put_result.value_hash,
+            )
 
     def _validate_tool_result_for_active_mission(
         self,

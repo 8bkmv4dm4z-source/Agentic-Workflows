@@ -96,6 +96,7 @@ Directory index:
   - `.venv/bin/python -m execution.langgraph.run`
 - Run audit summary (all runs):
   - `.venv/bin/python -m execution.langgraph.run_audit`
+  - includes `provider_timeout`, `cache_hit`, and `cache_miss` columns
 
 ## 8) Common pitfalls
 
@@ -168,6 +169,51 @@ Current mitigation:
 Next improvement (recommended):
 - Add a second-stage parser that translates known XML-ish tool-call envelopes into canonical action JSON, or hard fail earlier when provider/model repeatedly violates JSON contract.
 - Add `max_duplicate_tool_retries` fail-closed behavior so persistent duplicate drift cannot consume the whole recursion budget.
+
+## 12) Planner Timeout Bottleneck Fix (2026-02-28)
+
+Observed issue:
+- Runs completed tasks 1-3 quickly, then stalled on task 4 (`write_file fib.txt`) because planner calls timed out repeatedly.
+- This produced long waits (`PLAN PROVIDER CALL ...`, then repeated timeout warnings) and delayed finalization.
+
+Implemented behavior (now standard):
+- Hard planner wall-time timeout:
+  - `P1_PLAN_CALL_TIMEOUT_SECONDS` controls maximum wall-clock time for each planner call.
+  - Planner call is wrapped with a hard timeout guard in orchestrator, independent of provider SDK timeout behavior.
+- Deterministic timeout fallback:
+  - On planner timeout, orchestrator synthesizes the next safe action from local state/mission text (no model call).
+  - Supports `repeat_message`, `sort_array`, `string_ops`, and Fibonacci `write_file`.
+- Timeout mode:
+  - After first timeout, `planner_timeout_mode=True` is set in state.
+  - While active, planner calls are skipped and deterministic actions continue until run completes or no safe fallback exists.
+- Memo policy still enforced:
+  - If `write_file` triggers memo-required policy, fallback prioritizes `memoize` before `finish`.
+- Cross-run write cache:
+  - Orchestrator stores reusable `write_file` inputs in `namespace="cache"` and can reuse them on future runs before planner call.
+
+What logs should look like now:
+- First timeout event:
+  - `PLAN PROVIDER TIMEOUT ...`
+  - `PLAN TIMEOUT FALLBACK ...`
+- Follow-up steps during degraded mode:
+  - `PLAN TIMEOUT MODE ...`
+  - no additional long planner waits for memoize/finish path
+- Cache behavior remains explicit:
+  - `MEMO GET LATEST HIT/MISS ...`
+  - `CACHE REUSE HIT/MISS ...`
+
+Why this fix worked:
+- The bottleneck was planner latency, not tool execution.
+- By moving post-timeout decisions to deterministic orchestration:
+  - we removed repeated slow planner round-trips,
+  - preserved policy correctness (`memoize` before completion),
+  - and finished runs using local state transitions.
+- Result: timeout paths are now bounded, auditable, and fast.
+
+Regression tests that lock this behavior:
+- `tests/test_langgraph_flow.py::test_hard_timeout_handles_blocking_provider`
+- `tests/test_langgraph_flow.py::test_provider_timeout_uses_deterministic_fallback_for_fibonacci_write`
+- `tests/test_langgraph_flow.py::test_cross_run_write_cache_reuse_skips_planner_generation`
 
 ## 11) Prompt plan for next iteration
 

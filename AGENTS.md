@@ -90,6 +90,12 @@ Why this matters:
 - Provider/model outputs may violate JSON-only contracts (for example XML-ish tool-call envelopes).
 - Mission progress can drift if planner ignores system feedback.
 - Duplicate tool retries must be bounded and observable.
+- Planner latency/timeouts can bottleneck late-stage missions (for example heavy `write_file` tasks).
+
+Current mitigation baseline:
+- Hard planner wall-time timeout is enforced by orchestrator.
+- On timeout, orchestrator can enter deterministic timeout mode and continue with safe fallback actions.
+- Memo policy remains mandatory during timeout mode (`memoize` before finish when required).
 
 When this happens:
 1. Capture logs and failing step.

@@ -28,10 +28,11 @@ Use only these action schemas:
 
 Please complete these 4 tasks in order, one at a time:
 
-Task 1: Use repeat_message tool to repeat this exact message: "Agent loop is working!"
-Task 2: Use sort_array tool to sort these numbers in ascending order: 5, 2, 8, 1, 9, 3
-Task 3: Use string_ops tool with operation "uppercase" on this text: "the quick brown fox"
-Task 4: Use write_file tool to write the fibonacci sequence until the 100th number to fib.txt
+Task 1: repeat this exact message: "Agent loop is working!"
+Task 2: sort these numbers in ascending order: 5, 2, 8, 1, 9, 3
+Task 3: uppercase this text: "the quick brown fox"
+Task 4: write the fibonacci sequence until the 100th number to fib.txt (start with 0 1 as the first numbers).
+Task 5: Add 3 then quadrupulate every number in the array: [7,23,1,5,3,4,2] and return it sorted.
 After completing all tasks, emit finish with a summary."""
     result = orchestrator.run(user_input)
     # Run-level summary with mission and memo visibility for debugging.

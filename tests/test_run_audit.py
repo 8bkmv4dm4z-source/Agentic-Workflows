@@ -32,6 +32,7 @@ class RunAuditTests(unittest.TestCase):
             failed = new_run_state("sys", "user", run_id="run-failed")
             failed["step"] = 2
             failed["retry_counts"]["invalid_json"] = 3
+            failed["retry_counts"]["provider_timeout"] = 2
             failed["final_answer"] = "Planner failed to produce a valid JSON action."
             checkpoints.save(run_id="run-failed", step=2, node_name="plan_fail_closed", state=failed)
 
@@ -41,8 +42,11 @@ class RunAuditTests(unittest.TestCase):
             self.assertEqual(by_id["run-success"].status, "SUCCESS")
             self.assertEqual(by_id["run-success"].memo_entry_count, 1)
             self.assertEqual(by_id["run-success"].tools_by_step, "1:repeat_message | 2:sort_array")
+            self.assertEqual(by_id["run-success"].cache_reuse_hits, 0)
             self.assertEqual(by_id["run-failed"].status, "FAILED")
             self.assertGreaterEqual(by_id["run-failed"].invalid_json_retries, 1)
+            self.assertEqual(by_id["run-failed"].provider_timeout_retries, 2)
+            self.assertIn("provider_timeout_retry", by_id["run-failed"].issue_flags)
 
     def test_summarize_runs_flags_fib_issue(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

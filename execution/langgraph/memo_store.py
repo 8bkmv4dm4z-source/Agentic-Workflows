@@ -162,6 +162,42 @@ class SQLiteMemoStore:
             value_hash=row["value_hash"],
         )
 
+    def get_latest(self, *, key: str, namespace: str = "run") -> MemoLookupResult:
+        """Retrieve latest memoized value by key across all run ids."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT run_id, value_json, value_hash
+                FROM memo_entries
+                WHERE namespace = ? AND key = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (namespace, key),
+            ).fetchone()
+
+        if row is None:
+            self.logger.info("MEMO GET LATEST MISS namespace=%s key=%s", namespace, key)
+            return MemoLookupResult(
+                found=False,
+                run_id="",
+                key=key,
+                namespace=namespace,
+                value=None,
+                value_hash=None,
+            )
+
+        run_id = str(row["run_id"])
+        self.logger.info("MEMO GET LATEST HIT run_id=%s namespace=%s key=%s", run_id, namespace, key)
+        return MemoLookupResult(
+            found=True,
+            run_id=run_id,
+            key=key,
+            namespace=namespace,
+            value=json.loads(row["value_json"]),
+            value_hash=row["value_hash"],
+        )
+
     def list_entries(self, *, run_id: str, namespace: str = "run") -> list[dict[str, Any]]:
         """List memo metadata for visibility/reporting (no model call required)."""
         with self._connect() as conn:

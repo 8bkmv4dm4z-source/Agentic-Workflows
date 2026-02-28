@@ -8,6 +8,7 @@ All runtime/provider selection comes from `.env`, and the graph uses one unified
 
 import os
 from pathlib import Path
+import time
 from typing import Protocol, Sequence
 
 from dotenv import load_dotenv
@@ -19,6 +20,16 @@ from execution.langgraph.state_schema import AgentMessage
 # Phase 1 standardizes all provider/runtime config via repo-level .env.
 ROOT_DIR = Path(__file__).resolve().parents[2]
 load_dotenv(dotenv_path=ROOT_DIR / ".env")
+
+DEFAULT_PROVIDER_TIMEOUT_SECONDS = 30.0
+DEFAULT_PROVIDER_MAX_RETRIES = 2
+DEFAULT_PROVIDER_RETRY_BACKOFF_SECONDS = 1.0
+
+
+class ProviderTimeoutError(RuntimeError):
+    """Raised when provider calls repeatedly fail due to timeout/connection errors."""
+
+    pass
 
 
 def _resolve_ollama_base_url(base_url: str | None = None) -> str:
@@ -43,22 +54,92 @@ class ChatProvider(Protocol):
         ...
 
 
-class OpenAIChatProvider:
+def _env_float(name: str, default: float) -> float:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value >= 0 else default
+
+
+def _is_retryable_timeout_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    markers = (
+        "timeout",
+        "timed out",
+        "connection error",
+        "connection reset",
+        "temporarily unavailable",
+        "service unavailable",
+        "read timeout",
+        "connect timeout",
+    )
+    return any(marker in text for marker in markers)
+
+
+class _RetryingProviderBase:
+    """Shared timeout/retry behavior for planner provider calls."""
+
+    def __init__(self) -> None:
+        self.timeout_seconds = _env_float("P1_PROVIDER_TIMEOUT_SECONDS", DEFAULT_PROVIDER_TIMEOUT_SECONDS)
+        self.max_retries = _env_int("P1_PROVIDER_MAX_RETRIES", DEFAULT_PROVIDER_MAX_RETRIES)
+        self.retry_backoff_seconds = _env_float(
+            "P1_PROVIDER_RETRY_BACKOFF_SECONDS",
+            DEFAULT_PROVIDER_RETRY_BACKOFF_SECONDS,
+        )
+
+    def _request_with_retries(self, request_fn) -> object:  # noqa: ANN001
+        attempts = self.max_retries + 1
+        last_exc: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                return request_fn()
+            except Exception as exc:  # noqa: BLE001
+                if not _is_retryable_timeout_error(exc):
+                    raise
+                last_exc = exc
+                if attempt >= attempts:
+                    break
+                time.sleep(self.retry_backoff_seconds * attempt)
+        raise ProviderTimeoutError(
+            f"provider timeout after {attempts} attempts: {str(last_exc) if last_exc else 'unknown timeout'}"
+        ) from last_exc
+
+
+class OpenAIChatProvider(_RetryingProviderBase):
     """OpenAI-compatible provider using strict JSON responses."""
 
     def __init__(self, model: str | None = None) -> None:
+        super().__init__()
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
             raise ValueError("OPENAI_API_KEY not found in environment.")
-        self.client = OpenAI(api_key=api_key)
+        self.client = OpenAI(api_key=api_key, timeout=self.timeout_seconds)
         self.model = model or os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 
     def generate(self, messages: Sequence[AgentMessage]) -> str:
         # Prefer structured JSON responses to reduce parse failures in the plan node.
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=list(messages),
-            response_format={"type": "json_object"},
+        response = self._request_with_retries(
+            lambda: self.client.chat.completions.create(
+                model=self.model,
+                messages=list(messages),
+                response_format={"type": "json_object"},
+                timeout=self.timeout_seconds,
+            )
         )
         content = response.choices[0].message.content
         if content is None:
@@ -66,22 +147,26 @@ class OpenAIChatProvider:
         return content
 
 
-class GroqChatProvider:
+class GroqChatProvider(_RetryingProviderBase):
     """Groq provider path for users who prefer or already use Groq."""
 
     def __init__(self, model: str | None = None) -> None:
+        super().__init__()
         api_key = os.getenv("GROQ_API_KEY")
         if not api_key:
             raise ValueError("GROQ_API_KEY not found in environment.")
-        self.client = Groq(api_key=api_key)
+        self.client = Groq(api_key=api_key, timeout=self.timeout_seconds)
         self.model = model or os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 
     def generate(self, messages: Sequence[AgentMessage]) -> str:
         # Keep the same JSON-object response contract across providers.
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=list(messages),
-            response_format={"type": "json_object"},
+        response = self._request_with_retries(
+            lambda: self.client.chat.completions.create(
+                model=self.model,
+                messages=list(messages),
+                response_format={"type": "json_object"},
+                timeout=self.timeout_seconds,
+            )
         )
         content = response.choices[0].message.content
         if content is None:
@@ -89,29 +174,42 @@ class GroqChatProvider:
         return content
 
 
-class OllamaChatProvider:
+class OllamaChatProvider(_RetryingProviderBase):
     """Local Ollama provider for low-cost iterative development."""
 
     def __init__(self, model: str | None = None, base_url: str | None = None) -> None:
+        super().__init__()
         resolved_model = model or os.getenv("OLLAMA_MODEL", "llama3.1:8b")
         resolved_base_url = _resolve_ollama_base_url(base_url)
-        self.client = OpenAI(api_key="ollama", base_url=resolved_base_url)
+        self.client = OpenAI(
+            api_key="ollama",
+            base_url=resolved_base_url,
+            timeout=self.timeout_seconds,
+        )
         self.model = resolved_model
 
     def generate(self, messages: Sequence[AgentMessage]) -> str:
-        try:
-            # Try strict JSON mode first when the local OpenAI-compatible layer supports it.
-            response = self.client.chat.completions.create(
+        def _request_json_mode() -> object:
+            return self.client.chat.completions.create(
                 model=self.model,
                 messages=list(messages),
                 response_format={"type": "json_object"},
+                timeout=self.timeout_seconds,
             )
-        except Exception:
-            # Some local OpenAI-compatible adapters may not support response_format.
-            response = self.client.chat.completions.create(
+
+        def _request_plain_mode() -> object:
+            return self.client.chat.completions.create(
                 model=self.model,
                 messages=list(messages),
+                timeout=self.timeout_seconds,
             )
+
+        try:
+            # Try strict JSON mode first when the local OpenAI-compatible layer supports it.
+            response = self._request_with_retries(_request_json_mode)
+        except Exception:
+            # Some local OpenAI-compatible adapters may not support response_format.
+            response = self._request_with_retries(_request_plain_mode)
         content = response.choices[0].message.content
         if content is None:
             raise ValueError("Model returned empty content.")
