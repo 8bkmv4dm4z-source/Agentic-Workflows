@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import tempfile
 import time
 import unittest
@@ -641,6 +642,223 @@ class LangGraphFlowTests(unittest.TestCase):
             self.assertIn("write_file", mission_4["used_tools"])
             self.assertNotIn("write_file", mission_5["used_tools"])
             self.assertIn("sort_array", mission_5["used_tools"])
+
+
+    def test_structured_plan_populated_in_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            provider = ScriptedProvider(
+                [
+                    {"action": "tool", "tool_name": "repeat_message", "args": {"message": "ok"}},
+                    {"action": "finish", "answer": "done"},
+                ]
+            )
+            orchestrator = LangGraphOrchestrator(
+                provider=provider,
+                memo_store=SQLiteMemoStore(f"{temp_dir}/memo.db"),
+                checkpoint_store=SQLiteCheckpointStore(f"{temp_dir}/checkpoints.db"),
+                policy=MemoizationPolicy(max_policy_retries=1),
+                max_steps=20,
+            )
+            result = orchestrator.run("Task 1: repeat hello")
+            state = result["state"]
+            self.assertIsNotNone(state.get("structured_plan"))
+            plan = state["structured_plan"]
+            self.assertIn("steps", plan)
+            self.assertIn("flat_missions", plan)
+            self.assertIn("parsing_method", plan)
+
+    def test_backward_compat_flat_missions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            provider = ScriptedProvider(
+                [
+                    {"action": "tool", "tool_name": "repeat_message", "args": {"message": "ok"}},
+                    {"action": "tool", "tool_name": "sort_array", "args": {"items": [3, 1, 2]}},
+                    {"action": "finish", "answer": "done"},
+                ]
+            )
+            orchestrator = LangGraphOrchestrator(
+                provider=provider,
+                memo_store=SQLiteMemoStore(f"{temp_dir}/memo.db"),
+                checkpoint_store=SQLiteCheckpointStore(f"{temp_dir}/checkpoints.db"),
+                policy=MemoizationPolicy(max_policy_retries=1),
+                max_steps=20,
+            )
+            result = orchestrator.run("Task 1: repeat hello\nTask 2: sort array")
+            self.assertEqual(result["answer"], "done")
+            self.assertEqual(len(result["state"]["missions"]), 2)
+            self.assertTrue(result["state"]["missions"][0].startswith("Task 1:"))
+
+    def test_text_analysis_tool_in_flow(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            provider = ScriptedProvider(
+                [
+                    {
+                        "action": "tool",
+                        "tool_name": "text_analysis",
+                        "args": {"text": "Hello world. How are you?", "operation": "word_count"},
+                    },
+                    {"action": "finish", "answer": "done"},
+                ]
+            )
+            orchestrator = LangGraphOrchestrator(
+                provider=provider,
+                memo_store=SQLiteMemoStore(f"{temp_dir}/memo.db"),
+                checkpoint_store=SQLiteCheckpointStore(f"{temp_dir}/checkpoints.db"),
+                policy=MemoizationPolicy(max_policy_retries=1),
+                max_steps=20,
+            )
+            result = orchestrator.run("Task 1: analyze text")
+            self.assertEqual([item["tool"] for item in result["tools_used"]], ["text_analysis"])
+            self.assertEqual(result["tools_used"][0]["result"]["word_count"], 5)
+
+    def test_data_analysis_then_sort_pipeline(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            provider = ScriptedProvider(
+                [
+                    {
+                        "action": "tool",
+                        "tool_name": "data_analysis",
+                        "args": {"numbers": [1, 2, 3, 4, 5], "operation": "summary_stats"},
+                    },
+                    {
+                        "action": "tool",
+                        "tool_name": "sort_array",
+                        "args": {"items": [5, 4, 3, 2, 1], "order": "asc"},
+                    },
+                    {
+                        "action": "tool",
+                        "tool_name": "math_stats",
+                        "args": {"operation": "mean", "numbers": [1, 2, 3, 4, 5]},
+                    },
+                    {"action": "finish", "answer": "done"},
+                ]
+            )
+            orchestrator = LangGraphOrchestrator(
+                provider=provider,
+                memo_store=SQLiteMemoStore(f"{temp_dir}/memo.db"),
+                checkpoint_store=SQLiteCheckpointStore(f"{temp_dir}/checkpoints.db"),
+                policy=MemoizationPolicy(max_policy_retries=1),
+                max_steps=20,
+            )
+            result = orchestrator.run("Task 1: analyze data\nTask 2: sort\nTask 3: calculate mean")
+            tools = [item["tool"] for item in result["tools_used"]]
+            self.assertEqual(tools, ["data_analysis", "sort_array", "math_stats"])
+            self.assertEqual(result["tools_used"][0]["result"]["mean"], 3.0)
+
+    def test_shared_plan_md_written(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_cwd = os.getcwd()
+            try:
+                os.chdir(temp_dir)
+                provider = ScriptedProvider(
+                    [
+                        {"action": "tool", "tool_name": "repeat_message", "args": {"message": "ok"}},
+                        {"action": "finish", "answer": "done"},
+                    ]
+                )
+                orchestrator = LangGraphOrchestrator(
+                    provider=provider,
+                    memo_store=SQLiteMemoStore(f"{temp_dir}/memo.db"),
+                    checkpoint_store=SQLiteCheckpointStore(f"{temp_dir}/checkpoints.db"),
+                    policy=MemoizationPolicy(max_policy_retries=1),
+                    max_steps=20,
+                )
+                orchestrator.run("Task 1: repeat hello")
+                shared_plan_path = os.path.join(temp_dir, "Shared_plan.md")
+                self.assertTrue(os.path.exists(shared_plan_path))
+                content = open(shared_plan_path).read()
+                self.assertIn("Shared Plan", content)
+                self.assertIn("Task 1", content)
+                self.assertIn("IMPLEMENTED", content)
+            finally:
+                os.chdir(original_cwd)
+
+    def test_new_tools_in_system_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            orchestrator = LangGraphOrchestrator(
+                provider=ScriptedProvider([{"action": "finish", "answer": "done"}]),
+                memo_store=SQLiteMemoStore(f"{temp_dir}/memo.db"),
+                checkpoint_store=SQLiteCheckpointStore(f"{temp_dir}/checkpoints.db"),
+                policy=MemoizationPolicy(max_policy_retries=1),
+                max_steps=20,
+            )
+            prompt = orchestrator.system_prompt
+            expected_tools = [
+                "repeat_message", "sort_array", "string_ops", "math_stats",
+                "write_file", "memoize", "retrieve_memo",
+                "task_list_parser", "text_analysis", "data_analysis",
+                "json_parser", "regex_matcher",
+            ]
+            for tool_name in expected_tools:
+                self.assertIn(tool_name, prompt, f"{tool_name} not found in system prompt")
+
+    def test_arg_normalization_text_analysis_op_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            provider = ScriptedProvider(
+                [
+                    {
+                        "action": "tool",
+                        "tool_name": "text_analysis",
+                        "args": {"text": "hello world", "op": "word_count"},
+                    },
+                    {"action": "finish", "answer": "done"},
+                ]
+            )
+            orchestrator = LangGraphOrchestrator(
+                provider=provider,
+                memo_store=SQLiteMemoStore(f"{temp_dir}/memo.db"),
+                checkpoint_store=SQLiteCheckpointStore(f"{temp_dir}/checkpoints.db"),
+                policy=MemoizationPolicy(max_policy_retries=1),
+                max_steps=20,
+            )
+            result = orchestrator.run("Task 1: analyze")
+            self.assertEqual(result["tools_used"][0]["result"]["word_count"], 2)
+
+    def test_arg_normalization_data_analysis_values_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            provider = ScriptedProvider(
+                [
+                    {
+                        "action": "tool",
+                        "tool_name": "data_analysis",
+                        "args": {"values": [1, 2, 3], "operation": "summary_stats"},
+                    },
+                    {"action": "finish", "answer": "done"},
+                ]
+            )
+            orchestrator = LangGraphOrchestrator(
+                provider=provider,
+                memo_store=SQLiteMemoStore(f"{temp_dir}/memo.db"),
+                checkpoint_store=SQLiteCheckpointStore(f"{temp_dir}/checkpoints.db"),
+                policy=MemoizationPolicy(max_policy_retries=1),
+                max_steps=20,
+            )
+            result = orchestrator.run("Task 1: analyze data")
+            self.assertEqual(result["tools_used"][0]["args"]["numbers"], [1, 2, 3])
+            self.assertEqual(result["tools_used"][0]["result"]["count"], 3)
+
+    def test_arg_normalization_regex_matcher_regex_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            provider = ScriptedProvider(
+                [
+                    {
+                        "action": "tool",
+                        "tool_name": "regex_matcher",
+                        "args": {"text": "abc123", "regex": r"\d+", "operation": "find_all"},
+                    },
+                    {"action": "finish", "answer": "done"},
+                ]
+            )
+            orchestrator = LangGraphOrchestrator(
+                provider=provider,
+                memo_store=SQLiteMemoStore(f"{temp_dir}/memo.db"),
+                checkpoint_store=SQLiteCheckpointStore(f"{temp_dir}/checkpoints.db"),
+                policy=MemoizationPolicy(max_policy_retries=1),
+                max_steps=20,
+            )
+            result = orchestrator.run("Task 1: regex match")
+            self.assertEqual(result["tools_used"][0]["args"]["pattern"], r"\d+")
+            self.assertEqual(result["tools_used"][0]["result"]["matches"], ["123"])
 
 
 if __name__ == "__main__":

@@ -5,10 +5,15 @@ from __future__ import annotations
 from typing import Any
 
 from tools.base import Tool
+from tools.data_analysis import DataAnalysisTool
 from tools.echo import EchoTool
+from tools.json_parser import JsonParserTool
 from tools.math_stats import MathStatsTool
+from tools.regex_matcher import RegexMatcherTool
 from tools.sort_array import SortArrayTool
 from tools.string_ops import StringOpsTool
+from tools.task_list_parser import TaskListParserTool
+from tools.text_analysis import TextAnalysisTool
 from tools.write_file import WriteFileTool
 
 from execution.langgraph.memo_store import SQLiteMemoStore
@@ -98,4 +103,9 @@ def build_tool_registry(store: SQLiteMemoStore) -> dict[str, Tool]:
         "write_file": WriteFileTool(),
         "memoize": MemoizeStoreTool(store),
         "retrieve_memo": RetrieveMemoTool(store),
+        "task_list_parser": TaskListParserTool(),
+        "text_analysis": TextAnalysisTool(),
+        "data_analysis": DataAnalysisTool(),
+        "json_parser": JsonParserTool(),
+        "regex_matcher": RegexMatcherTool(),
     }

@@ -60,6 +60,23 @@ This SOP is intentionally notebook-friendly while keeping production code in `ex
   - lower `P1_PLAN_CALL_TIMEOUT_SECONDS`
   - confirm `PLAN TIMEOUT FALLBACK` or `PLAN TIMEOUT MODE` appears
   - confirm mission still enforces memo policy (`memoize` before finish)
+- If cache reuse is enabled:
+  - confirm cache-hit `write_file` is attributed to the correct mission (no Task N -> Task N+1 shift)
+  - confirm run does not finalize early when later missions are still incomplete
+
+## Tool Inventory (12 tools)
+
+Core tools: `repeat_message`, `sort_array`, `string_ops`, `math_stats`, `write_file`, `memoize`, `retrieve_memo`
+
+Analysis/parsing tools (added 2026-02-28): `task_list_parser`, `text_analysis`, `data_analysis`, `json_parser`, `regex_matcher`
+
+## Structured Mission Parser
+
+- Entry point: `execution/langgraph/mission_parser.py::parse_missions()`
+- Produces `StructuredPlan` with `MissionStep` objects (id, description, parent_id, suggested_tools, dependencies, status)
+- Supports numbered tasks (`Task N:`), dot/paren format (`1.`, `2)`), bullet lists (`- `, `* `), and nested sub-tasks (`1a.`, `1.1`)
+- Falls back to original regex extraction for unrecognized formats
+- `Shared_plan.md` is written at run start and finalize with IMPLEMENTED/PENDING markers
 
 ## Extension Path (Phase 1 -> 2)
 - Replace SQLite backend with Postgres implementation behind same store interface.

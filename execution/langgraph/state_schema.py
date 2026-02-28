@@ -64,6 +64,8 @@ class RunState(TypedDict):
     missions: list[str]
     mission_reports: list[MissionReport]
     active_mission_index: int
+    # Structured plan from mission parser (serialized StructuredPlan).
+    structured_plan: dict[str, Any] | None
     # Planned action and terminal answer.
     pending_action: dict[str, Any] | None
     final_answer: str
@@ -111,6 +113,7 @@ def new_run_state(system_prompt: str, user_input: str, run_id: str | None = None
         "missions": [],
         "mission_reports": [],
         "active_mission_index": -1,
+        "structured_plan": None,
         "pending_action": None,
         "final_answer": "",
     }
@@ -152,6 +155,8 @@ def ensure_state_defaults(state: RunState | dict[str, Any], *, system_prompt: st
         state_dict["mission_reports"] = []
     if "active_mission_index" not in state_dict:
         state_dict["active_mission_index"] = -1
+    if "structured_plan" not in state_dict:
+        state_dict["structured_plan"] = None
     if "pending_action" not in state_dict:
         state_dict["pending_action"] = None
     if "final_answer" not in state_dict:

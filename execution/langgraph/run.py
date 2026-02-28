@@ -26,13 +26,32 @@ Use only these action schemas:
 {"action":"tool","tool_name":"...","args":{...}}
 {"action":"finish","answer":"..."}
 
-Please complete these 4 tasks in order, one at a time:
+Please complete these 5 tasks in order, one at a time.
+Each task may have sub-tasks (1a, 1b, etc.) — complete them sequentially.
 
-Task 1: repeat this exact message: "Agent loop is working!"
-Task 2: sort these numbers in ascending order: 5, 2, 8, 1, 9, 3
-Task 3: uppercase this text: "the quick brown fox"
-Task 4: write the fibonacci sequence until the 100th number to fib.txt (start with 0 1 as the first numbers).
-Task 5: Add 3 then quadrupulate every number in the array: [7,23,1,5,3,4,2] and return it sorted.
+Task 1: Text Analysis Pipeline
+  1a. Analyze this text for word count, sentence count, and key terms: "The quick brown fox jumps over the lazy dog. The dog barked loudly at the fox. Meanwhile, the brown cat watched from the fence."
+  1b. Uppercase the following key terms and write them to analysis_results.txt: "fox, dog, brown"
+
+Task 2: Data Analysis and Sorting
+  2a. Analyze these numbers for summary statistics and outliers: [45, 23, 67, 12, 89, 34, 56, 78, 91, 150, 2, 33]
+  2b. Sort the non-outlier values in descending order
+  2c. Calculate the mean of the sorted non-outlier array
+
+Task 3: JSON Processing
+  3a. Parse and validate this JSON: '{"users":[{"name":"Alice","score":95},{"name":"Bob","score":82},{"name":"Charlie","score":91}]}'
+  3b. Extract all user names using regex from: "Alice scored 95, Bob scored 82, Charlie scored 91"
+  3c. Sort the names alphabetically, then write them to users_sorted.txt
+
+Task 4: Pattern Matching and Transform
+  4a. Use regex to extract all numbers from: "Order #123 has 5 items at $45.99 each, totaling $229.95 with 10% discount"
+  4b. Calculate the sum and mean of the extracted numbers
+  4c. Write a summary of extracted numbers and their stats to pattern_report.txt
+
+Task 5: Fibonacci with Analysis
+  5a. Write the first 50 fibonacci numbers to fib50.txt
+  5b. Repeat the final summary as confirmation: "All 5 tasks completed successfully"
+
 After completing all tasks, emit finish with a summary."""
     result = orchestrator.run(user_input)
     # Run-level summary with mission and memo visibility for debugging.

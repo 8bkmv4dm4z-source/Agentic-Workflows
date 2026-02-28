@@ -12,12 +12,14 @@ import os
 import queue
 import re
 import threading
+from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
 
 from execution.langgraph.checkpoint_store import SQLiteCheckpointStore
 from execution.langgraph.memo_store import SQLiteMemoStore
+from execution.langgraph.mission_parser import StructuredPlan, parse_missions
 from execution.langgraph.policy import MemoizationPolicy
 from execution.langgraph.provider import ChatProvider, ProviderTimeoutError, build_provider
 from execution.langgraph.state_schema import (
@@ -98,7 +100,12 @@ class LangGraphOrchestrator:
             '- math_stats: {"operation":"...", "a":<number>, "b":<number>} or {"operation":"...", "numbers":[...]}\n'
             '- write_file: {"path":"<filepath>", "content":"<string>"}\n'
             '- memoize: {"key":"<key>", "value":<json>, "run_id":"<run_id>", "namespace":"run(optional)"}\n'
-            '- retrieve_memo: {"key":"<key>", "run_id":"<run_id>", "namespace":"run(optional)"}\n\n'
+            '- retrieve_memo: {"key":"<key>", "run_id":"<run_id>", "namespace":"run(optional)"}\n'
+            '- task_list_parser: {"text":"<string>"}\n'
+            '- text_analysis: {"text":"<string>", "operation":"word_count|sentence_count|char_count|key_terms|complexity_score|paragraph_count|avg_word_length|unique_words|full_report"}\n'
+            '- data_analysis: {"numbers":[...], "operation":"summary_stats|outliers|percentiles|distribution|correlation|normalize|z_scores"}\n'
+            '- json_parser: {"text":"<json_string>", "operation":"parse|validate|extract_keys|flatten|get_path|pretty_print|count_elements"}\n'
+            '- regex_matcher: {"text":"<string>", "pattern":"<regex>", "operation":"find_all|find_first|split|replace|match|count_matches|extract_groups"}\n\n'
             "Memoization policy:\n"
             "- For heavy deterministic writes, memoize result before continuing.\n"
             '- Use tool "memoize" with args: key, value, run_id, optional namespace.\n'
@@ -140,10 +147,13 @@ class LangGraphOrchestrator:
         """Execute one end-to-end run and return audit-friendly artifacts."""
         state = new_run_state(self.system_prompt, user_input, run_id=run_id)
         state = ensure_state_defaults(state, system_prompt=self.system_prompt)
-        missions = self._extract_missions(user_input)
+        structured_plan = parse_missions(user_input)
+        missions = structured_plan.flat_missions
         state["missions"] = missions
+        state["structured_plan"] = structured_plan.to_dict()
         state["mission_reports"] = self._initialize_mission_reports(missions)
         state["active_mission_index"] = -1
+        self._write_shared_plan(state)
         self.logger.info("RUN START run_id=%s missions=%s", state["run_id"], len(missions))
         self.checkpoint_store.save(
             run_id=state["run_id"],
@@ -755,6 +765,7 @@ class LangGraphOrchestrator:
                 mission.get("used_tools", []),
                 mission.get("result", ""),
             )
+        self._write_shared_plan(state)
         self.checkpoint_store.save(
             run_id=state["run_id"],
             step=state["step"],
@@ -762,6 +773,70 @@ class LangGraphOrchestrator:
             state=state,
         )
         return state
+
+    def _write_shared_plan(self, state: RunState) -> None:
+        """Write structured plan to Shared_plan.md (direct file I/O, outside tool pipeline)."""
+        plan_data = state.get("structured_plan")
+        if not plan_data:
+            return
+        try:
+            plan = StructuredPlan.from_dict(plan_data)
+        except Exception:  # noqa: BLE001
+            return
+        completed_tasks = set(state.get("completed_tasks", []))
+        missions = state.get("missions", [])
+
+        lines = [
+            f"# Shared Plan — Run {state.get('run_id', 'unknown')}",
+            "",
+            f"**Parsing method:** {plan.parsing_method}",
+            f"**Total missions:** {len(missions)}",
+            f"**Completed:** {len(completed_tasks)}/{len(missions)}",
+            "",
+            "## Mission Tree",
+            "",
+        ]
+
+        # Group steps by parent
+        top_level = [s for s in plan.steps if s.parent_id is None]
+        children_map: dict[str, list] = {}
+        for s in plan.steps:
+            if s.parent_id is not None:
+                children_map.setdefault(s.parent_id, []).append(s)
+
+        for step in top_level:
+            mission_text = f"Task {step.id}: {step.description}"
+            is_done = mission_text in completed_tasks or step.status == "completed"
+            checkbox = "[x]" if is_done else "[ ]"
+            status_label = "IMPLEMENTED" if is_done else "PENDING"
+            lines.append(f"- {checkbox} **Task {step.id}:** {step.description}  — {status_label}")
+            if step.suggested_tools:
+                lines.append(f"  - Suggested tools: {', '.join(step.suggested_tools)}")
+            if step.dependencies:
+                lines.append(f"  - Dependencies: {', '.join(step.dependencies)}")
+            # Sub-tasks
+            for child in children_map.get(step.id, []):
+                child_done = child.status == "completed"
+                child_checkbox = "[x]" if child_done else "[ ]"
+                child_status = "IMPLEMENTED" if child_done else "PENDING"
+                lines.append(f"  - {child_checkbox} **{child.id}:** {child.description}  — {child_status}")
+                if child.suggested_tools:
+                    lines.append(f"    - Suggested tools: {', '.join(child.suggested_tools)}")
+
+        lines.append("")
+        lines.append("## Flat Missions (backward-compat)")
+        lines.append("")
+        for i, m in enumerate(plan.flat_missions, 1):
+            is_done = m in completed_tasks
+            checkbox = "[x]" if is_done else "[ ]"
+            status_label = "IMPLEMENTED" if is_done else "PENDING"
+            lines.append(f"{i}. {checkbox} {m}  — {status_label}")
+
+        lines.append("")
+        try:
+            Path("Shared_plan.md").write_text("\n".join(lines), encoding="utf-8")
+        except OSError as exc:
+            self.logger.warning("Failed to write Shared_plan.md: %s", exc)
 
     def _validate_action(self, model_output: str) -> dict[str, Any]:
         """Validate model output against strict ToolAction/FinishAction schema."""
@@ -1087,6 +1162,17 @@ class LangGraphOrchestrator:
         elif tool_name == "memoize":
             if "value" not in normalized and "data" in normalized:
                 normalized["value"] = normalized.pop("data")
+        elif tool_name == "text_analysis":
+            if "operation" not in normalized and isinstance(normalized.get("op"), str):
+                normalized["operation"] = normalized.pop("op")
+        elif tool_name == "data_analysis":
+            if "numbers" not in normalized and isinstance(normalized.get("data"), list):
+                normalized["numbers"] = normalized.pop("data")
+            if "numbers" not in normalized and isinstance(normalized.get("values"), list):
+                normalized["numbers"] = normalized.pop("values")
+        elif tool_name == "regex_matcher":
+            if "pattern" not in normalized and isinstance(normalized.get("regex"), str):
+                normalized["pattern"] = normalized.pop("regex")
         return normalized
 
     def _memo_lookup_candidates_for_action(self, *, tool_name: str, tool_args: dict[str, Any]) -> list[str]:

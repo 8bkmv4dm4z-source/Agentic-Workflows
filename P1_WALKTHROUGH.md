@@ -215,7 +215,95 @@ Regression tests that lock this behavior:
 - `tests/test_langgraph_flow.py::test_provider_timeout_uses_deterministic_fallback_for_fibonacci_write`
 - `tests/test_langgraph_flow.py::test_cross_run_write_cache_reuse_skips_planner_generation`
 
-## 11) Prompt plan for next iteration
+## 13) Cache-Hit Mission Attribution Fix (2026-02-28)
+
+Observed issue:
+- On a run with 5 tasks, Task 4 (`write_file fib.txt`) was auto-completed from cache.
+- The `write_file` tool result was incorrectly attached to Task 5 in mission report.
+- Orchestrator then finalized early with "All tasks completed", skipping Task 5 intent.
+
+Root cause:
+- In cache-hit flow, Task 4 was appended to `completed_tasks` before mission event recording.
+- Mission index selection in `_record_mission_tool_event` used `len(completed_tasks)`, which shifted attribution to the next mission (Task 5).
+
+Implemented behavior:
+- Cache-hit path now pins the target mission index before recording the tool event.
+- `_record_mission_tool_event` accepts optional `mission_index` and uses it when provided.
+- Cache-hit write result is attached to Task 4 deterministically.
+- Task 5 remains pending and planner continues instead of finishing early.
+
+Regression test:
+- `tests/test_langgraph_flow.py::test_cache_hit_keeps_followup_mission_index_alignment`
+
+## 14) Enhanced Mission Parser, New Tools, and Shared Plan (2026-02-28)
+
+### What was implemented
+
+**7 new files created:**
+
+| File | Purpose |
+|------|---------|
+| `execution/langgraph/mission_parser.py` | Structured mission parser with `MissionStep`/`StructuredPlan` dataclasses, sub-task detection (1a/1b, 1.1/1.2), tool suggestion heuristics, dependency inference, and regex fallback |
+| `tools/task_list_parser.py` | Tool wrapper around `parse_missions()` |
+| `tools/text_analysis.py` | Text analytics: word/sentence/char count, key terms, complexity, paragraphs, unique words, full report |
+| `tools/data_analysis.py` | Numeric analytics: summary stats, IQR outliers, percentiles, distribution, correlation, normalize, z-scores |
+| `tools/json_parser.py` | JSON parse/validate/extract_keys/flatten/get_path/pretty_print/count_elements |
+| `tools/regex_matcher.py` | Regex find_all/find_first/split/replace/match/count_matches/extract_groups (100KB safety limit) |
+| `tests/test_mission_parser.py` | 13 unit tests for the mission parser |
+| `tests/test_new_tools.py` | 40 unit tests across all 5 new tools |
+
+**5 existing files modified:**
+
+| File | Changes |
+|------|---------|
+| `execution/langgraph/state_schema.py` | Added `structured_plan` field to `RunState`, `new_run_state()`, and `ensure_state_defaults()` |
+| `execution/langgraph/tools_registry.py` | Registered 5 new tools in `build_tool_registry()` |
+| `execution/langgraph/graph.py` | Integrated mission parser in `run()`, added `_write_shared_plan()` method (called at init + finalize), added 5 new tools to system prompt, added arg normalization for `text_analysis`/`data_analysis`/`regex_matcher` |
+| `execution/langgraph/run.py` | Replaced demo prompt with richer 5-task prompt exercising sub-tasks and cross-tool pipelines |
+| `tests/test_langgraph_flow.py` | Added 9 integration tests (structured plan in state, backward compat, text_analysis/data_analysis in flow, Shared_plan.md written, all 12 tools in prompt, 3 arg normalization tests) |
+
+### Why it worked
+
+1. **Backward compatibility preserved.** The mission parser produces `flat_missions` that match the exact format the orchestrator already uses for `state["missions"]`. The old `_extract_missions()` regex logic is preserved verbatim as `_extract_missions_regex_fallback()` inside the parser module, so any input that worked before still works identically.
+
+2. **Layered parsing with fallback.** The parser tries structured numbered tasks first, then bullet lists, then falls back to the original regex. This means richer inputs get sub-task support while simple inputs degrade gracefully. A 5-second timeout wrapper prevents runaway parsing on huge inputs.
+
+3. **State schema is additive-only.** The `structured_plan` field defaults to `None` and `ensure_state_defaults()` backfills it, so existing serialized states and checkpoint stores remain compatible.
+
+4. **New tools follow the existing `Tool` base class pattern.** Each tool has `name`, `description`, and `execute(args) -> dict`. They plug directly into `build_tool_registry()` and the system prompt tool reference without changing any execution pipeline code.
+
+5. **Shared_plan.md is written via direct file I/O**, not through the tool pipeline. This avoids triggering memo policy enforcement, audit noise, and duplicate-call detection. It's called at run start (after parsing) and in `_finalize()` (with completion status). Each step is marked `IMPLEMENTED` or `PENDING` so other agents can pick up the plan.
+
+6. **Arg normalization extends cleanly.** The `_normalize_tool_args()` method already had per-tool alias mappings. Adding `text_analysis` (`op`→`operation`), `data_analysis` (`data`/`values`→`numbers`), and `regex_matcher` (`regex`→`pattern`) follows the same pattern with no structural changes.
+
+7. **No changes to graph topology or routing.** The plan→execute→policy→finalize flow is untouched. The parser integration is purely at the `run()` entry point, and Shared_plan.md writing is in `_finalize()`. All existing guardrails (duplicate detection, memo policy, timeout fallback, content validation) work unchanged.
+
+### Test results
+
+94 tests, all passing (0 failures, 0 errors). This includes:
+- 13 mission parser unit tests
+- 40 new tool unit tests (across 5 tools)
+- 9 new integration tests in `test_langgraph_flow.py`
+- All 32 original tests passing unchanged
+
+### Tool inventory (now 12 tools)
+
+| Tool | Category |
+|------|----------|
+| `repeat_message` | Echo/debug |
+| `sort_array` | Array manipulation |
+| `string_ops` | String transforms |
+| `math_stats` | Single math operations |
+| `write_file` | File output |
+| `memoize` | Memo store write |
+| `retrieve_memo` | Memo store read |
+| `task_list_parser` | Mission parsing |
+| `text_analysis` | Text analytics |
+| `data_analysis` | Numeric analytics |
+| `json_parser` | JSON operations |
+| `regex_matcher` | Regex operations |
+
+## 15) Prompt plan for next iteration
 
 Use this exact user prompt template when running `execution.langgraph.run`:
 
