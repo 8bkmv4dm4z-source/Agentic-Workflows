@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentic-workflows"
+version = "0.1.0"
+description = "Graph-based multi-agent orchestration platform"
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = [
+    "pydantic>=2.12,<3.0",
+    "langgraph>=0.2.67,<1.0",
+    "openai>=2.0",
+    "groq>=1.0",
+    "httpx>=0.28",
+    "python-dotenv>=1.0",
+    "structlog>=25.0",
+    "rich>=14.0",
+    "requests>=2.32",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.11",
+    "mypy>=1.10",
+    "pre-commit>=4.0",
+]
+observability = ["langfuse>=3.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = [
+    "E402",  # module docstrings after __future__ imports (legacy pattern)
+    "E501",  # line too long (handled by formatter for new code; legacy strings exempt)
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true

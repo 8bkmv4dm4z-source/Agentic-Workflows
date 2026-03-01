@@ -1,93 +1,84 @@
 # CLAUDE.md
 
-Quick-start context for Claude Code sessions in this repo. For full details see `AGENTS.md`, `P1_WALKTHROUGH.md`, and `directives/phase1_langgraph.md`.
+## What
+Agentic Workflows -- a graph-based multi-agent orchestration platform.
+Python 3.12 | LangGraph | Pydantic 2.12 | Anthropic/OpenAI/Groq providers | SQLite (dev)
 
-## Commands
+## Why
+Production-grade agentic AI engineering portfolio: plan-and-execute orchestration,
+typed schemas, eval-driven development, cost-aware model routing, and observability.
 
+## How
+
+### Setup
 ```bash
-# Run Phase 1 demo
-.venv/bin/python -m execution.langgraph.run
-
-# Run all tests
-.venv/bin/python -m unittest discover -s tests -p 'test_*.py' -q
-
-# Run specific test files
-.venv/bin/python -m unittest tests/test_langgraph_flow.py tests/test_memo_store.py tests/test_memo_policy.py
-
-# Run audit (all historical runs)
-.venv/bin/python -m execution.langgraph.run_audit
+pip install -e ".[dev]"       # install with dev tools
+cp .env.example .env          # configure provider keys
 ```
 
-## Context Load Order
+### Run
+```bash
+make run                      # main agent demo
+make test                     # pytest with coverage
+make lint                     # ruff check
+make format                   # ruff format
+make typecheck                # mypy
+```
 
-1. `deep-research-report.md` — mission, roadmap, risk model
-2. `P1_WALKTHROUGH.md` — Phase 1 architecture, known bugs, run guidance
-3. `directives/phase1_langgraph.md` — Phase 1 SOP
-4. `execution/langgraph/` code + `tests/test_langgraph_flow.py`
+### Key Commands
+```bash
+python -m agentic_workflows.orchestration.langgraph.run        # demo
+python -m agentic_workflows.orchestration.langgraph.run_audit  # audit
+pytest tests/ -q                                               # all tests
+pytest tests/unit/ -q                                          # unit only
+pytest tests/integration/ -q                                   # integration
+```
 
-## Architecture
+### Project Structure
+```
+src/agentic_workflows/
+  __init__.py
+  schemas.py       -- Pydantic ToolAction/FinishAction
+  errors.py        -- Exception hierarchy
+  logger.py        -- Structured logging
+  core/            -- P0 baseline agent
+  orchestration/   -- LangGraph graphs, state, providers, checkpoints
+    langgraph/     -- graph.py, state_schema.py, provider.py, ...
+  tools/           -- 12 tool implementations (deterministic, no LLM calls)
+  directives/      -- Agent SOPs and instruction templates
+tests/
+  conftest.py      -- Shared fixtures
+  unit/            -- Unit tests
+  integration/     -- Integration tests (ScriptedProvider, no live API)
+```
 
-**3-layer model:**
-- **Directive** (`directives/`) — SOPs defining goals, inputs, outputs, edge cases
-- **Orchestration** (`execution/langgraph/`) — decision-making, retries, recovery, stop conditions; probabilistic reasoning lives here
-- **Execution** (`execution/`) — deterministic Python code, tool execution, persistence, IO
+### Environment
+Set `P1_PROVIDER` (`ollama` | `groq` | `openai`) plus provider-specific keys.
+See `.env.example` for all variables.
 
-**Phase 1 graph node flow:** `plan -> execute -> policy -> finalize`
+| Provider | Keys | Default model |
+|----------|------|---------------|
+| OpenAI | `OPENAI_API_KEY`, `OPENAI_MODEL` | gpt-4.1-mini |
+| Groq | `GROQ_API_KEY`, `GROQ_MODEL` | llama-3.1-8b-instant |
+| Ollama | `OLLAMA_BASE_URL`, `OLLAMA_MODEL` | llama3.1:8b |
 
-**Key modules** (all under `execution/langgraph/`):
-- `graph.py` — LangGraph nodes, planning, execution, arg normalization, Shared_plan.md writer
-- `langgraph_orchestrator.py` — entrypoint, timeout handling, cache logic
-- `state_schema.py` — typed state with `ensure_state_defaults` (includes `structured_plan`)
-- `mission_parser.py` — structured mission parsing with sub-task support and regex fallback
-- `provider.py` — multi-provider abstraction (Ollama, OpenAI, Groq)
-- `tools_registry.py` — tool map via `build_tool_registry()` (12 tools)
-- `memo_store.py` — schema-backed memoization store
-- `checkpoint_store.py` — durable snapshots across node transitions
-- `policy.py` — memo-required enforcement for heavy writes
+Tuning: `P1_PROVIDER_TIMEOUT_SECONDS` (30), `P1_PLAN_CALL_TIMEOUT_SECONDS` (45)
 
-**Tools** (under `tools/`):
-- Core: `echo`, `sort_array`, `string_ops`, `math_stats`, `write_file`, `memoize` (in registry)
-- Analysis/parsing: `task_list_parser`, `text_analysis`, `data_analysis`, `json_parser`, `regex_matcher`
+### Conventions
+- Default to highest implemented phase unless user says otherwise
+- Check existing tools before creating new ones
+- Never overwrite directives without explicit user request
+- Operational learnings go in `P1_WALKTHROUGH.md`
 
-## Conventions
+### Context Load Order
+1. `ProjectCompass.md` -- roadmap and target architecture
+2. `AGENTS.md` -- universal coding conventions
+3. `P1_WALKTHROUGH.md` -- current phase architecture and known bugs
+4. `directives/phase1_langgraph.md` -- Phase 1 SOP
 
-- **Default targeting:** work on the highest implemented phase (currently Phase 1 under `execution/langgraph/`) unless user says otherwise.
-- **Phase isolation:** Phase 0 stays in `p0/`, Phase 1 stays in `execution/langgraph/`, `tests/`, and docs.
-- **Notebook vs production:** notebooks (`execution/notebooks/`) are for walkthrough and verification; production logic stays in `execution/langgraph/*.py`.
-- **Check before creating:** inspect existing tools/code in `execution/` before writing new code.
-- **Doc updates:** operational learnings go in `P1_WALKTHROUGH.md`; do not create/overwrite directives without explicit user request.
-
-## Provider / Env Config
-
-Set `P1_PROVIDER` to one of: `ollama`, `groq`, `openai`. Additional env vars per provider:
-
-| Provider | Required env vars | Default model |
-|----------|------------------|---------------|
-| Ollama | `OLLAMA_BASE_URL`, `OLLAMA_MODEL` | `llama3.1:8b` |
-| OpenAI | `OPENAI_API_KEY`, `OPENAI_MODEL` | `gpt-4.1-mini` |
-| Groq | `GROQ_API_KEY`, `GROQ_MODEL` | `llama-3.1-8b-instant` |
-
-Tuning env vars (with defaults):
-- `P1_PROVIDER_TIMEOUT_SECONDS` (30)
-- `P1_PROVIDER_MAX_RETRIES` (2)
-- `P1_PROVIDER_RETRY_BACKOFF_SECONDS` (1.0)
-- `P1_PLAN_CALL_TIMEOUT_SECONDS` (45) — hard wall-time cap per planner call
-
-## Known Constraints
-
-- **JSON contract violations:** some providers emit XML-ish tool-call envelopes instead of JSON. Parser recovers first balanced JSON object; non-JSON payloads cause bounded retry then fail-closed.
-- **Memoization policy:** heavy deterministic writes (e.g. `write_file`) require a `memoize` call. This is enforced even during timeout mode — `memoize` before `finish`.
-- **Timeout mode:** after a planner timeout, `planner_timeout_mode=True` activates deterministic fallback actions (no further model calls). Supports `repeat_message`, `sort_array`, `string_ops`, Fibonacci `write_file`.
-- **Duplicate protection:** exact duplicate tool calls are blocked via `seen_tool_signatures`.
-- **Arg normalization:** `graph.py` normalizes common arg aliases (e.g. `array`/`values` -> `items`, `file_path` -> `path`, `op` -> `operation`, `regex` -> `pattern`).
-- **Structured plan:** mission parser produces `StructuredPlan` with sub-task support; `Shared_plan.md` is written at run start/finalize with IMPLEMENTED/PENDING markers.
-
-## File Layout
-
-- `p0/` — Phase 0 legacy baseline
-- `execution/langgraph/` — Phase 1 runtime
-- `execution/notebooks/` — walkthrough notebooks
-- `directives/` — SOPs
-- `tests/` — automated tests
-- `.tmp/` — intermediates and local stores (regenerable)
-- `.env` — provider/config secrets (not committed)
+### Known Constraints
+- JSON contract violations: some providers emit XML-ish tool-call envelopes;
+  parser recovers first balanced JSON object, non-JSON payloads retry then fail-closed
+- Memoization policy: heavy deterministic writes require a `memoize` call
+- Timeout mode: after planner timeout, deterministic fallback actions only
+- Duplicate protection: exact duplicate tool calls blocked via `seen_tool_signatures`
