@@ -80,37 +80,44 @@
 
 ## Traceability
 
-Populated during roadmap creation.
-
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| LGUP-01 | — | Pending |
-| LGUP-02 | — | Pending |
-| LGUP-03 | — | Pending |
-| LGUP-04 | — | Pending |
-| MAGT-01 | — | Pending |
-| MAGT-02 | — | Pending |
-| MAGT-03 | — | Pending |
-| MAGT-04 | — | Pending |
-| MAGT-05 | — | Pending |
-| MAGT-06 | — | Pending |
-| OBSV-01 | — | Pending |
-| OBSV-02 | — | Pending |
-| OBSV-03 | — | Pending |
-| PROD-01 | — | Pending |
-| PROD-02 | — | Pending |
-| PROD-03 | — | Pending |
-| PROD-04 | — | Pending |
-| PROD-05 | — | Pending |
-| LRNG-01 | — | Pending |
-| LRNG-02 | — | Pending |
-| LRNG-03 | — | Pending |
+| LGUP-01 | Phase 2 | Pending |
+| LGUP-02 | Phase 2 | Pending |
+| LGUP-03 | Phase 2 | Pending |
+| LGUP-04 | Phase 2 | Pending |
+| OBSV-02 | Phase 2 | Pending |
+| LRNG-02 | Phase 2 | Pending |
+| MAGT-01 | Phase 3 | Pending |
+| MAGT-02 | Phase 3 | Pending |
+| MAGT-03 | Phase 3 | Pending |
+| MAGT-04 | Phase 3 | Pending |
+| LRNG-01 | Phase 3 | Pending |
+| MAGT-05 | Phase 4 | Pending |
+| MAGT-06 | Phase 4 | Pending |
+| OBSV-03 | Phase 4 | Pending |
+| OBSV-01 | Phase 5 | Pending |
+| LRNG-03 | Phase 5 | Pending |
+| PROD-01 | Phase 6 | Pending |
+| PROD-02 | Phase 6 | Pending |
+| PROD-03 | Phase 7 | Pending |
+| PROD-04 | Phase 7 | Pending |
+| PROD-05 | Phase 7 | Pending |
 
 **Coverage:**
 - v1 requirements: 21 total
-- Mapped to phases: 0
-- Unmapped: 21 ⚠️ (populated after roadmap)
+- Mapped to phases: 21
+- Unmapped: 0 (all requirements mapped)
+
+| Phase | Requirements |
+|-------|-------------|
+| Phase 2 | LGUP-01, LGUP-02, LGUP-03, LGUP-04, OBSV-02, LRNG-02 (6) |
+| Phase 3 | MAGT-01, MAGT-02, MAGT-03, MAGT-04, LRNG-01 (5) |
+| Phase 4 | MAGT-05, MAGT-06, OBSV-03 (3) |
+| Phase 5 | OBSV-01, LRNG-03 (2) |
+| Phase 6 | PROD-01, PROD-02 (2) |
+| Phase 7 | PROD-03, PROD-04, PROD-05 (3) |
 
 ---
 *Requirements defined: 2026-03-02*
-*Last updated: 2026-03-02 after initial definition*
+*Last updated: 2026-03-02 — traceability populated after roadmap creation*
