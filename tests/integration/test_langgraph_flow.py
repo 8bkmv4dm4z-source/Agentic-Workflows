@@ -1320,3 +1320,71 @@ def test_reducer_two_branch_merge() -> None:
     tool_history_hint = hints["tool_history"]
     assert hasattr(tool_history_hint, "__metadata__"), "tool_history must be Annotated with reducer"
     assert tool_history_hint.__metadata__[0] is operator.add, "reducer must be operator.add"
+
+
+def test_tool_node_constructed_for_anthropic_path(monkeypatch) -> None:  # noqa: ANN001
+    """When P1_PROVIDER=anthropic, graph construction wires a ToolNode.
+
+    This test verifies LGUP-02: the graph compiles successfully with a 'tools'
+    node backed by ToolNode(handle_tool_errors=True) when P1_PROVIDER=anthropic.
+    The ScriptedProvider is passed as the ChatProvider — it will be used for the
+    existing plan/execute/policy/finalize path. The ToolNode path is dormant in
+    tests (no live Anthropic API), but the graph topology must compile without error.
+    """
+    import tempfile
+
+    monkeypatch.setenv("P1_PROVIDER", "anthropic")
+
+    # Force re-evaluation of the P1_PROVIDER env var by constructing the orchestrator
+    # with a fresh SQLite backing store (in-memory via tempfile) and a ScriptedProvider.
+    # The graph is compiled in __init__; if ToolNode wiring fails, an exception is raised.
+    with tempfile.TemporaryDirectory() as tmp:
+        from agentic_workflows.orchestration.langgraph.checkpoint_store import SQLiteCheckpointStore
+        from agentic_workflows.orchestration.langgraph.graph import LangGraphOrchestrator
+        from agentic_workflows.orchestration.langgraph.memo_store import SQLiteMemoStore
+
+        scripted = ScriptedProvider([{"action": "finish", "answer": "done"}])
+        orch = LangGraphOrchestrator(
+            provider=scripted,
+            memo_store=SQLiteMemoStore(f"{tmp}/memo.db"),
+            checkpoint_store=SQLiteCheckpointStore(f"{tmp}/cp.db"),
+            max_steps=5,
+        )
+        assert orch is not None, "Orchestrator must construct without error"
+
+        # Verify the compiled graph has a 'tools' node when Anthropic path is active
+        graph_nodes = set(orch._compiled.get_graph().nodes.keys())
+        assert "tools" in graph_nodes, (
+            f"'tools' ToolNode must be present in compiled graph for Anthropic path. "
+            f"Found nodes: {graph_nodes}"
+        )
+
+
+def test_tool_node_not_present_for_non_anthropic_path(monkeypatch) -> None:  # noqa: ANN001
+    """When P1_PROVIDER is not anthropic, graph topology does NOT include a 'tools' node.
+
+    This verifies that the ToolNode gating is working correctly: the standard
+    ChatProvider path (ollama, openai, groq, scripted) must not have the ToolNode
+    node injected, ensuring zero behavioral change for existing paths.
+    """
+    import tempfile
+
+    monkeypatch.setenv("P1_PROVIDER", "scripted")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        from agentic_workflows.orchestration.langgraph.checkpoint_store import SQLiteCheckpointStore
+        from agentic_workflows.orchestration.langgraph.graph import LangGraphOrchestrator
+        from agentic_workflows.orchestration.langgraph.memo_store import SQLiteMemoStore
+
+        scripted = ScriptedProvider([{"action": "finish", "answer": "done"}])
+        orch = LangGraphOrchestrator(
+            provider=scripted,
+            memo_store=SQLiteMemoStore(f"{tmp}/memo.db"),
+            checkpoint_store=SQLiteCheckpointStore(f"{tmp}/cp.db"),
+            max_steps=5,
+        )
+        graph_nodes = set(orch._compiled.get_graph().nodes.keys())
+        assert "tools" not in graph_nodes, (
+            f"'tools' ToolNode must NOT be present for non-Anthropic providers. "
+            f"Found nodes: {graph_nodes}"
+        )

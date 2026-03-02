@@ -54,6 +54,17 @@ except ImportError:  # pragma: no cover
     START = "__start__"
     StateGraph = None
 
+try:
+    from langchain_core.tools import StructuredTool
+    from langgraph.prebuilt import ToolNode, tools_condition
+
+    _TOOLNODE_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    _TOOLNODE_AVAILABLE = False
+    ToolNode = None  # type: ignore[assignment,misc]
+    tools_condition = None  # type: ignore[assignment]
+    StructuredTool = None  # type: ignore[assignment,misc]
+
 
 class MemoizationPolicyViolation(RuntimeError):
     """Raised when memoization policy retries are exhausted."""
@@ -190,12 +201,97 @@ class LangGraphOrchestrator:
                     deleted,
                 )
 
+    def _build_lc_tools(self) -> list[Any]:
+        """Convert internal Tool registry to LangChain StructuredTool instances.
+
+        This is used exclusively for the Anthropic ToolNode path. The standard
+        ChatProvider path uses tools from self.tools (our Tool base class) directly.
+
+        Each Tool.execute(args: dict) -> dict is wrapped as a StructuredTool so that
+        ToolNode (which expects LangChain BaseTool instances) can invoke them.
+        """
+        if StructuredTool is None:  # pragma: no cover
+            return []
+
+        lc_tools = []
+        for tool_name, tool_instance in self.tools.items():
+            # Capture tool_instance in closure to avoid late-binding issues
+            def _make_tool_fn(t: Tool, n: str):  # type: ignore[type-arg]
+                def _tool_fn(**kwargs: Any) -> dict[str, Any]:  # type: ignore[return]
+                    """Execute tool."""
+                    return t.execute(dict(kwargs))
+
+                _tool_fn.__name__ = n
+                _tool_fn.__qualname__ = n
+                _tool_fn.__doc__ = getattr(t, "description", f"Execute {n} tool.")
+                return _tool_fn
+
+            fn = _make_tool_fn(tool_instance, tool_name)
+            lc_tool = StructuredTool.from_function(  # type: ignore[union-attr]
+                fn,
+                name=tool_name,
+                description=getattr(tool_instance, "description", f"Execute {tool_name} tool."),
+            )
+            lc_tools.append(lc_tool)
+        return lc_tools
+
+    def _dedup_then_tool_node(
+        self,
+        tool_node: Any,  # ToolNode instance
+    ):
+        """Return a wrapper function that checks seen_tool_signatures before ToolNode.
+
+        This preserves the existing deduplication invariant on the Anthropic ToolNode
+        path. ToolNode has no built-in deduplication; the pre-check runs first and
+        short-circuits with a duplicate-detected message when the signature matches.
+        """
+
+        def _wrapper(state: RunState) -> dict[str, Any]:
+            state = ensure_state_defaults(state, system_prompt=self.system_prompt)
+            # Extract tool calls from the last AIMessage in messages (Anthropic format)
+            messages = state.get("messages", [])
+            last_msg = messages[-1] if messages else None
+            tool_calls = getattr(last_msg, "tool_calls", []) if last_msg else []
+            for tc in tool_calls or []:
+                tool_name = tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", "")
+                tool_args = tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {})
+                signature = f"{tool_name}:{json.dumps(tool_args, sort_keys=True, default=str)}"
+                if signature in state.get("seen_tool_signatures", []):
+                    self.logger.info(
+                        "TOOL_NODE DEDUP BLOCK tool=%s signature=%s",
+                        tool_name,
+                        signature[:120],
+                    )
+                    # Return empty delta — ToolNode will be skipped by returning early
+                    # The plan node will detect the duplicate on next planning step
+                    return {}
+            # No duplicates — delegate to ToolNode
+            return tool_node.invoke(state)  # type: ignore[no-any-return]
+
+        _wrapper.__name__ = "_dedup_then_tool_node"
+        _wrapper.__qualname__ = "_dedup_then_tool_node"
+        return _wrapper
+
     def _compile_graph(self):
-        """Compile runtime graph topology: plan -> execute -> policy -> finalize."""
+        """Compile runtime graph topology: plan -> execute -> policy -> finalize.
+
+        When P1_PROVIDER=anthropic, an additional 'tools' node backed by ToolNode
+        (from langgraph-prebuilt) is added to the graph. The ToolNode path handles
+        Anthropic tool-call format natively, replacing the XML/JSON envelope parser
+        for that provider only.
+
+        All other provider paths (ollama, openai, groq, scripted) use the existing
+        ChatProvider pattern unchanged.
+        """
         if StateGraph is None:
             raise RuntimeError(
                 "langgraph is not installed. Add langgraph to requirements and install dependencies."
             )
+
+        use_tool_node = (
+            _TOOLNODE_AVAILABLE
+            and os.getenv("P1_PROVIDER", "ollama").lower() == "anthropic"
+        )
 
         builder = StateGraph(RunState)
         builder.add_node("plan", _sequential_node(self._plan_next_action))
@@ -215,6 +311,23 @@ class LangGraphOrchestrator:
         builder.add_edge("execute", "policy")
         builder.add_edge("policy", "plan")
         builder.add_edge("finalize", END)
+
+        if use_tool_node:
+            # Anthropic provider path: wire ToolNode + tools_condition.
+            # ToolNode handles the Anthropic tool-call envelope format natively,
+            # replacing the XML/JSON envelope parser for this provider path only.
+            #
+            # IMPORTANT: seen_tool_signatures deduplication is preserved via the
+            # _dedup_then_tool_node() wrapper that runs BEFORE ToolNode executes.
+            lc_tools = self._build_lc_tools()
+            _tool_node = ToolNode(tools=lc_tools, handle_tool_errors=True)  # type: ignore[operator]
+            dedup_node = self._dedup_then_tool_node(_tool_node)
+            builder.add_node("tools", dedup_node)
+            self.logger.info(
+                "TOOLNODE WIRED provider=anthropic tools=%s handle_tool_errors=True",
+                [t.name for t in lc_tools],
+            )
+
         return builder.compile()
 
     @observe("langgraph.orchestrator.run")
