@@ -50,6 +50,8 @@ Recent decisions affecting current work:
 - [02-01]: Installed langgraph 1.0.10, langgraph-prebuilt 1.0.8, langchain-anthropic 1.3.4; test suite confirmed at 267 (grew from 208 during Phase 1)
 - [02-02]: Annotated[list[T], operator.add] reducers added to 4 RunState list fields; _sequential_node() wrapper needed in graph.py because operator.add doubles lists when nodes return full state — LangGraph 1.0 applies reducer to returned dict even for full-state returns; wrapper zeroes Annotated fields in return dict (operator.add(post_mutation_list, []) = no-op)
 - [02-02]: Message compaction added to ensure_state_defaults() — sliding window at P1_MESSAGE_COMPACTION_THRESHOLD (default 40), system messages always preserved
+- [02-04]: @observe(name="run") applied to main() in run.py — main() is the CLI entrypoint; graph.py orchestrator.run() already had @observe separately; closes OBSV-02
+- [02-04]: docs/ADR/ established with 4 ADRs (Status/Context/Decision/Consequences format) for Phase 2 key decisions — LRNG-02 closed
 - [02-05]: CI workflow uses P1_PROVIDER=scripted in env block — ScriptedProvider handles all LLM interaction, zero live API keys in CI
 - [02-05]: branches: ["**"] on push catches all feature branches; no pip cache (deferred to Phase 7)
 
@@ -61,11 +63,11 @@ None yet.
 
 - [Phase 2 entry]: ~~langgraph<1.0 pin must be removed~~ RESOLVED — langgraph 1.0.10 installed (02-01 complete)
 - [Phase 2]: Verify ToolNode.afunc behavior with langgraph-prebuilt 1.0.8 when wiring in Plan 03 (plan originally warned about 1.0.2 break)
-- [Phase 2]: @observe() not yet wired on run/provider path (open Phase 1 item — closes in Phase 2 via OBSV-02)
+- [Phase 2]: ~~@observe() not yet wired on run/provider path~~ RESOLVED — @observe(name="run") on main() in run.py (02-04 complete)
 - [Phase 3]: ~~RunState reducer annotations must be complete before any Send()-based parallel execution is attempted~~ RESOLVED — Annotated reducers added in 02-02 with _sequential_node() wrapper for safe sequential operation
 
 ## Session Continuity
 
-Last session: 2026-03-03
-Stopped at: Plan 02-05 complete — GitHub Actions CI workflow (.github/workflows/ci.yml)
+Last session: 2026-03-02
+Stopped at: Plan 02-04 complete — @observe(name="run") on run.py main(), docs/ADR/ with 4 ADRs, 277 tests green
 Resume file: None

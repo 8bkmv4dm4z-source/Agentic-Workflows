@@ -24,7 +24,7 @@
 ### Observability
 
 - [ ] **OBSV-01**: Langfuse `CallbackHandler` is wired in the graph invocation `config` so all graph node transitions are traced automatically (free Langfuse tier or self-hosted)
-- [ ] **OBSV-02**: `@observe()` decorator is wired on the `run()` entrypoint and provider `generate()` path (open Phase 1 item — closes it)
+- [x] **OBSV-02**: `@observe()` decorator is wired on the `run()` entrypoint and provider `generate()` path (open Phase 1 item — closes it)
 - [ ] **OBSV-03**: Model-strength routing makes real routing decisions based on task complexity signals (not the existing stub returning a hardcoded path)
 
 ### Production Infrastructure
@@ -38,7 +38,7 @@
 ### Learning System
 
 - [ ] **LRNG-01**: Every non-trivial refactor (any change touching graph.py, state_schema.py, or specialist files) is accompanied by a WALKTHROUGH update that explains: what changed, why it changed, and which LangGraph/Python classes implement the change
-- [ ] **LRNG-02**: An Architecture Decision Log (`docs/ADR/`) records each significant design decision with context, alternatives considered, and rationale — populated as decisions are made during each phase
+- [x] **LRNG-02**: An Architecture Decision Log (`docs/ADR/`) records each significant design decision with context, alternatives considered, and rationale — populated as decisions are made during each phase
 - [ ] **LRNG-03**: Each completed phase produces a "Before/After" architecture snapshot showing the system state before and after the phase — making the progression of the build explicit and reviewable
 
 ## v2 Requirements
@@ -86,8 +86,8 @@
 | LGUP-02 | Phase 2 | Pending |
 | LGUP-03 | Phase 2 | Complete (02-02) |
 | LGUP-04 | Phase 2 | Complete (02-02) |
-| OBSV-02 | Phase 2 | Pending |
-| LRNG-02 | Phase 2 | Pending |
+| OBSV-02 | Phase 2 | Complete |
+| LRNG-02 | Phase 2 | Complete |
 | MAGT-01 | Phase 3 | Pending |
 | MAGT-02 | Phase 3 | Pending |
 | MAGT-03 | Phase 3 | Pending |
