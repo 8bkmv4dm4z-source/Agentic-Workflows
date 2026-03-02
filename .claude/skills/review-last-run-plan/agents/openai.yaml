@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review Last Run Plan"
+  short_description: "Review last run and draft fix plan"
+  default_prompt: "Use $review-last-run-plan to review lastRun.txt and propose a user-approvable bug-fix plan."

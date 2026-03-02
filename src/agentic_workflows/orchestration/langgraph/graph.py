@@ -232,6 +232,69 @@ class LangGraphOrchestrator:
             return "finish"
         return "execute"
 
+    def _log_queue_mission_spacing(
+        self, *, state: RunState, mission_id: int, source: str
+    ) -> None:
+        """Emit a visual separator when queued actions move to a different mission."""
+        if mission_id <= 0:
+            return
+        flags = state.get("policy_flags", {})
+        previous = int(flags.get("last_queue_mission_id", 0))
+        if previous > 0 and previous != mission_id:
+            self.logger.info("")
+            self.logger.info(
+                "PLAN QUEUE MISSION BREAK from=%s to=%s source=%s",
+                previous,
+                mission_id,
+                source,
+            )
+        flags["last_queue_mission_id"] = mission_id
+
+    def _planner_action_preview(self, action: dict[str, Any]) -> dict[str, Any]:
+        """Return a compact planner action preview for logs."""
+        args = dict(action.get("args", {}))
+        return {
+            "action": str(action.get("action", "")),
+            "tool_name": str(action.get("tool_name", "")),
+            "__mission_id": int(action.get("__mission_id", 0) or 0),
+            "arg_keys": sorted(args.keys()),
+        }
+
+    def _log_parser_state(self, state: RunState) -> None:
+        """Emit parser state snapshot for the current planner step."""
+        structured = state.get("structured_plan")
+        method = "unknown"
+        step_count = 0
+        if isinstance(structured, dict):
+            method = str(structured.get("parsing_method", "unknown"))
+            step_count = len(structured.get("steps", []))
+        next_mission = self._next_incomplete_mission(state)
+        next_preview = next_mission[:120] + "..." if len(next_mission) > 120 else next_mission
+        self.logger.info(
+            (
+                "PARSER STATE step=%s run_id=%s method=%s parsed_steps=%s missions=%s "
+                "next_mission=%s"
+            ),
+            state["step"],
+            state["run_id"],
+            method,
+            step_count,
+            len(state.get("missions", [])),
+            next_preview,
+        )
+
+    def _log_planner_output(
+        self, *, state: RunState, source: str, action: dict[str, Any], queue_remaining: int
+    ) -> None:
+        """Emit normalized planner output per step, regardless of source."""
+        self.logger.info(
+            "PLANNER OUTPUT step=%s source=%s queue_remaining=%s action=%s",
+            state["step"],
+            source,
+            queue_remaining,
+            self._planner_action_preview(action),
+        )
+
     def _plan_next_action(self, state: RunState) -> RunState:
         """Call the model planner and parse one strict JSON action."""
         state = ensure_state_defaults(state, system_prompt=self.system_prompt)
@@ -240,6 +303,18 @@ class LangGraphOrchestrator:
         if pending_action.get("action") == "finish":
             return state
         state["step"] = state.get("step", 0) + 1
+        self.logger.info(
+            (
+                "PLANNER STEP START step=%s run_id=%s queue=%s timeout_mode=%s "
+                "memo_required=%s"
+            ),
+            state["step"],
+            state["run_id"],
+            len(state.get("pending_action_queue", [])),
+            bool(state.get("policy_flags", {}).get("planner_timeout_mode", False)),
+            bool(state.get("policy_flags", {}).get("memo_required", False)),
+        )
+        self._log_parser_state(state)
         if state["step"] > self.max_steps:
             fail_message = (
                 "Run stopped: exceeded orchestrator step budget before mission completion. "
@@ -274,11 +349,23 @@ class LangGraphOrchestrator:
             state["pending_action_queue"] = queue
             try:
                 validated = self._validate_action_from_dict(next_action_raw)
+                queued_mission_id = int(validated.get("__mission_id", 0))
+                self._log_queue_mission_spacing(
+                    state=state,
+                    mission_id=queued_mission_id,
+                    source="queue_pop",
+                )
                 self.logger.info(
                     "PLAN QUEUE POP step=%s queue_remaining=%s action=%s",
                     state["step"],
                     len(queue),
                     validated,
+                )
+                self._log_planner_output(
+                    state=state,
+                    source="queue_pop",
+                    action=validated,
+                    queue_remaining=len(queue),
                 )
                 if validated.get("action") == "finish" and not self._all_missions_completed(state):
                     finish_rejected = int(state["retry_counts"].get("finish_rejected", 0)) + 1
@@ -335,10 +422,23 @@ class LangGraphOrchestrator:
         if bool(state.get("policy_flags", {}).get("planner_timeout_mode", False)):
             fallback_action = self._deterministic_fallback_action(state)
             if fallback_action is not None:
+                fallback_requirements = self._next_incomplete_mission_requirements(state)
                 self.logger.warning(
-                    "PLAN TIMEOUT MODE step=%s action=%s",
+                    (
+                        "PLAN TIMEOUT MODE step=%s action=%s mission_id=%s "
+                        "missing_tools=%s missing_files=%s"
+                    ),
                     state["step"],
                     fallback_action,
+                    fallback_requirements.get("mission_id", 0),
+                    fallback_requirements.get("missing_tools", []),
+                    fallback_requirements.get("missing_files", []),
+                )
+                self._log_planner_output(
+                    state=state,
+                    source="timeout_mode",
+                    action=fallback_action,
+                    queue_remaining=len(state.get("pending_action_queue", [])),
                 )
                 state["pending_action"] = fallback_action
                 self.checkpoint_store.save(
@@ -404,6 +504,13 @@ class LangGraphOrchestrator:
                             basename = path.replace("\\", "/").rsplit("/", 1)[-1]
                             preview_entry["written_files"].add(basename)
                 tagged_actions.append(action_with_meta)
+            previews = [self._planner_action_preview(a) for a in tagged_actions[:5]]
+            self.logger.info(
+                "PLANNER PARSED OUTPUT step=%s actions=%s previews=%s",
+                state["step"],
+                len(tagged_actions),
+                previews,
+            )
 
             action = self._validate_action_from_dict(tagged_actions[0])
             if len(all_actions) > 1:
@@ -450,6 +557,18 @@ class LangGraphOrchestrator:
                 )
                 return state
             self.logger.info("PLANNED ACTION step=%s action=%s", state["step"], action)
+            planned_mission_id = int(action.get("__mission_id", 0))
+            self._log_queue_mission_spacing(
+                state=state,
+                mission_id=planned_mission_id,
+                source="planned_action",
+            )
+            self._log_planner_output(
+                state=state,
+                source="provider",
+                action=action,
+                queue_remaining=len(state.get("pending_action_queue", [])),
+            )
             state["pending_action"] = action
             state["retry_counts"]["finish_rejected"] = 0
             self.checkpoint_store.save(
@@ -472,10 +591,23 @@ class LangGraphOrchestrator:
 
             fallback_action = self._deterministic_fallback_action(state)
             if fallback_action is not None:
+                fallback_requirements = self._next_incomplete_mission_requirements(state)
                 self.logger.warning(
-                    "PLAN TIMEOUT FALLBACK step=%s action=%s",
+                    (
+                        "PLAN TIMEOUT FALLBACK step=%s action=%s mission_id=%s "
+                        "missing_tools=%s missing_files=%s"
+                    ),
                     state["step"],
                     fallback_action,
+                    fallback_requirements.get("mission_id", 0),
+                    fallback_requirements.get("missing_tools", []),
+                    fallback_requirements.get("missing_files", []),
+                )
+                self._log_planner_output(
+                    state=state,
+                    source="timeout_fallback",
+                    action=fallback_action,
+                    queue_remaining=0,
                 )
                 state["messages"].append(
                     {
@@ -659,6 +791,19 @@ class LangGraphOrchestrator:
         task_id = f"{state['run_id']}:{state['step']}:{len(state['handoff_queue']) + 1}"
         config = directives.DIRECTIVE_BY_SPECIALIST.get(specialist)  # type: ignore[arg-type]
         tool_scope = sorted(config.allowed_tools) if config else []
+        self.logger.info(
+            (
+                "SPECIALIST REDIRECT step=%s run_id=%s task_id=%s specialist=%s "
+                "tool=%s mission_id=%s queue_before=%s"
+            ),
+            state["step"],
+            state["run_id"],
+            task_id,
+            specialist,
+            tool_name,
+            mission_id,
+            len(state.get("handoff_queue", [])),
+        )
         state["handoff_queue"].append(
             create_handoff(
                 task_id=task_id,
@@ -693,6 +838,21 @@ class LangGraphOrchestrator:
                 tokens_used=0,
             )
         )
+        output_preview = json.dumps(output, sort_keys=True, default=str)
+        if len(output_preview) > 220:
+            output_preview = output_preview[:217] + "..."
+        self.logger.info(
+            (
+                "SPECIALIST OUTPUT step=%s run_id=%s task_id=%s specialist=%s "
+                "status=%s output=%s"
+            ),
+            state["step"],
+            state["run_id"],
+            task_id,
+            specialist,
+            status,
+            output_preview,
+        )
         return state
 
     def _execute_action(self, state: RunState) -> RunState:
@@ -715,6 +875,17 @@ class LangGraphOrchestrator:
         if not self._is_tool_allowed_for_specialist(specialist=specialist, tool_name=tool_name):
             config = directives.DIRECTIVE_BY_SPECIALIST.get(specialist)  # type: ignore[arg-type]
             allowed_tools = sorted(config.allowed_tools) if config else []
+            self.logger.info(
+                (
+                    "SPECIALIST SCOPE BLOCK step=%s run_id=%s specialist=%s tool=%s "
+                    "allowed_tools=%s"
+                ),
+                state["step"],
+                state["run_id"],
+                specialist,
+                tool_name,
+                allowed_tools,
+            )
             state["messages"].append(
                 {
                     "role": "system",
@@ -741,6 +912,18 @@ class LangGraphOrchestrator:
         if mission_index >= 0:
             state["active_mission_index"] = mission_index
             state["active_mission_id"] = mission_index + 1
+        self.logger.info(
+            (
+                "SPECIALIST EXECUTE step=%s run_id=%s specialist=%s tool=%s "
+                "mission_index=%s mission_id=%s"
+            ),
+            state["step"],
+            state["run_id"],
+            specialist,
+            tool_name,
+            mission_index,
+            state.get("active_mission_id", 0),
+        )
 
         lookup_candidates = self._memo_lookup_candidates_for_action(
             tool_name=tool_name, tool_args=tool_args
@@ -1288,6 +1471,9 @@ class LangGraphOrchestrator:
 
     def _next_incomplete_mission(self, state: RunState) -> str:
         return mission_tracker.next_incomplete_mission(state)
+
+    def _next_incomplete_mission_requirements(self, state: RunState) -> dict[str, Any]:
+        return mission_tracker.next_incomplete_mission_requirements(state)
 
     def _all_missions_completed(self, state: RunState) -> bool:
         return mission_tracker.all_missions_completed(state)

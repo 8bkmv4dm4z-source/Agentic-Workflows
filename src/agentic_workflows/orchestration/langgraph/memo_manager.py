@@ -11,6 +11,7 @@ from typing import Any
 
 from agentic_workflows.orchestration.langgraph.mission_tracker import (
     next_incomplete_mission_index,
+    refresh_mission_status,
 )
 
 
@@ -47,7 +48,7 @@ def has_attempted_memo_lookup(*, state: dict[str, Any], candidate_keys: list[str
 def mark_next_mission_complete_from_memo_hit(
     *, state: dict[str, Any], memo_hit: dict[str, Any]
 ) -> None:
-    """Treat memo hit as completion for the next deterministic write mission."""
+    """Apply memo-hit context to the next mission without bypassing sub-task gates."""
     reports = state.get("mission_reports", [])
     if not reports:
         return
@@ -56,8 +57,33 @@ def mark_next_mission_complete_from_memo_hit(
         return
     state["active_mission_index"] = index
     state["active_mission_id"] = index + 1
-    reports[index]["result"] = str(memo_hit)
-    reports[index]["status"] = "completed"
-    mission_text = str(reports[index].get("mission", "")).strip()
-    if mission_text and mission_text not in state.get("completed_tasks", []):
-        state["completed_tasks"].append(mission_text)
+    report = reports[index]
+    report.setdefault("used_tools", [])
+    report.setdefault("tool_results", [])
+    report.setdefault("written_files", [])
+
+    path_hint = ""
+    pending_action = state.get("pending_action") or {}
+    if str(pending_action.get("tool_name", "")) == "write_file":
+        path_hint = str(dict(pending_action.get("args", {})).get("path", "")).strip()
+    if not path_hint:
+        key = str(memo_hit.get("key", "")).strip()
+        if key.startswith("write_file:"):
+            path_hint = key.split(":", 1)[1].strip()
+
+    synthetic_result: dict[str, Any] = {
+        "result": "memo_hit_reused",
+        "source": "retrieve_memo",
+    }
+    if path_hint:
+        synthetic_result["path"] = path_hint
+    report["used_tools"].append("write_file")
+    report["tool_results"].append({"tool": "write_file", "result": synthetic_result})
+    report["result"] = str(memo_hit)
+
+    if path_hint:
+        basename = path_hint.replace("\\", "/").rsplit("/", 1)[-1]
+        if basename and basename not in report["written_files"]:
+            report["written_files"].append(basename)
+
+    refresh_mission_status(state, index)

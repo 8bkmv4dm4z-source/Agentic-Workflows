@@ -13,6 +13,10 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any
 
+from agentic_workflows.logger import get_logger
+
+LOGGER = get_logger("langgraph.mission_parser")
+
 
 @dataclass
 class MissionStep:
@@ -140,9 +144,22 @@ def parse_missions(
     excess steps are merged into the last allowed step to prevent
     over-decomposition (guidance doc recommendation: 3-7 steps per plan).
     """
+    LOGGER.info(
+        "PARSER START timeout_seconds=%.2f max_plan_steps=%s input_chars=%s",
+        timeout_seconds,
+        max_plan_steps,
+        len(user_input),
+    )
     if timeout_seconds <= 0:
         plan = _parse_missions_inner(user_input)
-        return _enforce_step_limit(plan, max_plan_steps)
+        limited = _enforce_step_limit(plan, max_plan_steps)
+        LOGGER.info(
+            "PARSER RESULT method=%s steps=%s flat_missions=%s",
+            limited.parsing_method,
+            len(limited.steps),
+            len(limited.flat_missions),
+        )
+        return limited
 
     outbox: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
 
@@ -157,11 +174,35 @@ def parse_missions(
     try:
         kind, payload = outbox.get(timeout=timeout_seconds)
     except queue.Empty:
-        return _enforce_step_limit(_build_fallback_plan(user_input), max_plan_steps)
+        LOGGER.info("PARSER FALLBACK reason=timeout timeout_seconds=%.2f", timeout_seconds)
+        fallback = _enforce_step_limit(_build_fallback_plan(user_input), max_plan_steps)
+        LOGGER.info(
+            "PARSER RESULT method=%s steps=%s flat_missions=%s",
+            fallback.parsing_method,
+            len(fallback.steps),
+            len(fallback.flat_missions),
+        )
+        return fallback
 
     if kind == "err":
-        return _enforce_step_limit(_build_fallback_plan(user_input), max_plan_steps)
-    return _enforce_step_limit(payload, max_plan_steps)
+        LOGGER.info("PARSER FALLBACK reason=exception")
+        fallback = _enforce_step_limit(_build_fallback_plan(user_input), max_plan_steps)
+        LOGGER.info(
+            "PARSER RESULT method=%s steps=%s flat_missions=%s",
+            fallback.parsing_method,
+            len(fallback.steps),
+            len(fallback.flat_missions),
+        )
+        return fallback
+
+    limited = _enforce_step_limit(payload, max_plan_steps)
+    LOGGER.info(
+        "PARSER RESULT method=%s steps=%s flat_missions=%s",
+        limited.parsing_method,
+        len(limited.steps),
+        len(limited.flat_missions),
+    )
+    return limited
 
 
 def _parse_missions_inner(user_input: str) -> StructuredPlan:
@@ -383,6 +424,12 @@ def _enforce_step_limit(plan: StructuredPlan, max_steps: int) -> StructuredPlan:
 
     keep = top_level[:max_steps]
     excess = top_level[max_steps:]
+    LOGGER.info(
+        "PARSER STEP LIMIT applied max_steps=%s original_top_level=%s merged_excess=%s",
+        max_steps,
+        len(top_level),
+        len(excess),
+    )
 
     # Merge excess descriptions into the last kept step
     last = keep[-1]
@@ -417,6 +464,7 @@ def _enforce_step_limit(plan: StructuredPlan, max_steps: int) -> StructuredPlan:
 def _build_fallback_plan(user_input: str) -> StructuredPlan:
     """Use the original regex extraction as fallback."""
     missions = _extract_missions_regex_fallback(user_input)
+    LOGGER.info("PARSER REGEX FALLBACK missions=%s", len(missions))
     steps = [MissionStep(id=str(i + 1), description=m) for i, m in enumerate(missions)]
     _suggest_tools_for_steps(steps)
     return StructuredPlan(steps=steps, flat_missions=missions, parsing_method="regex_fallback")

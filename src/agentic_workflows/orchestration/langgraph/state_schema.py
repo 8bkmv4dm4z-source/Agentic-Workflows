@@ -47,6 +47,8 @@ class MissionReport(TypedDict):
     written_files: list[str]
     expected_fibonacci_count: int | None
     contract_checks: list[str]
+    subtask_contracts: list[dict[str, Any]]
+    subtask_statuses: list[dict[str, Any]]
 
 
 class RunState(TypedDict):

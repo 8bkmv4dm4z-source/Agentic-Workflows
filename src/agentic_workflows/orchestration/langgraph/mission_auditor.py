@@ -12,7 +12,10 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from agentic_workflows.logger import get_logger
 from agentic_workflows.orchestration.langgraph.mission_parser import _TOOL_KEYWORD_MAP
+
+LOGGER = get_logger("langgraph.mission_auditor")
 
 
 def _approx_equal(a: float, b: float, *, rel_tol: float = 1e-4, abs_tol: float = 0.01) -> bool:
@@ -79,6 +82,13 @@ def audit_run(
         allowed_tools = set()
         for scope in role_tool_scopes.values():
             allowed_tools.update(scope)
+    LOGGER.info(
+        "AUDITOR START run_id=%s missions=%s tool_history=%s allowed_tools=%s",
+        run_id,
+        len(mission_reports),
+        len(tool_history),
+        len(allowed_tools) if allowed_tools is not None else 0,
+    )
 
     for i, mission_report in enumerate(mission_reports):
         mission_id = mission_report.get("mission_id", i + 1)
@@ -167,6 +177,14 @@ def audit_run(
             )
 
         report.findings.extend(findings)
+        LOGGER.info(
+            "AUDITOR MISSION run_id=%s mission_id=%s findings=%s warns=%s fails=%s",
+            run_id,
+            mission_id,
+            len(findings),
+            sum(1 for f in findings if f.level == "warn"),
+            sum(1 for f in findings if f.level == "fail"),
+        )
 
     # Tally
     for f in report.findings:
@@ -176,6 +194,14 @@ def audit_run(
             report.warned += 1
         else:
             report.failed += 1
+    LOGGER.info(
+        "AUDITOR SUMMARY run_id=%s passed=%s warned=%s failed=%s findings=%s",
+        run_id,
+        report.passed,
+        report.warned,
+        report.failed,
+        len(report.findings),
+    )
 
     return report
 
@@ -390,7 +416,8 @@ def _check_fibonacci_file_size(
         for record in tool_results
         if record.get("tool") == "write_file"
     }
-    # Resolve write_file content from tool_history
+    # Resolve write_file content from tool_history using the latest relevant fib write.
+    fib_history_candidates: list[dict[str, Any]] = []
     for hist_record in tool_history:
         if hist_record.get("tool") != "write_file":
             continue
@@ -402,7 +429,11 @@ def _check_fibonacci_file_size(
         path_lower = path.lower()
         if "fib" not in path_lower and path not in fib_paths:
             continue
-        actual_count = _count_csv_integers(content)
+        fib_history_candidates.append(hist_record)
+    if fib_history_candidates:
+        latest = fib_history_candidates[-1]
+        latest_content = str(latest.get("args", {}).get("content", ""))
+        actual_count = _count_csv_integers(latest_content)
         if actual_count < n:
             return AuditFinding(
                 mission_id=mission_id,
@@ -418,7 +449,7 @@ def _check_fibonacci_file_size(
         return None
 
     # Fallback: use char count from result message with space-aware estimate
-    for record in tool_results:
+    for record in reversed(tool_results):
         if record.get("tool") != "write_file":
             continue
         result = record.get("result", {})
@@ -598,6 +629,17 @@ def _check_missing_required_outputs(
         # Fall back to pre-tracked written_files from mission report.
         for path in mission_report.get("written_files", []):
             written_files.add(str(path).replace("\\", "/").rsplit("/", 1)[-1])
+        LOGGER.info(
+            (
+                "AUDITOR OUTPUT CHECK mission_id=%s required_tools=%s used_tools=%s "
+                "required_files=%s written_files=%s"
+            ),
+            mission_id,
+            sorted(required_tools),
+            sorted(used_tools),
+            sorted(required_files),
+            sorted(written_files),
+        )
         missing_files = sorted(required_files - written_files)
         if missing_files:
             findings.append(

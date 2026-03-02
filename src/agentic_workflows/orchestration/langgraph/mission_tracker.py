@@ -9,11 +9,15 @@ contract building, progress tracking, and completion detection.
 import re
 from typing import Any
 
+from agentic_workflows.logger import get_logger
 from agentic_workflows.orchestration.langgraph.mission_parser import StructuredPlan
 from agentic_workflows.orchestration.langgraph.text_extractor import (
     extract_fibonacci_count,
     extract_write_path_from_mission,
 )
+
+LOGGER = get_logger("langgraph.mission_tracker")
+HELPER_TOOLS = {"memoize", "retrieve_memo"}
 
 
 def mission_preview_from_state(state: dict[str, Any]) -> dict[int, dict[str, set[str]]]:
@@ -41,13 +45,18 @@ def resolve_mission_id_for_action(
 ) -> int:
     """Resolve which mission an action should be attributed to."""
     if str(action.get("action", "")).strip().lower() != "tool":
+        LOGGER.info(
+            "MISSION ATTRIBUTION skip reason=non_tool_action action=%s",
+            action.get("action"),
+        )
         return 0
     reports = state.get("mission_reports", [])
     if not reports:
+        LOGGER.info("MISSION ATTRIBUTION skip reason=no_reports")
         return 0
     tool_name = str(action.get("tool_name", "")).strip()
     args = dict(action.get("args", {}))
-    helper_tools = {"memoize", "retrieve_memo"}
+    helper_tools = HELPER_TOOLS
 
     def _requirements_for_report(report: dict[str, Any]) -> tuple[set[str], set[str]]:
         tools = set(report.get("required_tools", []))
@@ -79,7 +88,14 @@ def resolve_mission_id_for_action(
         for report in reports:
             required_files = _requirements_for_report(report)[1]
             if basename and basename in required_files:
-                return int(report.get("mission_id", 0))
+                mission_id = int(report.get("mission_id", 0))
+                LOGGER.info(
+                    "MISSION ATTRIBUTION tool=%s mission_id=%s reason=path_hint basename=%s",
+                    tool_name,
+                    mission_id,
+                    basename,
+                )
+                return mission_id
 
     # Prefer missions where this required tool has not yet been observed.
     for report in reports:
@@ -91,7 +107,13 @@ def resolve_mission_id_for_action(
         if preview and mission_id in preview:
             already_used = set(preview[mission_id].get("used_tools", set()))
         if tool_name in required_tools and tool_name not in already_used:
-            return int(report.get("mission_id", 0))
+            chosen_id = int(report.get("mission_id", 0))
+            LOGGER.info(
+                "MISSION ATTRIBUTION tool=%s mission_id=%s reason=required_tool_first_use",
+                tool_name,
+                chosen_id,
+            )
+            return chosen_id
 
     # Fallback: any incomplete mission that expects the tool.
     for report in reports:
@@ -99,7 +121,13 @@ def resolve_mission_id_for_action(
             continue
         required_tools = _requirements_for_report(report)[0]
         if tool_name in required_tools:
-            return int(report.get("mission_id", 0))
+            chosen_id = int(report.get("mission_id", 0))
+            LOGGER.info(
+                "MISSION ATTRIBUTION tool=%s mission_id=%s reason=required_tool_incomplete",
+                tool_name,
+                chosen_id,
+            )
+            return chosen_id
 
     # Queue-aware fallback: assign to the next mission still incomplete in preview.
     for report in reports:
@@ -122,16 +150,38 @@ def resolve_mission_id_for_action(
             missing_tools = required_tools - observed_tools
             missing_files = required_files - written_files
             if missing_tools or missing_files:
+                LOGGER.info(
+                    (
+                        "MISSION ATTRIBUTION tool=%s mission_id=%s "
+                        "reason=missing_requirements missing_tools=%s missing_files=%s"
+                    ),
+                    tool_name,
+                    mission_id,
+                    sorted(missing_tools),
+                    sorted(missing_files),
+                )
                 return mission_id
             continue
 
         # Generic mission: one non-helper tool call completes it.
         if not observed_non_helper_tools:
+            LOGGER.info(
+                "MISSION ATTRIBUTION tool=%s mission_id=%s reason=generic_non_helper",
+                tool_name,
+                mission_id,
+            )
             return mission_id
 
     next_index = next_incomplete_mission_index(state)
     if 0 <= next_index < len(reports):
-        return int(reports[next_index].get("mission_id", 0))
+        mission_id = int(reports[next_index].get("mission_id", 0))
+        LOGGER.info(
+            "MISSION ATTRIBUTION tool=%s mission_id=%s reason=next_incomplete",
+            tool_name,
+            mission_id,
+        )
+        return mission_id
+    LOGGER.info("MISSION ATTRIBUTION tool=%s mission_id=0 reason=no_match", tool_name)
     return 0
 
 
@@ -201,6 +251,11 @@ def build_mission_contracts_from_plan(
     structured_plan: StructuredPlan, missions: list[str]
 ) -> list[dict[str, Any]]:
     """Derive per-mission completion contracts from structured plan data."""
+    LOGGER.info(
+        "MISSION CONTRACTS start missions=%s parsing_method=%s",
+        len(missions),
+        structured_plan.parsing_method,
+    )
     contracts: list[dict[str, Any]] = []
     children_by_parent: dict[str, list[Any]] = {}
     for step in structured_plan.steps:
@@ -210,32 +265,52 @@ def build_mission_contracts_from_plan(
     top_level = [step for step in structured_plan.steps if step.parent_id is None]
     for idx, mission in enumerate(missions):
         mission_id = idx + 1
-        parent = next((step for step in top_level if step.id == str(mission_id)), None)
-        if parent is None and idx < len(top_level):
-            parent = top_level[idx]
+        parent = top_level[idx] if idx < len(top_level) else None
+        if parent is None:
+            parent = next((step for step in top_level if step.id == str(mission_id)), None)
 
         required_tools: set[str] = set()
         required_files: set[str] = set()
         expected_fibonacci_count: int | None = None
         checks: list[str] = []
         mission_texts: list[str] = [mission]
+        subtask_contracts: list[dict[str, Any]] = []
 
         base_tools, base_files, base_fib = infer_requirements_from_text(mission)
         required_tools.update(base_tools)
         required_files.update(base_files)
         if base_fib is not None:
             expected_fibonacci_count = base_fib
+        subtask_contracts.append(
+            {
+                "id": parent.id if parent is not None else f"{mission_id}",
+                "description": mission,
+                "required_tools": sorted(base_tools),
+                "required_files": sorted(base_files),
+                "expected_fibonacci_count": base_fib,
+            }
+        )
 
         if parent is not None:
             for child in children_by_parent.get(parent.id, []):
                 mission_texts.append(child.description)
                 tools, files, fib_count = infer_requirements_from_text(child.description)
+                required_tools.update(tools)
                 if files:
                     required_tools.add("write_file")
                 required_files.update(files)
                 if fib_count is not None:
                     required_tools.add("write_file")
                     expected_fibonacci_count = fib_count
+                subtask_contracts.append(
+                    {
+                        "id": child.id,
+                        "description": child.description,
+                        "required_tools": sorted(tools),
+                        "required_files": sorted(files),
+                        "expected_fibonacci_count": fib_count,
+                    }
+                )
 
         if expected_fibonacci_count is not None:
             checks.append(f"fibonacci_count={expected_fibonacci_count}")
@@ -257,8 +332,21 @@ def build_mission_contracts_from_plan(
                 "required_files": sorted(required_files),
                 "expected_fibonacci_count": expected_fibonacci_count,
                 "contract_checks": checks,
+                "subtask_contracts": subtask_contracts,
             }
         )
+        LOGGER.info(
+            (
+                "MISSION CONTRACT mission_id=%s parent_step_id=%s "
+                "required_tools=%s required_files=%s subtasks=%s"
+            ),
+            mission_id,
+            parent.id if parent is not None else "n/a",
+            sorted(required_tools),
+            sorted(required_files),
+            len(subtask_contracts),
+        )
+    LOGGER.info("MISSION CONTRACTS built count=%s", len(contracts))
     return contracts
 
 
@@ -283,6 +371,8 @@ def initialize_mission_reports(
                 "written_files": [],
                 "expected_fibonacci_count": contract.get("expected_fibonacci_count"),
                 "contract_checks": list(contract.get("contract_checks", [])),
+                "subtask_contracts": list(contract.get("subtask_contracts", [])),
+                "subtask_statuses": [],
             }
         )
     return reports
@@ -303,6 +393,7 @@ def refresh_mission_status(state: dict[str, Any], mission_index: int) -> None:
     if mission_index < 0 or mission_index >= len(reports):
         return
     report = reports[mission_index]
+    previous_status = str(report.get("status", "pending"))
     required_tools = set(report.get("required_tools", []))
     required_files = {
         str(path).replace("\\", "/").rsplit("/", 1)[-1]
@@ -327,9 +418,7 @@ def refresh_mission_status(state: dict[str, Any], mission_index: int) -> None:
         ):
             report["expected_fibonacci_count"] = inferred_fib_count
     observed_tools = {str(tool) for tool in report.get("used_tools", [])}
-    observed_non_helper_tools = {
-        tool for tool in observed_tools if tool not in {"memoize", "retrieve_memo"}
-    }
+    observed_non_helper_tools = {tool for tool in observed_tools if tool not in HELPER_TOOLS}
     written_files = {
         str(path).replace("\\", "/").rsplit("/", 1)[-1]
         for path in report.get("written_files", [])
@@ -341,6 +430,40 @@ def refresh_mission_status(state: dict[str, Any], mission_index: int) -> None:
         missing_tools = [] if observed_non_helper_tools else ["<non_helper_tool>"]
     missing_files = sorted(required_files - written_files)
 
+    subtask_contracts = list(report.get("subtask_contracts", []))
+    if not subtask_contracts and (required_tools or required_files):
+        subtask_contracts = [
+            {
+                "id": str(report.get("mission_id", mission_index + 1)),
+                "description": str(report.get("mission", "")),
+                "required_tools": sorted(required_tools),
+                "required_files": sorted(required_files),
+                "expected_fibonacci_count": report.get("expected_fibonacci_count"),
+            }
+        ]
+    subtask_statuses: list[dict[str, Any]] = []
+    for subtask in subtask_contracts:
+        sub_required_tools = {str(tool) for tool in subtask.get("required_tools", [])}
+        sub_required_files = {
+            str(path).replace("\\", "/").rsplit("/", 1)[-1]
+            for path in subtask.get("required_files", [])
+        }
+        sub_missing_tools = sorted(sub_required_tools - observed_tools)
+        sub_missing_files = sorted(sub_required_files - written_files)
+        subtask_statuses.append(
+            {
+                "id": str(subtask.get("id", "")),
+                "description": str(subtask.get("description", "")),
+                "missing_tools": sub_missing_tools,
+                "missing_files": sub_missing_files,
+                "satisfied": not sub_missing_tools and not sub_missing_files,
+            }
+        )
+    report["subtask_statuses"] = subtask_statuses
+    subtasks_satisfied = all(
+        bool(item.get("satisfied", False)) for item in subtask_statuses
+    ) if subtask_statuses else not (missing_tools or missing_files)
+
     latest_result: dict[str, Any] = {}
     tool_results = report.get("tool_results", [])
     if tool_results and isinstance(tool_results[-1], dict):
@@ -349,7 +472,7 @@ def refresh_mission_status(state: dict[str, Any], mission_index: int) -> None:
             latest_result = candidate
     has_latest_error = "error" in latest_result
 
-    if missing_tools or missing_files:
+    if missing_tools or missing_files or not subtasks_satisfied:
         if has_latest_error:
             report["status"] = "failed"
         else:
@@ -364,6 +487,20 @@ def refresh_mission_status(state: dict[str, Any], mission_index: int) -> None:
             completed_tasks.append(mission_text)
     elif mission_text in completed_tasks:
         completed_tasks.remove(mission_text)
+    if report["status"] != previous_status:
+        LOGGER.info(
+            (
+                "MISSION STATUS mission_id=%s index=%s status=%s->%s "
+                "missing_tools=%s missing_files=%s has_error=%s"
+            ),
+            report.get("mission_id", mission_index + 1),
+            mission_index,
+            previous_status,
+            report["status"],
+            missing_tools,
+            missing_files,
+            has_latest_error,
+        )
 
 
 def record_mission_tool_event(
@@ -405,6 +542,8 @@ def record_mission_tool_event(
     mission.setdefault("written_files", [])
     mission.setdefault("expected_fibonacci_count", None)
     mission.setdefault("contract_checks", [])
+    mission.setdefault("subtask_contracts", [])
+    mission.setdefault("subtask_statuses", [])
     mission["used_tools"].append(tool_name)
     mission["tool_results"].append({"tool": tool_name, "result": tool_result})
     mission["result"] = str(tool_result)
@@ -418,6 +557,17 @@ def record_mission_tool_event(
             basename = written_path.replace("\\", "/").rsplit("/", 1)[-1]
             if basename and basename not in mission["written_files"]:
                 mission["written_files"].append(basename)
+    LOGGER.info(
+        (
+            "MISSION TOOL EVENT mission_id=%s index=%s tool=%s has_error=%s "
+            "used_tools_count=%s"
+        ),
+        mission.get("mission_id", index + 1),
+        index,
+        tool_name,
+        "error" in tool_result,
+        len(mission.get("used_tools", [])),
+    )
     refresh_mission_status(state, index)
 
 
@@ -428,6 +578,32 @@ def next_incomplete_mission(state: dict[str, Any]) -> str:
     if 0 <= next_index < len(reports):
         return str(reports[next_index].get("mission", ""))
     return ""
+
+
+def next_incomplete_mission_requirements(state: dict[str, Any]) -> dict[str, Any]:
+    """Return missing tool/file requirements for the next incomplete mission."""
+    reports = state.get("mission_reports", [])
+    index = next_incomplete_mission_index(state)
+    if index < 0 or index >= len(reports):
+        return {"mission_index": -1, "mission_id": 0, "missing_tools": [], "missing_files": []}
+
+    report = reports[index]
+    required_tools = {str(tool) for tool in report.get("required_tools", [])}
+    required_files = {
+        str(path).replace("\\", "/").rsplit("/", 1)[-1]
+        for path in report.get("required_files", [])
+    }
+    used_tools = {str(tool) for tool in report.get("used_tools", [])}
+    written_files = {
+        str(path).replace("\\", "/").rsplit("/", 1)[-1]
+        for path in report.get("written_files", [])
+    }
+    return {
+        "mission_index": index,
+        "mission_id": int(report.get("mission_id", index + 1)),
+        "missing_tools": sorted(required_tools - used_tools),
+        "missing_files": sorted(required_files - written_files),
+    }
 
 
 def all_missions_completed(state: dict[str, Any]) -> bool:

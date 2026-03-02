@@ -270,6 +270,35 @@ class TestFibonacciFileSize(unittest.TestCase):
         )
         self.assertIsNone(finding)
 
+    def test_uses_latest_fibonacci_write_when_earlier_attempt_failed(self) -> None:
+        wrong = _fib_content(48)
+        correct = _fib_content(50)
+        tool_history = [
+            {
+                "call": 1,
+                "tool": "write_file",
+                "args": {"path": "fib50.txt", "content": wrong},
+                "result": {"error": "content_validation_failed"},
+            },
+            {
+                "call": 2,
+                "tool": "write_file",
+                "args": {"path": "fib50.txt", "content": correct},
+                "result": {"result": f"Successfully wrote {len(correct)} characters to fib50.txt"},
+            },
+        ]
+        tool_results = [
+            {"tool": "write_file", "result": {"error": "content_validation_failed", "path": "fib50.txt"}},
+            {"tool": "write_file", "result": {"result": "Successfully wrote 314 characters to fib50.txt", "path": "fib50.txt"}},
+        ]
+        finding = _check_fibonacci_file_size(
+            5,
+            "Write the first 50 fibonacci numbers to fib50.txt",
+            tool_results,
+            tool_history,
+        )
+        self.assertIsNone(finding)
+
     def test_no_finding_when_no_fibonacci_in_mission(self) -> None:
         tool_history = self._make_tool_history("out.txt", "hello")
         tool_results = self._make_tool_results("out.txt", 5)

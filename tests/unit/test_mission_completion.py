@@ -200,6 +200,68 @@ class TestMissionCompletionGates(unittest.TestCase):
             )
             self.assertNotIn("math_stats", tools)
 
+    def test_memo_hit_does_not_bypass_repeat_subtask_requirement(self) -> None:
+        """Memoized write context should not complete a mission that still needs repeat_message."""
+        with tempfile.TemporaryDirectory() as tmp:
+            orch = _make_orchestrator(tmp)
+            state = _base_state(["Task 5: Fibonacci with Analysis"])
+            state["mission_reports"] = [
+                {
+                    "mission_id": 1,
+                    "mission": "Task 5: Fibonacci with Analysis",
+                    "used_tools": [],
+                    "tool_results": [],
+                    "result": "",
+                    "status": "pending",
+                    "required_tools": ["repeat_message", "write_file"],
+                    "required_files": ["fib50.txt"],
+                    "written_files": [],
+                    "expected_fibonacci_count": 50,
+                    "contract_checks": ["required_tools", "required_files", "fibonacci_count=50"],
+                    "subtask_contracts": [
+                        {
+                            "id": "5a",
+                            "description": "Write the first 50 fibonacci numbers to fib50.txt",
+                            "required_tools": ["write_file"],
+                            "required_files": ["fib50.txt"],
+                            "expected_fibonacci_count": 50,
+                        },
+                        {
+                            "id": "5b",
+                            "description": "Repeat final confirmation",
+                            "required_tools": ["repeat_message"],
+                            "required_files": [],
+                            "expected_fibonacci_count": None,
+                        },
+                    ],
+                    "subtask_statuses": [],
+                }
+            ]
+            state["pending_action"] = {
+                "action": "tool",
+                "tool_name": "write_file",
+                "args": {"path": "fib50.txt", "content": "cached"},
+            }
+
+            orch._mark_next_mission_complete_from_memo_hit(
+                state=state,
+                memo_hit={"found": True, "key": "write_file:fib50.txt", "namespace": "run"},
+            )
+            self.assertEqual(state["mission_reports"][0]["status"], "in_progress")
+            self.assertEqual(state["completed_tasks"], [])
+            self.assertIn("write_file", state["mission_reports"][0]["used_tools"])
+            self.assertIn("fib50.txt", state["mission_reports"][0]["written_files"])
+
+            orch._record_mission_tool_event(
+                state,
+                "repeat_message",
+                {"echo": "All 5 tasks completed successfully"},
+                mission_index=0,
+                tool_args={"message": "All 5 tasks completed successfully"},
+            )
+            self.assertEqual(state["mission_reports"][0]["status"], "completed")
+            self.assertEqual(state["completed_tasks"], ["Task 5: Fibonacci with Analysis"])
+
 
 if __name__ == "__main__":
     unittest.main()

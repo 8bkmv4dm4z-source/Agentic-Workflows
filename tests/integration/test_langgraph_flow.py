@@ -177,6 +177,35 @@ class LangGraphFlowTests(unittest.TestCase):
             )
             self.assertEqual(result["state"]["retry_counts"]["provider_timeout"], 1)
 
+    def test_timeout_fallback_satisfies_write_then_repeat_without_duplicate_loop(self) -> None:
+        from agentic_workflows.orchestration.langgraph.provider import ProviderTimeoutError
+
+        class AlwaysTimeoutProvider:
+            def generate(self, messages):  # noqa: ANN001
+                raise ProviderTimeoutError("provider timeout after 1 attempts: read timeout")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = f"{temp_dir}/fib10.txt"
+            orchestrator = LangGraphOrchestrator(
+                provider=AlwaysTimeoutProvider(),
+                memo_store=SQLiteMemoStore(f"{temp_dir}/memo.db"),
+                checkpoint_store=SQLiteCheckpointStore(f"{temp_dir}/checkpoints.db"),
+                policy=MemoizationPolicy(max_policy_retries=2),
+                max_steps=40,
+                max_provider_timeout_retries=3,
+            )
+            result = orchestrator.run(
+                "Task 5: Fibonacci with Analysis\n"
+                f"  5a. Write the first 10 fibonacci numbers to {output_path}\n"
+                '  5b. Repeat the final summary as confirmation: "All 5 tasks completed successfully"'
+            )
+
+            tool_names = [item["tool"] for item in result["tools_used"]]
+            self.assertEqual(tool_names.count("repeat_message"), 1)
+            self.assertEqual(result["state"]["retry_counts"]["duplicate_tool"], 0)
+            self.assertIn("All tasks completed.", result["answer"])
+            self.assertEqual(result["mission_report"][0]["status"], "completed")
+
     def test_model_not_found_fails_immediately(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             orchestrator = LangGraphOrchestrator(
