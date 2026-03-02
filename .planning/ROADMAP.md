@@ -37,8 +37,8 @@ Starting from a working single-agent LangGraph foundation (208 tests green, 4-no
 **Depends on**: Phase 1
 **Requirements**: LGUP-01, LGUP-02, LGUP-03, LGUP-04, OBSV-02, LRNG-02
 **Success Criteria** (what must be TRUE):
-  1. Developer can run `pip install -e ".[dev]"` with langgraph>=1.0.9 and all 208 existing tests pass unchanged
-  2. Tool calls in graph.py flow through ToolNode with handle_tool_errors=True — no XML/JSON envelope parsing code remains
+  1. Developer can run `pip install -e ".[dev]"` with langgraph>=1.0.6,<2.0 and all 208 existing tests pass unchanged
+  2. Tool calls for the Anthropic provider path flow through ToolNode with handle_tool_errors=True — the XML/JSON envelope parser is retired for that path only (Ollama/OpenAI/Groq paths unchanged)
   3. All parallel-written RunState list fields (tool_history, mission_reports, memo_events, seen_tool_signatures) carry Annotated[list[T], operator.add] reducers — an integration test asserts both branches' records appear after a two-branch merge
   4. Message history is compacted before it exceeds 40 messages — a test triggers compaction and asserts the condensed history is smaller than the threshold
   5. GitHub Actions workflow runs ruff check, mypy, and pytest on every push using ScriptedProvider, with zero live LLM calls
