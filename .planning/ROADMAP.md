@@ -61,7 +61,11 @@ Plans:
   3. specialist_executor.py contains a build_executor_subgraph() function that compiles to a runnable StateGraph — a unit test invokes it with a TaskHandoff input and asserts a HandoffResult output
   4. specialist_evaluator.py contains a build_evaluator_subgraph() function that compiles to a runnable StateGraph — a unit test invokes it with a TaskHandoff input and asserts a HandoffResult output
   5. Every change to graph.py, state_schema.py, or specialist files in this phase is accompanied by a WALKTHROUGH update explaining what changed, why, and which LangGraph classes implement it
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+- [ ] 03-01-PLAN.md — ExecutorState TypedDict + build_executor_subgraph() + unit tests (MAGT-01, MAGT-02)
+- [ ] 03-02-PLAN.md — EvaluatorState TypedDict + build_evaluator_subgraph() + unit tests (MAGT-03, MAGT-04)
+- [ ] 03-03-PLAN.md — State key isolation acceptance tests + WALKTHROUGH_PHASE3.md (LRNG-01)
 
 ### Phase 4: Multi-Agent Integration and Model Routing
 **Goal**: _route_to_specialist() in graph.py invokes real compiled specialist subgraphs via TaskHandoff and merges HandoffResult back into RunState; multi-mission runs preserve all results; model router makes real routing decisions
@@ -115,7 +119,7 @@ Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7
 |-------|----------------|--------|-----------|
 | 1. Foundation | Complete | Complete | 2026-03-02 |
 | 2. LangGraph Upgrade and Single-Agent Hardening | 0/5 | In progress | - |
-| 3. Specialist Subgraph Architecture | 0/TBD | Not started | - |
+| 3. Specialist Subgraph Architecture | 0/3 | Not started | - |
 | 4. Multi-Agent Integration and Model Routing | 0/TBD | Not started | - |
 | 5. Observability Layer and Architecture Snapshot | 0/TBD | Not started | - |
 | 6. Production Service Layer | 0/TBD | Not started | - |
