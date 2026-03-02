@@ -5,7 +5,11 @@ import unittest
 
 from agentic_workflows.orchestration.langgraph.run import (
     _build_rerun_input,
+    _derive_changed_files,
     _get_failed_missions,
+    _get_reviewer_decisions,
+    _normalize_prefer_mode,
+    _normalize_reviewer_mode,
 )
 
 _SAMPLE_INPUT = """Return exactly one JSON object per turn.
@@ -116,6 +120,61 @@ class TestBuildRerunInput(unittest.TestCase):
         reports = [{"mission_id": 1, "mission": "Task 1"}]
         result = _build_rerun_input(reports, _SAMPLE_INPUT)
         self.assertIn("finish", result)
+
+
+class TestReviewerHelpers(unittest.TestCase):
+    def test_normalize_reviewer_mode(self) -> None:
+        self.assertEqual(_normalize_reviewer_mode("fail_only"), "fail_only")
+        self.assertEqual(_normalize_reviewer_mode("weighted"), "weighted")
+        self.assertEqual(_normalize_reviewer_mode("both"), "both")
+        self.assertEqual(_normalize_reviewer_mode("invalid"), "fail_only")
+
+    def test_normalize_prefer_mode(self) -> None:
+        self.assertEqual(_normalize_prefer_mode("weighted"), "weighted")
+        self.assertEqual(_normalize_prefer_mode("oops"), "fail_only")
+
+    def test_derive_changed_files_dedupes(self) -> None:
+        changed = _derive_changed_files(
+            {
+                "mission_report": [
+                    {
+                        "written_files": ["out.txt"],
+                        "tool_results": [
+                            {
+                                "tool": "write_file",
+                                "result": {"path": "out.txt", "result": "Successfully wrote 10 characters"},
+                            }
+                        ],
+                    }
+                ],
+                "tools_used": [
+                    {"tool": "write_file", "result": {"path": "tmp/out.txt", "result": "ok"}},
+                    {"tool": "write_file", "result": {"error": "content_validation_failed"}},
+                ],
+            }
+        )
+        self.assertEqual(changed, ["out.txt"])
+
+    def test_both_mode_uses_preferred_when_decisions_diverge(self) -> None:
+        result = {
+            "audit_report": {
+                "findings": [
+                    {"mission_id": 1, "level": "warn", "check": "x", "detail": "warn only"},
+                ]
+            },
+            "mission_report": [{"mission_id": 1, "status": "completed"}],
+            "derived_snapshot": {},
+            "tools_used": [],
+        }
+        selected, decisions, selected_mode = _get_reviewer_decisions(
+            reviewer_mode="both",
+            prefer_mode="weighted",
+            result=result,
+        )
+        self.assertEqual(decisions["fail_only"].action, "end")
+        self.assertEqual(decisions["weighted"].action, "rerun")
+        self.assertEqual(selected_mode, "weighted")
+        self.assertEqual(selected.action, "rerun")
 
 
 if __name__ == "__main__":

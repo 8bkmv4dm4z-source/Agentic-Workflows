@@ -45,6 +45,13 @@ Transform the prototype repo into a properly packaged, testable, lintable Python
 - [ ] Add `@observe()` to orchestrator `run()` and provider `generate()`
 - [ ] Verify Langfuse traces for demo run (if configured)
 
+### 1G: Reviewer Gate & Change Tracking
+- [ ] Add deterministic reviewer policies for run-end decisions (`fail_only`, `weighted`)
+- [ ] Support reviewer mode selection per run (`fail_only|weighted|both`)
+- [ ] Derive `changed_files[]` from mission/tool outputs for sub-task completion checks
+- [ ] Keep `lastRun.txt` output redirection user-controlled (`python -m ...run > lastRun.txt`)
+- [ ] Preserve stable default behavior (`fail_only` policy)
+
 ## Industry Tools
 - setuptools (packaging)
 - ruff (lint + format)
@@ -74,6 +81,12 @@ Five bugs found from `lastRun.txt` after the auditor was first exercised live. A
 | E — Fibonacci validator on unrelated writes | `graph.py` | Path guard: skip validation unless `"fib"` is in the file path |
 
 New test files: `tests/unit/test_run_helpers.py` (+11 tests), updated `tests/unit/test_mission_auditor.py` (+3 tests).
+
+## Phase-State Clarification (2026-03-02)
+
+- Current repo state is still **Phase 1 execution baseline**, plus partial **Phase 3 scaffolding**.
+- It is **not yet true Phase 2** because the planned Phase 2 stack upgrade (`langgraph>=1.0`, structured extraction tooling, provider upgrades) is not implemented.
+- Reviewer gate work is tracked as Phase 1 hardening, with a cross-link to Phase 3 specialization.
 
 ## Risks
 | Risk | Severity | Mitigation |

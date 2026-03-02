@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """CLI entrypoint for a quick Phase 1 LangGraph run demonstration."""
 
+import argparse
 import os
 import re
 import sys
@@ -18,12 +19,19 @@ if __package__ in {None, ""}:
             sys.path.insert(0, p)
 
 from agentic_workflows.orchestration.langgraph.langgraph_orchestrator import LangGraphOrchestrator
+from agentic_workflows.orchestration.langgraph.reviewer import (
+    FailOnlyReviewer,
+    ReviewDecision,
+    WeightedReviewer,
+)
 
 # ---------------------------------------------------------------------------
 # Audit review panel
 # ---------------------------------------------------------------------------
 
 _LEVEL_ICON = {"pass": "✓", "warn": "⚠", "fail": "✗"}
+_VALID_REVIEWER_MODES = {"fail_only", "weighted", "both"}
+_VALID_PREFERENCE_MODES = {"fail_only", "weighted"}
 
 
 def _print_audit_panel(
@@ -100,37 +108,237 @@ def _print_audit_panel(
     print(sep)
 
 
+def _normalize_reviewer_mode(mode: str | None) -> str:
+    """Resolve reviewer mode from CLI/env/default."""
+    candidate = (mode or "").strip().lower()
+    if candidate not in _VALID_REVIEWER_MODES:
+        return "fail_only"
+    return candidate
+
+
+def _normalize_prefer_mode(mode: str | None) -> str:
+    """Resolve preferred reviewer when mode=both."""
+    candidate = (mode or "").strip().lower()
+    if candidate not in _VALID_PREFERENCE_MODES:
+        return "fail_only"
+    return candidate
+
+
+def _derive_changed_files(result: dict[str, Any]) -> list[str]:
+    """Derive changed files from mission reports + tool results."""
+    changed: set[str] = set()
+    mission_report = result.get("mission_report", [])
+    if isinstance(mission_report, list):
+        for mission in mission_report:
+            if not isinstance(mission, dict):
+                continue
+            written_files = mission.get("written_files", [])
+            if isinstance(written_files, list):
+                for path in written_files:
+                    basename = str(path).replace("\\", "/").rsplit("/", 1)[-1]
+                    if basename:
+                        changed.add(basename)
+            tool_results = mission.get("tool_results", [])
+            if isinstance(tool_results, list):
+                for record in tool_results:
+                    if not isinstance(record, dict) or record.get("tool") != "write_file":
+                        continue
+                    tool_result = record.get("result", {})
+                    if not isinstance(tool_result, dict) or "error" in tool_result:
+                        continue
+                    maybe_path = str(tool_result.get("path", "")).strip()
+                    basename = maybe_path.replace("\\", "/").rsplit("/", 1)[-1]
+                    if basename:
+                        changed.add(basename)
+    tools_used = result.get("tools_used", [])
+    if isinstance(tools_used, list):
+        for item in tools_used:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("tool", "")).strip() != "write_file":
+                continue
+            tool_result = item.get("result", {})
+            if not isinstance(tool_result, dict) or "error" in tool_result:
+                continue
+            maybe_path = str(tool_result.get("path", "")).strip()
+            basename = maybe_path.replace("\\", "/").rsplit("/", 1)[-1]
+            if basename:
+                changed.add(basename)
+    return sorted(changed)
+
+
+def _get_reviewer_decisions(
+    *,
+    reviewer_mode: str,
+    prefer_mode: str,
+    result: dict[str, Any],
+) -> tuple[ReviewDecision, dict[str, ReviewDecision], str]:
+    """Evaluate configured reviewer(s) and select active decision."""
+    audit_report = result.get("audit_report")
+    mission_report_raw = result.get("mission_report", [])
+    mission_report = mission_report_raw if isinstance(mission_report_raw, list) else []
+    derived_raw = result.get("derived_snapshot", {})
+    derived_snapshot = derived_raw if isinstance(derived_raw, dict) else {}
+    changed_files = _derive_changed_files(result)
+    decisions: dict[str, ReviewDecision] = {}
+    fail_only = FailOnlyReviewer().decide(
+        audit_report=audit_report,
+        mission_reports=mission_report,
+        derived_snapshot=derived_snapshot,
+        changed_files=changed_files,
+    )
+    weighted = WeightedReviewer().decide(
+        audit_report=audit_report,
+        mission_reports=mission_report,
+        derived_snapshot=derived_snapshot,
+        changed_files=changed_files,
+    )
+    if reviewer_mode == "fail_only":
+        decisions["fail_only"] = fail_only
+        return fail_only, decisions, "fail_only"
+    if reviewer_mode == "weighted":
+        decisions["weighted"] = weighted
+        return weighted, decisions, "weighted"
+    decisions["fail_only"] = fail_only
+    decisions["weighted"] = weighted
+    selected_mode = prefer_mode if fail_only.action != weighted.action else "fail_only"
+    selected = decisions[selected_mode]
+    return selected, decisions, selected_mode
+
+
+def _print_reviewer_decisions(
+    *,
+    reviewer_mode: str,
+    selected_mode: str,
+    selected: ReviewDecision,
+    decisions: dict[str, ReviewDecision],
+) -> None:
+    """Render reviewer decision summary."""
+    print("REVIEWER MODE:", reviewer_mode)
+    if reviewer_mode == "both":
+        fail_only = decisions["fail_only"]
+        weighted = decisions["weighted"]
+        print(
+            "  fail_only:",
+            fail_only.action.upper(),
+            "| rerun_missions=",
+            fail_only.rerun_mission_ids,
+        )
+        print(
+            "  weighted:",
+            weighted.action.upper(),
+            "| score=",
+            weighted.weighted_score,
+            "| rerun_missions=",
+            weighted.rerun_mission_ids,
+        )
+    print(
+        "REVIEWER DECISION:",
+        f"selected={selected_mode}",
+        f"action={selected.action}",
+        f"rerun_missions={selected.rerun_mission_ids}",
+    )
+    if selected.reasons:
+        print("  reason:", selected.reasons[0])
+    print("CHANGED FILES:", ", ".join(selected.changed_files) if selected.changed_files else "<none>")
+
+
+def _mission_reports_by_id(
+    mission_reports: list[dict[str, Any]],
+    ids: list[int],
+) -> list[dict[str, Any]]:
+    wanted = {mission_id for mission_id in ids if mission_id > 0}
+    if not wanted:
+        return []
+    return [report for report in mission_reports if report.get("mission_id") in wanted]
+
+
+def _apply_reviewer_decision(
+    *,
+    orchestrator: LangGraphOrchestrator,
+    original_input: str,
+    result: dict[str, Any],
+    decision: ReviewDecision,
+) -> None:
+    """Apply reviewer decision by rerunning selected missions or ending."""
+    mission_report_raw = result.get("mission_report", [])
+    mission_report = mission_report_raw if isinstance(mission_report_raw, list) else []
+    if decision.action != "rerun":
+        _save_audit(result)
+        return
+    rerun_missions = _mission_reports_by_id(mission_report, decision.rerun_mission_ids)
+    if not rerun_missions:
+        print("Reviewer requested rerun but no missions were selected. Saving and exiting.")
+        _save_audit(result)
+        return
+    re_run_input = _build_rerun_input(rerun_missions, original_input)
+    print(f"\nRe-running {len(rerun_missions)} mission(s)…\n")
+    new_result = orchestrator.run(re_run_input)
+    _print_audit_panel(new_result.get("audit_report"), new_result.get("mission_report", []))
+    _save_audit(new_result)
+
+
 def _correction_loop(
     orchestrator: LangGraphOrchestrator,
     original_input: str,
     result: dict[str, Any],
+    *,
+    reviewer_mode: str,
+    prefer_mode: str,
 ) -> None:
     """Interactive correction loop shown after audit panel.
 
     In non-interactive mode (piped/CI), auto-saves and exits.
     """
     audit_report = result.get("audit_report")
+    selected_decision, all_decisions, selected_mode = _get_reviewer_decisions(
+        reviewer_mode=reviewer_mode,
+        prefer_mode=prefer_mode,
+        result=result,
+    )
+    _print_reviewer_decisions(
+        reviewer_mode=reviewer_mode,
+        selected_mode=selected_mode,
+        selected=selected_decision,
+        decisions=all_decisions,
+    )
     is_tty = sys.stdin.isatty()
 
     if not is_tty:
-        # Non-interactive: just save and exit
-        _save_audit(result)
+        _apply_reviewer_decision(
+            orchestrator=orchestrator,
+            original_input=original_input,
+            result=result,
+            decision=selected_decision,
+        )
         return
 
     print()
     print(" Options:")
+    print("   [d] Apply reviewer decision  (default)")
     print("   [r] Re-run failed missions only")
     print("   [a] Re-run full pipeline")
-    print("   [s] Save audit report and exit  (default)")
+    print("   [s] Save audit report and exit")
     print("   [q] Quit without saving")
+    print(
+        f" Reviewer recommends: {selected_decision.action.upper()} "
+        f"missions={selected_decision.rerun_mission_ids}"
+    )
     print("> ", end="", flush=True)
 
     try:
         choice = input().strip().lower()
     except (EOFError, KeyboardInterrupt):
-        choice = "s"
+        choice = "d"
 
-    if choice == "r":
+    if choice in {"", "d"}:
+        _apply_reviewer_decision(
+            orchestrator=orchestrator,
+            original_input=original_input,
+            result=result,
+            decision=selected_decision,
+        )
+    elif choice == "r":
         failed_missions = _get_failed_missions(audit_report, result.get("mission_report", []))
         if not failed_missions:
             print("No failed missions to re-run.")
@@ -240,7 +448,28 @@ def _save_audit(result: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run LangGraph demo with optional reviewer policies.")
+    parser.add_argument(
+        "--reviewer-mode",
+        choices=sorted(_VALID_REVIEWER_MODES),
+        default=None,
+        help="Reviewer policy mode to decide rerun vs end.",
+    )
+    parser.add_argument(
+        "--prefer",
+        choices=sorted(_VALID_PREFERENCE_MODES),
+        default="fail_only",
+        help="Preferred mode when --reviewer-mode=both and decisions diverge.",
+    )
+    return parser.parse_args(argv)
+
+
 def main() -> None:
+    args = _parse_args()
+    env_mode = os.getenv("P1_REVIEWER_MODE")
+    reviewer_mode = _normalize_reviewer_mode(args.reviewer_mode or env_mode)
+    prefer_mode = _normalize_prefer_mode(args.prefer)
     # This prompt intentionally exercises multiple deterministic tools.
     orchestrator = LangGraphOrchestrator()
     user_input = """Return exactly one JSON object per turn.
@@ -300,7 +529,13 @@ After completing all tasks, emit finish with a summary."""
 
     # Audit review
     _print_audit_panel(result.get("audit_report"), result.get("mission_report", []))
-    _correction_loop(orchestrator, user_input, result)
+    _correction_loop(
+        orchestrator,
+        user_input,
+        result,
+        reviewer_mode=reviewer_mode,
+        prefer_mode=prefer_mode,
+    )
 
 
 if __name__ == "__main__":
