@@ -117,11 +117,17 @@ def validate_pattern_report_content(content: str) -> str | None:
     if round(reported_sum, 2) != round(expected_sum, 2):
         return (
             f"pattern report sum mismatch: got {reported_sum}, "
-            f"expected {round(expected_sum, 2)}."
+            f"expected {round(expected_sum, 2)} "
+            f"(sum of extracted numbers {values}). "
+            "Use the math_stats tool with operation='sum' and numbers=[...] to compute "
+            "the correct value before writing — do not compute sum manually."
         )
     if round(reported_mean, 3) != round(expected_mean, 3):
         return (
             f"pattern report mean mismatch: got {reported_mean}, "
-            f"expected {round(expected_mean, 3)}."
+            f"expected {round(expected_mean, 3)} "
+            f"(mean of {len(values)} numbers). "
+            "Use the math_stats tool with operation='mean' and numbers=[...] to compute "
+            "the correct value before writing — do not compute mean manually."
         )
     return None

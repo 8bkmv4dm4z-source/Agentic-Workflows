@@ -1352,11 +1352,25 @@ def test_tool_node_constructed_for_anthropic_path(monkeypatch) -> None:  # noqa:
         )
         assert orch is not None, "Orchestrator must construct without error"
 
-        # Verify the compiled graph has a 'tools' node when Anthropic path is active
-        graph_nodes = set(orch._compiled.get_graph().nodes.keys())
+        # Verify 'tools' node is present AND reachable via an edge from 'plan'
+        compiled_graph = orch._compiled.get_graph()
+        graph_nodes = set(compiled_graph.nodes.keys())
         assert "tools" in graph_nodes, (
             f"'tools' ToolNode must be present in compiled graph for Anthropic path. "
             f"Found nodes: {graph_nodes}"
+        )
+        # Check edge connectivity: 'plan' must have an outgoing edge to 'tools'
+        edges = [(e.source, e.target) for e in compiled_graph.edges]
+        plan_targets = {target for src, target in edges if src == "plan"}
+        assert "tools" in plan_targets, (
+            f"'tools' node must be reachable from 'plan' via a graph edge. "
+            f"'plan' currently routes to: {plan_targets}"
+        )
+        # Check return edge: 'tools' must route back to 'plan'
+        tools_targets = {target for src, target in edges if src == "tools"}
+        assert "plan" in tools_targets, (
+            f"'tools' node must have a return edge to 'plan'. "
+            f"'tools' currently routes to: {tools_targets}"
         )
 
 

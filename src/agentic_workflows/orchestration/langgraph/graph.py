@@ -103,8 +103,6 @@ def _sequential_node(fn):  # type: ignore[no-untyped-def]
     wrapper.__qualname__ = getattr(fn, "__qualname__", repr(fn))
     return wrapper
 
-    pass
-
 
 class LangGraphOrchestrator:
     """State-graph orchestrator with memoization and checkpoint guardrails."""
@@ -299,34 +297,40 @@ class LangGraphOrchestrator:
         builder.add_node("policy", _sequential_node(self._enforce_memo_policy))
         builder.add_node("finalize", _sequential_node(self._finalize))
         builder.add_edge(START, "plan")
-        builder.add_conditional_edges(
-            "plan",
-            self._route_after_plan,
-            {
-                "plan": "plan",
-                "execute": "execute",
-                "finish": "finalize",
-            },
-        )
-        builder.add_edge("execute", "policy")
-        builder.add_edge("policy", "plan")
         builder.add_edge("finalize", END)
 
         if use_tool_node:
-            # Anthropic provider path: wire ToolNode + tools_condition.
-            # ToolNode handles the Anthropic tool-call envelope format natively,
-            # replacing the XML/JSON envelope parser for this provider path only.
+            # Anthropic provider path: plan → tools (ToolNode) → plan ReAct loop.
+            # tools_condition routes to "tools" when the last message contains
+            # tool_calls (Anthropic native format), otherwise to END → "finalize".
+            # The XML/JSON envelope parser (_parse_all_actions_json) is gated out
+            # in _plan_next_action for this path.
             #
-            # IMPORTANT: seen_tool_signatures deduplication is preserved via the
+            # seen_tool_signatures deduplication is preserved via the
             # _dedup_then_tool_node() wrapper that runs BEFORE ToolNode executes.
             lc_tools = self._build_lc_tools()
             _tool_node = ToolNode(tools=lc_tools, handle_tool_errors=True)  # type: ignore[operator]
             dedup_node = self._dedup_then_tool_node(_tool_node)
             builder.add_node("tools", dedup_node)
+            builder.add_conditional_edges(
+                "plan",
+                tools_condition,  # type: ignore[arg-type]
+                {"tools": "tools", END: "finalize"},
+            )
+            builder.add_edge("tools", "plan")
             self.logger.info(
                 "TOOLNODE WIRED provider=anthropic tools=%s handle_tool_errors=True",
                 [t.name for t in lc_tools],
             )
+        else:
+            # Standard path: plan → execute → policy → plan loop.
+            builder.add_conditional_edges(
+                "plan",
+                self._route_after_plan,
+                {"plan": "plan", "execute": "execute", "finish": "finalize"},
+            )
+            builder.add_edge("execute", "policy")
+            builder.add_edge("policy", "plan")
 
         return builder.compile()
 
@@ -610,6 +614,11 @@ class LangGraphOrchestrator:
             state["token_budget_remaining"] = max(
                 0, state.get("token_budget_remaining", 100_000) - estimated_tokens
             )
+            # Anthropic path: model output is native tool-call format consumed by
+            # ToolNode via tools_condition routing. Skip JSON envelope parsing and
+            # return — the graph edge routes the state to the "tools" node next.
+            if os.getenv("P1_PROVIDER", "ollama").lower() == "anthropic":
+                return state
             all_actions = self._parse_all_actions_json(model_output)
             if not all_actions:
                 raise ValueError("no valid JSON action objects found in model output")
