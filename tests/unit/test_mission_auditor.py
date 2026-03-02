@@ -80,6 +80,15 @@ class TestToolPresence(unittest.TestCase):
         # Conservative mode skips noisy analysis-group warnings entirely.
         self.assertEqual(len(group_findings), 0)
 
+    def test_scope_filter_suppresses_unavailable_tool_group(self) -> None:
+        findings = _check_tool_presence(
+            1,
+            "Sort the array",
+            [],
+            allowed_tools={"math_stats"},
+        )
+        self.assertEqual(findings, [])
+
 
 # ---------------------------------------------------------------------------
 # _check_list_count

@@ -10,15 +10,22 @@ run/mission reports using only local state for final snapshots.
 import json
 import os
 import queue
-import re
 import threading
 from pathlib import Path
 from typing import Any
 
-from pydantic import ValidationError
-
 from agentic_workflows.logger import get_logger
+from agentic_workflows.orchestration.langgraph import (
+    action_parser,
+    content_validator,
+    directives,
+    fallback_planner,
+    memo_manager,
+    mission_tracker,
+    text_extractor,
+)
 from agentic_workflows.orchestration.langgraph.checkpoint_store import SQLiteCheckpointStore
+from agentic_workflows.orchestration.langgraph.handoff import create_handoff, create_handoff_result
 from agentic_workflows.orchestration.langgraph.memo_store import SQLiteMemoStore
 from agentic_workflows.orchestration.langgraph.mission_auditor import audit_run
 from agentic_workflows.orchestration.langgraph.mission_parser import StructuredPlan, parse_missions
@@ -37,7 +44,6 @@ from agentic_workflows.orchestration.langgraph.state_schema import (
     utc_now_iso,
 )
 from agentic_workflows.orchestration.langgraph.tools_registry import build_tool_registry
-from agentic_workflows.schemas import FinishAction, ToolAction
 from agentic_workflows.tools.base import Tool
 
 try:
@@ -157,7 +163,7 @@ class LangGraphOrchestrator:
 
         builder = StateGraph(RunState)
         builder.add_node("plan", self._plan_next_action)
-        builder.add_node("execute", self._execute_action)
+        builder.add_node("execute", self._route_to_specialist)
         builder.add_node("policy", self._enforce_memo_policy)
         builder.add_node("finalize", self._finalize)
         builder.add_edge(START, "plan")
@@ -618,16 +624,76 @@ class LangGraphOrchestrator:
             raise RuntimeError(str(payload))
         return str(payload)
 
-    def _route_to_specialist(self, state: RunState) -> RunState:
-        """Route the pending action to the appropriate specialist.
+    def _select_specialist_for_action(self, action: dict[str, Any] | None) -> str:
+        """Choose specialist role from pending action."""
+        if not action or str(action.get("action", "")).strip().lower() != "tool":
+            return "supervisor"
+        tool_name = str(action.get("tool_name", "")).strip()
+        if tool_name in directives.EVALUATOR_DIRECTIVE.allowed_tools:
+            return "evaluator"
+        return "executor"
 
-        Currently a pass-through: all actions go to the executor (_execute_action).
-        When multi-agent routing is active, this will inspect the action and
-        delegate to supervisor/executor/evaluator based on task type.
-        """
+    def _is_tool_allowed_for_specialist(self, specialist: str, tool_name: str) -> bool:
+        """Check whether a specialist can execute the selected tool."""
+        config = directives.DIRECTIVE_BY_SPECIALIST.get(specialist)  # type: ignore[arg-type]
+        if config is None:
+            return True
+        return tool_name in config.allowed_tools
+
+    def _route_to_specialist(self, state: RunState) -> RunState:
+        """Route tool actions to specialist role handlers and record handoff metadata."""
         state = ensure_state_defaults(state, system_prompt=self.system_prompt)
-        state["active_specialist"] = "executor"
-        return self._execute_action(state)
+        action = state.get("pending_action")
+        if not isinstance(action, dict):
+            return state
+
+        specialist = self._select_specialist_for_action(action)
+        state["active_specialist"] = specialist
+        if str(action.get("action", "")).strip().lower() != "tool":
+            return self._execute_action(state)
+
+        tool_name = str(action.get("tool_name", "")).strip()
+        mission_id = action.get("__mission_id")
+        if not isinstance(mission_id, int) or mission_id <= 0:
+            mission_id = int(state.get("active_mission_id", 0))
+        task_id = f"{state['run_id']}:{state['step']}:{len(state['handoff_queue']) + 1}"
+        config = directives.DIRECTIVE_BY_SPECIALIST.get(specialist)  # type: ignore[arg-type]
+        tool_scope = sorted(config.allowed_tools) if config else []
+        state["handoff_queue"].append(
+            create_handoff(
+                task_id=task_id,
+                specialist=specialist,  # type: ignore[arg-type]
+                mission_id=max(0, mission_id),
+                tool_scope=tool_scope,
+                input_context={
+                    "tool_name": tool_name,
+                    "args": dict(action.get("args", {})),
+                    "step": state["step"],
+                },
+                token_budget=int(state.get("token_budget_remaining", 0)),
+            )
+        )
+
+        pre_calls = len(state.get("tool_history", []))
+        state = self._execute_action(state)
+        post_calls = len(state.get("tool_history", []))
+        status = "success" if post_calls > pre_calls else "error"
+        output: dict[str, Any] = {"tool_name": tool_name}
+        if post_calls > pre_calls:
+            output["tool_result"] = state["tool_history"][-1].get("result", {})
+        else:
+            output["message"] = str(state["messages"][-1].get("content", "")) if state["messages"] else ""
+
+        state["handoff_results"].append(
+            create_handoff_result(
+                task_id=task_id,
+                specialist=specialist,  # type: ignore[arg-type]
+                status=status,  # type: ignore[arg-type]
+                output=output,
+                tokens_used=0,
+            )
+        )
+        return state
 
     def _execute_action(self, state: RunState) -> RunState:
         """Execute planned tool action, including duplicate and policy checks."""
@@ -645,6 +711,27 @@ class LangGraphOrchestrator:
 
         tool_name = str(action.get("tool_name", ""))
         tool_args = self._normalize_tool_args(tool_name, dict(action.get("args", {})))
+        specialist = str(state.get("active_specialist", "executor")).strip() or "executor"
+        if not self._is_tool_allowed_for_specialist(specialist=specialist, tool_name=tool_name):
+            config = directives.DIRECTIVE_BY_SPECIALIST.get(specialist)  # type: ignore[arg-type]
+            allowed_tools = sorted(config.allowed_tools) if config else []
+            state["messages"].append(
+                {
+                    "role": "system",
+                    "content": (
+                        f"Tool '{tool_name}' is not allowed for specialist '{specialist}'. "
+                        f"Allowed tools: {', '.join(allowed_tools)}."
+                    ),
+                }
+            )
+            state["pending_action"] = None
+            self.checkpoint_store.save(
+                run_id=state["run_id"],
+                step=state["step"],
+                node_name="execute_scope_violation",
+                state=state,
+            )
+            return state
         mission_id = action.get("__mission_id")
         mission_index = -1
         if isinstance(mission_id, int) and mission_id > 0:
@@ -1018,6 +1105,7 @@ class LangGraphOrchestrator:
             missions=state.get("missions", []),
             mission_reports=state.get("mission_reports", []),
             tool_history=state.get("tool_history", []),
+            role_tool_scopes=directives.role_tool_scopes(),
         )
         state["audit_report"] = audit.to_dict()
         self.logger.info(
@@ -1111,174 +1199,30 @@ class LangGraphOrchestrator:
         except OSError as exc:
             self.logger.warning("Failed to write Shared_plan.md: %s", exc)
 
+    # --- Backward-compat shims: delegated to action_parser module ---
+
     def _validate_action(self, model_output: str) -> dict[str, Any]:
-        """Validate model output against strict ToolAction/FinishAction schema."""
-        data = self._parse_action_json(model_output)
-        action_alias = str(data.get("action", "")).strip().lower()
-        if (
-            "tool_name" not in data
-            and isinstance(data.get("action"), str)
-            and action_alias in self.tools
-        ):
-            data = {
-                "action": "tool",
-                "tool_name": action_alias,
-                "args": dict(data.get("args", {})),
-            }
-        if (
-            data.get("action") == "tool"
-            and "tool_name" not in data
-            and isinstance(data.get("name"), str)
-        ):
-            data["tool_name"] = data["name"]
-        action = str(data.get("action", "")).strip().lower()
-        if action in {"tool", "finish"}:
-            data["action"] = action
-        if action == "tool":
-            try:
-                parsed = ToolAction(**data)
-                return parsed.model_dump()
-            except ValidationError as exc:
-                raise ValueError(f"tool schema error: {str(exc)}") from exc
-        if action == "finish":
-            try:
-                parsed = FinishAction(**data)
-                return parsed.model_dump()
-            except ValidationError as exc:
-                raise ValueError(f"finish schema error: {str(exc)}") from exc
-        raise ValueError("action must be 'tool' or 'finish'")
+        return action_parser.validate_action(model_output, self.tools)
 
     def _parse_action_json(self, model_output: str) -> dict[str, Any]:
-        """Parse planner output, recovering first JSON object when extra data is emitted."""
-        try:
-            data = json.loads(model_output)
-            if not isinstance(data, dict):
-                raise ValueError("action payload must be a JSON object")
-            return data
-        except json.JSONDecodeError as exc:
-            candidate = self._extract_first_json_object(model_output)
-            if not candidate:
-                raise ValueError(f"invalid json: {str(exc)}") from exc
-            try:
-                recovered = json.loads(candidate)
-            except json.JSONDecodeError as recover_exc:
-                raise ValueError(f"invalid json: {str(recover_exc)}") from recover_exc
-            if not isinstance(recovered, dict):
-                raise ValueError("action payload must be a JSON object") from None
-            return recovered
+        return action_parser.parse_action_json(model_output)
 
     def _extract_first_json_object(self, text: str) -> str | None:
-        """Return first balanced JSON object from text, ignoring surrounding noise."""
-        start = text.find("{")
-        if start < 0:
-            return None
-        depth = 0
-        in_string = False
-        escaped = False
-        for index in range(start, len(text)):
-            char = text[index]
-            if in_string:
-                if escaped:
-                    escaped = False
-                elif char == "\\":
-                    escaped = True
-                elif char == '"':
-                    in_string = False
-                continue
-            if char == '"':
-                in_string = True
-                continue
-            if char == "{":
-                depth += 1
-                continue
-            if char == "}":
-                depth -= 1
-                if depth == 0:
-                    return text[start : index + 1]
-        return None
+        return action_parser.extract_first_json_object(text)
 
     def _extract_all_json_objects(self, text: str) -> list[str]:
-        """Extract all top-level balanced JSON objects from text."""
-        objects: list[str] = []
-        pos = 0
-        while pos < len(text):
-            start = text.find("{", pos)
-            if start < 0:
-                break
-            depth = 0
-            in_string = False
-            escaped = False
-            for index in range(start, len(text)):
-                char = text[index]
-                if in_string:
-                    if escaped:
-                        escaped = False
-                    elif char == "\\":
-                        escaped = True
-                    elif char == '"':
-                        in_string = False
-                    continue
-                if char == '"':
-                    in_string = True
-                    continue
-                if char == "{":
-                    depth += 1
-                    continue
-                if char == "}":
-                    depth -= 1
-                    if depth == 0:
-                        objects.append(text[start : index + 1])
-                        pos = index + 1
-                        break
-            else:
-                break  # unbalanced — stop
-        return objects
+        return action_parser.extract_all_json_objects(text)
 
     def _parse_all_actions_json(self, model_output: str) -> list[dict[str, Any]]:
-        """Parse all JSON action objects from planner output."""
-        try:
-            data = json.loads(model_output)
-            if isinstance(data, dict):
-                return [data]
-        except json.JSONDecodeError:
-            pass
-
-        candidates = self._extract_all_json_objects(model_output)
-        actions = []
-        for candidate in candidates:
-            try:
-                parsed = json.loads(candidate)
-                if isinstance(parsed, dict) and "action" in parsed:
-                    actions.append(parsed)
-            except (json.JSONDecodeError, ValueError):
-                continue
-        return actions
+        return action_parser.parse_all_actions_json(model_output)
 
     def _validate_action_from_dict(self, action_dict: dict[str, Any]) -> dict[str, Any]:
-        """Validate a pre-parsed action dict against Pydantic schemas."""
-        raw = dict(action_dict)
-        mission_id = raw.get("__mission_id")
-        sanitized = {key: value for key, value in raw.items() if not key.startswith("__")}
-        validated = self._validate_action(json.dumps(sanitized))
-        if isinstance(mission_id, int) and mission_id > 0:
-            validated["__mission_id"] = mission_id
-        return validated
+        return action_parser.validate_action_from_dict(action_dict, self.tools)
+
+    # --- Backward-compat shims: delegated to mission_tracker module ---
 
     def _mission_preview_from_state(self, state: RunState) -> dict[int, dict[str, set[str]]]:
-        """Build mutable mission usage preview for action tagging within one planner turn."""
-        preview: dict[int, dict[str, set[str]]] = {}
-        for report in state.get("mission_reports", []):
-            mission_id = int(report.get("mission_id", 0))
-            if mission_id <= 0:
-                continue
-            preview[mission_id] = {
-                "used_tools": {str(tool) for tool in report.get("used_tools", [])},
-                "written_files": {
-                    str(path).replace("\\", "/").rsplit("/", 1)[-1]
-                    for path in report.get("written_files", [])
-                },
-            }
-        return preview
+        return mission_tracker.mission_preview_from_state(state)
 
     def _resolve_mission_id_for_action(
         self,
@@ -1287,460 +1231,46 @@ class LangGraphOrchestrator:
         *,
         preview: dict[int, dict[str, set[str]]] | None = None,
     ) -> int:
-        """Resolve which mission an action should be attributed to."""
-        if str(action.get("action", "")).strip().lower() != "tool":
-            return 0
-        reports = state.get("mission_reports", [])
-        if not reports:
-            return 0
-        tool_name = str(action.get("tool_name", "")).strip()
-        args = dict(action.get("args", {}))
-        helper_tools = {"memoize", "retrieve_memo"}
-
-        def _requirements_for_report(report: dict[str, Any]) -> tuple[set[str], set[str]]:
-            tools = set(report.get("required_tools", []))
-            files = {
-                str(path).replace("\\", "/").rsplit("/", 1)[-1]
-                for path in report.get("required_files", [])
-            }
-            if not tools and not files:
-                inferred_tools, inferred_files, _ = self._infer_requirements_from_text(
-                    str(report.get("mission", ""))
-                )
-                tools = set(inferred_tools)
-                files = {
-                    str(path).replace("\\", "/").rsplit("/", 1)[-1]
-                    for path in inferred_files
-                }
-            return tools, files
-
-        # Path-based mapping for deterministic write-related actions.
-        path_hint = ""
-        if tool_name == "write_file":
-            path_hint = str(args.get("path", "")).strip()
-        elif tool_name == "memoize":
-            key = str(args.get("key", "")).strip()
-            if key.startswith("write_file:"):
-                path_hint = key.split(":", 1)[1].strip()
-        if path_hint:
-            basename = path_hint.replace("\\", "/").rsplit("/", 1)[-1]
-            for report in reports:
-                required_files = _requirements_for_report(report)[1]
-                if basename and basename in required_files:
-                    return int(report.get("mission_id", 0))
-
-        # Prefer missions where this required tool has not yet been observed.
-        for report in reports:
-            if str(report.get("status", "pending")) == "completed":
-                continue
-            required_tools = _requirements_for_report(report)[0]
-            mission_id = int(report.get("mission_id", 0))
-            already_used = set(report.get("used_tools", []))
-            if preview and mission_id in preview:
-                already_used = set(preview[mission_id].get("used_tools", set()))
-            if tool_name in required_tools and tool_name not in already_used:
-                return int(report.get("mission_id", 0))
-
-        # Fallback: any incomplete mission that expects the tool.
-        for report in reports:
-            if str(report.get("status", "pending")) == "completed":
-                continue
-            required_tools = _requirements_for_report(report)[0]
-            if tool_name in required_tools:
-                return int(report.get("mission_id", 0))
-
-        # Queue-aware fallback: assign to the next mission still incomplete in preview.
-        for report in reports:
-            if str(report.get("status", "pending")) == "completed":
-                continue
-            mission_id = int(report.get("mission_id", 0))
-            required_tools, required_files = _requirements_for_report(report)
-            already_used = set(report.get("used_tools", []))
-            written_files = {
-                str(path).replace("\\", "/").rsplit("/", 1)[-1]
-                for path in report.get("written_files", [])
-            }
-            if preview and mission_id in preview:
-                already_used = set(preview[mission_id].get("used_tools", set()))
-                written_files = set(preview[mission_id].get("written_files", set()))
-
-            observed_tools = set(already_used)
-            observed_non_helper_tools = {tool for tool in already_used if tool not in helper_tools}
-            if required_tools or required_files:
-                missing_tools = required_tools - observed_tools
-                missing_files = required_files - written_files
-                if missing_tools or missing_files:
-                    return mission_id
-                continue
-
-            # Generic mission: one non-helper tool call completes it.
-            if not observed_non_helper_tools:
-                return mission_id
-
-        next_index = self._next_incomplete_mission_index(state)
-        if 0 <= next_index < len(reports):
-            return int(reports[next_index].get("mission_id", 0))
-        return 0
+        return mission_tracker.resolve_mission_id_for_action(state, action, preview=preview)
 
     def _deterministic_fallback_action(self, state: RunState) -> dict[str, Any] | None:
-        """Build a safe tool/finish action from local state when provider times out."""
-        policy_flags = state.get("policy_flags", {})
-        if policy_flags.get("memo_required"):
-            key = str(policy_flags.get("memo_required_key", "")).strip()
-            if key:
-                source_tool = (
-                    str(policy_flags.get("last_tool_name", "memoize")).strip() or "memoize"
-                )
-                last_result = dict(policy_flags.get("last_tool_result", {}))
-                value: Any = last_result if last_result else {"status": "memoized_by_fallback"}
-                return {
-                    "action": "tool",
-                    "tool_name": "memoize",
-                    "args": {
-                        "key": key,
-                        "value": value,
-                        "run_id": state["run_id"],
-                        "source_tool": source_tool,
-                    },
-                }
+        return fallback_planner.deterministic_fallback_action(state)
 
-        if self._all_missions_completed(state):
-            return {"action": "finish", "answer": self._build_auto_finish_answer(state)}
-
-        mission = self._next_incomplete_mission(state).strip()
-        if not mission:
-            return {"action": "finish", "answer": self._build_auto_finish_answer(state)}
-        mission_lower = mission.lower()
-
-        repeat_text = self._extract_quoted_text(mission)
-        if "repeat" in mission_lower and repeat_text:
-            return {
-                "action": "tool",
-                "tool_name": "repeat_message",
-                "args": {"message": repeat_text},
-            }
-
-        if "sort" in mission_lower:
-            numbers = self._extract_numbers_from_text(mission)
-            if numbers:
-                order = "desc" if "desc" in mission_lower else "asc"
-                return {
-                    "action": "tool",
-                    "tool_name": "sort_array",
-                    "args": {"items": numbers, "order": order},
-                }
-
-        if "uppercase" in mission_lower and repeat_text:
-            return {
-                "action": "tool",
-                "tool_name": "string_ops",
-                "args": {"text": repeat_text, "operation": "uppercase"},
-            }
-        if "lowercase" in mission_lower and repeat_text:
-            return {
-                "action": "tool",
-                "tool_name": "string_ops",
-                "args": {"text": repeat_text, "operation": "lowercase"},
-            }
-        if "reverse" in mission_lower and repeat_text:
-            return {
-                "action": "tool",
-                "tool_name": "string_ops",
-                "args": {"text": repeat_text, "operation": "reverse"},
-            }
-
-        if "fibonacci" in mission_lower and (
-            "write" in mission_lower or "write_file" in mission_lower
-        ):
-            path = self._extract_write_path_from_mission(mission) or "fib.txt"
-            count = self._extract_fibonacci_count(mission)
-            mission_index = self._next_incomplete_mission_index(state)
-            reports = state.get("mission_reports", [])
-            if 0 <= mission_index < len(reports):
-                expected = reports[mission_index].get("expected_fibonacci_count")
-                if isinstance(expected, int) and expected > 0:
-                    count = expected
-            return {
-                "action": "tool",
-                "tool_name": "write_file",
-                "args": {"path": path, "content": self._fibonacci_csv(count)},
-            }
-
-        return None
+    # --- Backward-compat shims: delegated to text_extractor module ---
 
     def _extract_quoted_text(self, text: str) -> str:
-        match = re.search(r"""["']([^"']+)["']""", text)
-        if not match:
-            return ""
-        return match.group(1).strip()
+        return text_extractor.extract_quoted_text(text)
 
     def _extract_numbers_from_text(self, text: str) -> list[int]:
-        return [int(token) for token in re.findall(r"-?\d+", text)]
+        return text_extractor.extract_numbers_from_text(text)
 
     def _extract_fibonacci_count(self, mission: str) -> int:
-        patterns = (
-            r"(\d+)(?:st|nd|rd|th)\s+number",
-            r"first\s+(\d+)\s+(?:fibonacci\s+)?(?:numbers|terms)",
-            r"first\s+(\d+)\s+fibonacci",
-            r"until\s+the\s+(\d+)\s+(?:number|numbers|terms)",
-            r"(\d+)\s+fibonacci\s+(?:numbers|terms)?",
-            r"(\d+)\s+(?:numbers|terms)",
-        )
-        mission_lower = mission.lower()
-        for pattern in patterns:
-            match = re.search(pattern, mission_lower)
-            if match:
-                value = int(match.group(1))
-                return max(2, value)
-        return 100
+        return text_extractor.extract_fibonacci_count(mission)
 
     def _fibonacci_csv(self, count: int) -> str:
-        numbers = [0, 1]
-        while len(numbers) < count:
-            numbers.append(numbers[-1] + numbers[-2])
-        return ", ".join(str(value) for value in numbers[:count])
+        return text_extractor.fibonacci_csv(count)
 
     def _extract_missions(self, user_input: str) -> list[str]:
-        """Extract mission lines from user input for per-mission reporting."""
-        lines = [line.strip() for line in user_input.splitlines() if line.strip()]
-        task_lines: list[str] = []
-        for line in lines:
-            if re.match(r"^(task\s*\d+\s*:)", line, flags=re.IGNORECASE):
-                task_lines.append(line)
-                continue
-            if re.match(r"^\d+[\)\.:\-\s]", line):
-                task_lines.append(line)
-        if task_lines:
-            return task_lines
-        return ["Primary mission"]
+        return text_extractor.extract_missions(user_input)
 
-    def _infer_requirements_from_text(
-        self, text: str
-    ) -> tuple[set[str], set[str], int | None]:
-        """Infer required tools/files from mission or sub-task text."""
-        lower = text.lower()
-        required_tools: set[str] = set()
-        required_files: set[str] = set()
-
-        if re.search(r"\b(uppercase|lowercase|reverse)\b", lower):
-            required_tools.add("string_ops")
-        if re.search(r"\b(repeat|confirmation)\b", lower):
-            required_tools.add("repeat_message")
-        if re.search(r"\bretrieve\b", lower) and re.search(r"\bmemo(?:ize)?\b", lower):
-            required_tools.add("retrieve_memo")
-        if re.search(r"\bmemoize\b", lower):
-            required_tools.add("memoize")
-        if re.search(r"\bjson\b", lower):
-            required_tools.add("json_parser")
-        if re.search(r"\b(regex|pattern)\b", lower):
-            required_tools.add("regex_matcher")
-        if re.search(r"\bextract\b", lower) and (
-            re.search(r"\bname\b", lower) or re.search(r"\bnumbers?\b", lower)
-        ):
-            required_tools.add("regex_matcher")
-        if (
-            re.search(r"\bsort\b", lower)
-            or re.search(r"\bascending\b", lower)
-            or re.search(r"\bdescending\b", lower)
-            or re.search(r"\balphabetic(?:ally)?\b", lower)
-        ):
-            required_tools.add("sort_array")
-        if re.search(r"\b(mean|sum|median|average)\b", lower):
-            required_tools.add("math_stats")
-        if (
-            re.search(r"\boutliers?\b", lower)
-            or re.search(r"\bstatistics?\b", lower)
-            or (re.search(r"\banaly(?:s|z)e\b", lower) and re.search(r"\bnumbers?\b", lower))
-        ):
-            required_tools.add("data_analysis")
-        if re.search(r"\banaly(?:s|z)e\b", lower) and re.search(r"\btext\b", lower):
-            required_tools.add("text_analysis")
-        if (
-            re.search(r"\bwrite(?:_file)?\b", lower)
-            or "save to" in lower
-            or "output to" in lower
-        ):
-            required_tools.add("write_file")
-            path = self._extract_write_path_from_mission(text)
-            if path:
-                required_files.add(path.replace("\\", "/").rsplit("/", 1)[-1])
-
-        expected_fibonacci_count: int | None = None
-        if "fibonacci" in lower:
-            required_tools.add("write_file")
-            expected_fibonacci_count = self._extract_fibonacci_count(text)
-            path = self._extract_write_path_from_mission(text)
-            if path:
-                required_files.add(path.replace("\\", "/").rsplit("/", 1)[-1])
-
-        return required_tools, required_files, expected_fibonacci_count
+    def _infer_requirements_from_text(self, text: str) -> tuple[set[str], set[str], int | None]:
+        return mission_tracker.infer_requirements_from_text(text)
 
     def _build_mission_contracts_from_plan(
         self, structured_plan: StructuredPlan, missions: list[str]
     ) -> list[dict[str, Any]]:
-        """Derive per-mission completion contracts from structured plan data."""
-        contracts: list[dict[str, Any]] = []
-        children_by_parent: dict[str, list[Any]] = {}
-        for step in structured_plan.steps:
-            if step.parent_id is not None:
-                children_by_parent.setdefault(step.parent_id, []).append(step)
-
-        top_level = [step for step in structured_plan.steps if step.parent_id is None]
-        for idx, mission in enumerate(missions):
-            mission_id = idx + 1
-            parent = next((step for step in top_level if step.id == str(mission_id)), None)
-            if parent is None and idx < len(top_level):
-                parent = top_level[idx]
-
-            required_tools: set[str] = set()
-            required_files: set[str] = set()
-            expected_fibonacci_count: int | None = None
-            checks: list[str] = []
-            mission_texts: list[str] = [mission]
-
-            base_tools, base_files, base_fib = self._infer_requirements_from_text(mission)
-            required_tools.update(base_tools)
-            required_files.update(base_files)
-            if base_fib is not None:
-                expected_fibonacci_count = base_fib
-
-            if parent is not None:
-                for child in children_by_parent.get(parent.id, []):
-                    mission_texts.append(child.description)
-                    tools, files, fib_count = self._infer_requirements_from_text(child.description)
-                    # Child tool mentions are often alternative implementation hints.
-                    # Keep completion contracts stable by only requiring write_file when
-                    # child text expects an output artifact.
-                    if files:
-                        required_tools.add("write_file")
-                    required_files.update(files)
-                    if fib_count is not None:
-                        required_tools.add("write_file")
-                        expected_fibonacci_count = fib_count
-
-            if expected_fibonacci_count is not None:
-                checks.append(f"fibonacci_count={expected_fibonacci_count}")
-            if required_files:
-                checks.append("required_files")
-            if required_tools:
-                checks.append("required_tools")
-            if any(
-                "pattern" in text.lower()
-                and ("sum" in text.lower() or "mean" in text.lower())
-                for text in mission_texts
-            ):
-                checks.append("pattern_report_consistency")
-
-            contracts.append(
-                {
-                    "mission_id": mission_id,
-                    "required_tools": sorted(required_tools),
-                    "required_files": sorted(required_files),
-                    "expected_fibonacci_count": expected_fibonacci_count,
-                    "contract_checks": checks,
-                }
-            )
-        return contracts
+        return mission_tracker.build_mission_contracts_from_plan(structured_plan, missions)
 
     def _initialize_mission_reports(
         self, missions: list[str], *, contracts: list[dict[str, Any]] | None = None
     ) -> list[dict[str, Any]]:
-        """Build initial mission report objects before tool execution starts."""
-        contracts = contracts or []
-        reports: list[dict[str, Any]] = []
-        for index, mission in enumerate(missions):
-            contract = contracts[index] if index < len(contracts) else {}
-            reports.append(
-                {
-                    "mission_id": index + 1,
-                    "mission": mission,
-                    "used_tools": [],
-                    "tool_results": [],
-                    "result": "",
-                    "status": "pending",
-                    "required_tools": list(contract.get("required_tools", [])),
-                    "required_files": list(contract.get("required_files", [])),
-                    "written_files": [],
-                    "expected_fibonacci_count": contract.get("expected_fibonacci_count"),
-                    "contract_checks": list(contract.get("contract_checks", [])),
-                }
-            )
-        return reports
+        return mission_tracker.initialize_mission_reports(missions, contracts=contracts)
 
     def _next_incomplete_mission_index(self, state: RunState) -> int:
-        reports = state.get("mission_reports", [])
-        for index, report in enumerate(reports):
-            if str(report.get("status", "pending")) != "completed":
-                return index
-        return -1
+        return mission_tracker.next_incomplete_mission_index(state)
 
     def _refresh_mission_status(self, state: RunState, mission_index: int) -> None:
-        """Recompute mission completion from required tools/files."""
-        reports = state.get("mission_reports", [])
-        if mission_index < 0 or mission_index >= len(reports):
-            return
-        report = reports[mission_index]
-        required_tools = set(report.get("required_tools", []))
-        required_files = {
-            str(path).replace("\\", "/").rsplit("/", 1)[-1]
-            for path in report.get("required_files", [])
-        }
-        if not required_tools and not required_files:
-            inferred_tools, inferred_files, inferred_fib_count = self._infer_requirements_from_text(
-                str(report.get("mission", ""))
-            )
-            required_tools = set(inferred_tools)
-            required_files = {
-                str(path).replace("\\", "/").rsplit("/", 1)[-1]
-                for path in inferred_files
-            }
-            if inferred_tools and not report.get("required_tools"):
-                report["required_tools"] = sorted(required_tools)
-            if inferred_files and not report.get("required_files"):
-                report["required_files"] = sorted(required_files)
-            if (
-                inferred_fib_count is not None
-                and not isinstance(report.get("expected_fibonacci_count"), int)
-            ):
-                report["expected_fibonacci_count"] = inferred_fib_count
-        observed_tools = {str(tool) for tool in report.get("used_tools", [])}
-        observed_non_helper_tools = {
-            tool for tool in observed_tools if tool not in {"memoize", "retrieve_memo"}
-        }
-        written_files = {
-            str(path).replace("\\", "/").rsplit("/", 1)[-1]
-            for path in report.get("written_files", [])
-        }
-
-        if required_tools or required_files:
-            missing_tools = sorted(required_tools - observed_tools)
-        else:
-            missing_tools = [] if observed_non_helper_tools else ["<non_helper_tool>"]
-        missing_files = sorted(required_files - written_files)
-
-        latest_result: dict[str, Any] = {}
-        tool_results = report.get("tool_results", [])
-        if tool_results and isinstance(tool_results[-1], dict):
-            candidate = tool_results[-1].get("result")
-            if isinstance(candidate, dict):
-                latest_result = candidate
-        has_latest_error = "error" in latest_result
-
-        if missing_tools or missing_files:
-            if has_latest_error:
-                report["status"] = "failed"
-            else:
-                report["status"] = "in_progress" if report.get("used_tools") else "pending"
-        else:
-            report["status"] = "failed" if has_latest_error else "completed"
-
-        completed_tasks = state.get("completed_tasks", [])
-        mission_text = str(report.get("mission", "")).strip()
-        if report["status"] == "completed":
-            if mission_text and mission_text not in completed_tasks:
-                completed_tasks.append(mission_text)
-        elif mission_text in completed_tasks:
-            completed_tasks.remove(mission_text)
+        return mission_tracker.refresh_mission_status(state, mission_index)
 
     def _record_mission_tool_event(
         self,
@@ -1751,105 +1281,22 @@ class LangGraphOrchestrator:
         mission_index: int | None = None,
         tool_args: dict[str, Any] | None = None,
     ) -> None:
-        """Attach tool usage/results to the intended mission report."""
-        reports = state.get("mission_reports", [])
-        if not reports:
-            contracts = state.get("mission_contracts", [])
-            reports = self._initialize_mission_reports(["Primary mission"], contracts=contracts)
-            state["mission_reports"] = reports
-            state["missions"] = ["Primary mission"]
-            state["active_mission_index"] = -1
-            state["active_mission_id"] = 0
-
-        pending = state.get("pending_action") or {}
-        pending_mission_id = pending.get("__mission_id")
-        if mission_index is None and isinstance(pending_mission_id, int):
-            mission_index = pending_mission_id - 1
-        if mission_index is None:
-            active = int(state.get("active_mission_index", -1))
-            if tool_name in {"memoize", "retrieve_memo"} and 0 <= active < len(reports):
-                mission_index = active
-            else:
-                mission_index = self._next_incomplete_mission_index(state)
-        index = min(max(mission_index if mission_index is not None else 0, 0), len(reports) - 1)
-
-        state["active_mission_index"] = index
-        state["active_mission_id"] = index + 1
-        mission = reports[index]
-        mission.setdefault("status", "pending")
-        mission.setdefault("required_tools", [])
-        mission.setdefault("required_files", [])
-        mission.setdefault("written_files", [])
-        mission.setdefault("expected_fibonacci_count", None)
-        mission.setdefault("contract_checks", [])
-        mission["used_tools"].append(tool_name)
-        mission["tool_results"].append({"tool": tool_name, "result": tool_result})
-        mission["result"] = str(tool_result)
-        if (
-            tool_name == "write_file"
-            and isinstance(tool_args, dict)
-            and "error" not in tool_result
-        ):
-            written_path = str(tool_args.get("path", "")).strip()
-            if written_path:
-                basename = written_path.replace("\\", "/").rsplit("/", 1)[-1]
-                if basename and basename not in mission["written_files"]:
-                    mission["written_files"].append(basename)
-        self._refresh_mission_status(state, index)
+        return mission_tracker.record_mission_tool_event(
+            state, tool_name, tool_result,
+            mission_index=mission_index, tool_args=tool_args,
+        )
 
     def _next_incomplete_mission(self, state: RunState) -> str:
-        """Return next mission text with non-completed status."""
-        reports = state.get("mission_reports", [])
-        next_index = self._next_incomplete_mission_index(state)
-        if 0 <= next_index < len(reports):
-            return str(reports[next_index].get("mission", ""))
-        return ""
+        return mission_tracker.next_incomplete_mission(state)
 
     def _all_missions_completed(self, state: RunState) -> bool:
-        """Whether every mission report status is completed."""
-        reports = state.get("mission_reports", [])
-        if not reports:
-            return False
-        return all(str(report.get("status", "pending")) == "completed" for report in reports)
+        return mission_tracker.all_missions_completed(state)
 
     def _progress_hint_message(self, state: RunState) -> str:
-        """Create a compact progress hint for the planner."""
-        reports = state.get("mission_reports", [])
-        if not reports:
-            missions = state.get("missions", [])
-            if not missions:
-                return ""
-            completed_count = len(state.get("completed_tasks", []))
-            next_mission = self._next_incomplete_mission(state)
-            if next_mission:
-                return (
-                    f"Progress: completed {completed_count}/{len(missions)} tasks. "
-                    f"Next task: {next_mission}"
-                )
-            return f"Progress: completed {completed_count}/{len(missions)} tasks. Emit finish now."
-
-        completed_count = sum(
-            1 for report in reports if str(report.get("status", "pending")) == "completed"
-        )
-        next_mission = self._next_incomplete_mission(state)
-        if next_mission:
-            return (
-                f"Progress: completed {completed_count}/{len(reports)} tasks. "
-                f"Next task: {next_mission}"
-            )
-        return f"Progress: completed {completed_count}/{len(reports)} tasks. Emit finish now."
+        return mission_tracker.progress_hint_message(state)
 
     def _build_auto_finish_answer(self, state: RunState) -> str:
-        """Build deterministic summary when all missions are complete."""
-        mission_reports = state.get("mission_reports", [])
-        summary_parts = ["All tasks completed."]
-        for report in mission_reports:
-            mission = str(report.get("mission", "")).strip()
-            result = str(report.get("result", "")).strip()
-            status = str(report.get("status", "pending"))
-            if mission and result and status == "completed":
-                summary_parts.append(f"{mission} -> {result}")
-        return " ".join(summary_parts)
+        return mission_tracker.build_auto_finish_answer(state)
 
     def _compact_messages(self, state: RunState, *, max_messages: int = 50) -> None:
         """Compact older messages when the transcript exceeds *max_messages*.
@@ -1896,43 +1343,7 @@ class LangGraphOrchestrator:
         state["messages"] = compacted
 
     def _normalize_tool_args(self, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
-        """Normalize common argument aliases before tool execution."""
-        normalized = dict(args)
-        if tool_name == "sort_array":
-            if "items" not in normalized and isinstance(normalized.get("array"), list):
-                normalized["items"] = normalized.pop("array")
-            if "items" not in normalized and isinstance(normalized.get("values"), list):
-                normalized["items"] = normalized.pop("values")
-        elif tool_name == "repeat_message":
-            if "message" not in normalized and isinstance(normalized.get("text"), str):
-                normalized["message"] = normalized.pop("text")
-        elif tool_name == "string_ops":
-            if "operation" not in normalized and isinstance(normalized.get("op"), str):
-                normalized["operation"] = normalized.pop("op")
-        elif tool_name == "write_file":
-            if "path" not in normalized and isinstance(normalized.get("file_path"), str):
-                normalized["path"] = normalized.pop("file_path")
-            if "path" not in normalized and isinstance(normalized.get("filename"), str):
-                normalized["path"] = normalized.pop("filename")
-            if "content" not in normalized and isinstance(normalized.get("text"), str):
-                normalized["content"] = normalized.pop("text")
-            if "content" not in normalized and isinstance(normalized.get("data"), str):
-                normalized["content"] = normalized.pop("data")
-        elif tool_name == "memoize":
-            if "value" not in normalized and "data" in normalized:
-                normalized["value"] = normalized.pop("data")
-        elif tool_name == "text_analysis":
-            if "operation" not in normalized and isinstance(normalized.get("op"), str):
-                normalized["operation"] = normalized.pop("op")
-        elif tool_name == "data_analysis":
-            if "numbers" not in normalized and isinstance(normalized.get("data"), list):
-                normalized["numbers"] = normalized.pop("data")
-            if "numbers" not in normalized and isinstance(normalized.get("values"), list):
-                normalized["numbers"] = normalized.pop("values")
-        elif tool_name == "regex_matcher":
-            if "pattern" not in normalized and isinstance(normalized.get("regex"), str):
-                normalized["pattern"] = normalized.pop("regex")
-        return normalized
+        return fallback_planner.normalize_tool_args(tool_name, args)
 
     def _memo_lookup_candidates_for_action(
         self, *, tool_name: str, tool_args: dict[str, Any]
@@ -1961,17 +1372,7 @@ class LangGraphOrchestrator:
         return candidates
 
     def _has_attempted_memo_lookup(self, *, state: RunState, candidate_keys: list[str]) -> bool:
-        """Whether retrieve_memo has already been attempted for any candidate key in this run."""
-        if not candidate_keys:
-            return True
-        for event in state.get("tool_history", []):
-            if str(event.get("tool", "")) != "retrieve_memo":
-                continue
-            args = dict(event.get("args", {}))
-            key = str(args.get("key", ""))
-            if key in candidate_keys:
-                return True
-        return False
+        return memo_manager.has_attempted_memo_lookup(state=state, candidate_keys=candidate_keys)
 
     def _build_derived_snapshot(
         self,
@@ -2089,48 +1490,16 @@ class LangGraphOrchestrator:
     def _mark_next_mission_complete_from_memo_hit(
         self, *, state: RunState, memo_hit: dict[str, Any]
     ) -> None:
-        """Treat memo hit as completion for the next deterministic write mission."""
-        reports = state.get("mission_reports", [])
-        if not reports:
-            return
-        index = self._next_incomplete_mission_index(state)
-        if index < 0:
-            return
-        state["active_mission_index"] = index
-        state["active_mission_id"] = index + 1
-        reports[index]["result"] = str(memo_hit)
-        reports[index]["status"] = "completed"
-        mission_text = str(reports[index].get("mission", "")).strip()
-        if mission_text and mission_text not in state.get("completed_tasks", []):
-            state["completed_tasks"].append(mission_text)
+        return memo_manager.mark_next_mission_complete_from_memo_hit(state=state, memo_hit=memo_hit)
 
     def _cache_key_for_path(self, path: str) -> str:
-        """Build cache key for reusable write_file inputs."""
-        return f"write_file_input:{path}"
+        return memo_manager.cache_key_for_path(path)
 
     def _write_cache_candidates(self, path: str) -> list[str]:
-        """Return exact and basename keys for reusable write inputs."""
-        if not path.strip():
-            return []
-        keys = [self._cache_key_for_path(path)]
-        basename = path.replace("\\", "/").rsplit("/", 1)[-1].strip()
-        if basename and basename != path:
-            keys.append(self._cache_key_for_path(basename))
-        return keys
+        return memo_manager.write_cache_candidates(path)
 
     def _extract_write_path_from_mission(self, mission: str) -> str:
-        """Extract target file path from mission text when present."""
-        ext = r"[A-Za-z][A-Za-z0-9]{0,9}"
-        quoted_matches = re.findall(rf"""["']([^"']+\.(?:{ext}))["']""", mission)
-        if quoted_matches:
-            return quoted_matches[-1].strip()
-        for match in re.finditer(rf"(/?[A-Za-z0-9_./\\-]+\.(?:{ext}))", mission):
-            candidate = match.group(1).strip().rstrip(".,;:")
-            # Guard against decimal numbers being interpreted as file paths.
-            if re.fullmatch(r"\d+\.\d+", candidate):
-                continue
-            return candidate
-        return ""
+        return text_extractor.extract_write_path_from_mission(mission)
 
     def _maybe_complete_next_write_from_cache(self, state: RunState) -> bool:
         """Auto-complete next write mission from cross-run cached inputs when available."""
@@ -2320,6 +1689,8 @@ class LangGraphOrchestrator:
                 put_result.value_hash,
             )
 
+    # --- Backward-compat shims: delegated to content_validator module ---
+
     def _validate_tool_result_for_active_mission(
         self,
         *,
@@ -2329,116 +1700,16 @@ class LangGraphOrchestrator:
         tool_result: dict[str, Any],
         mission_index: int | None = None,
     ) -> str | None:
-        """Apply deterministic content validation for mission-specific write constraints."""
-        if tool_name != "write_file":
-            return None
-        if "error" in tool_result:
-            return None
-
-        reports = state.get("mission_reports", [])
-        index = mission_index if mission_index is not None else int(state.get("active_mission_index", -1))
-        mission_report = reports[index] if 0 <= index < len(reports) else {}
-        mission_text = str(mission_report.get("mission", "")).lower()
-        contract_checks = {
-            str(check).strip().lower() for check in mission_report.get("contract_checks", [])
-        }
-
-        # Fibonacci-specific strict validation.
-        fib_count = mission_report.get("expected_fibonacci_count")
-        fib_contract_expected = isinstance(fib_count, int) and fib_count > 0
-        is_fibonacci_mission = fib_contract_expected or ("fibonacci" in mission_text)
-        if is_fibonacci_mission:
-            expected_count = mission_report.get("expected_fibonacci_count")
-            if not isinstance(expected_count, int) or expected_count <= 0:
-                expected_count = self._extract_fibonacci_count(mission_text)
-
-            content = str(tool_args.get("content", ""))
-            numbers = self._parse_csv_int_list(content)
-            if numbers is None:
-                return "write_file content must be a comma-separated list of integers."
-            if len(numbers) != expected_count:
-                return (
-                    f"fibonacci content must contain exactly {expected_count} integers, "
-                    f"got {len(numbers)}."
-                )
-            if len(numbers) < 2 or numbers[0] != 0 or numbers[1] != 1:
-                return "fibonacci content must start with 0, 1."
-
-            for seq_index in range(2, len(numbers)):
-                expected = numbers[seq_index - 1] + numbers[seq_index - 2]
-                if numbers[seq_index] != expected:
-                    return (
-                        "fibonacci sequence mismatch at index "
-                        f"{seq_index}: got {numbers[seq_index]}, expected {expected}."
-                    )
-
-        # Pattern report numeric consistency validation.
-        should_validate_pattern_report = "pattern_report_consistency" in contract_checks
-        # Legacy fallback when contract metadata is unavailable.
-        if not contract_checks and "pattern" in mission_text:
-            should_validate_pattern_report = (
-                "sum" in mission_text or "mean" in mission_text
-            )
-        if should_validate_pattern_report:
-            content = str(tool_args.get("content", ""))
-            pattern_error = self._validate_pattern_report_content(content)
-            if pattern_error:
-                return pattern_error
-
-        return None
+        return content_validator.validate_tool_result_for_active_mission(
+            state=state,
+            tool_name=tool_name,
+            tool_args=tool_args,
+            tool_result=tool_result,
+            mission_index=mission_index,
+        )
 
     def _parse_csv_int_list(self, content: str) -> list[int] | None:
-        """Parse a comma-separated integer list; return None on malformed tokens."""
-        tokens = [token.strip() for token in content.split(",") if token.strip()]
-        if not tokens:
-            return []
-        numbers: list[int] = []
-        for token in tokens:
-            if not re.match(r"^-?\d+$", token):
-                return None
-            numbers.append(int(token))
-        return numbers
+        return text_extractor.parse_csv_int_list(content)
 
     def _validate_pattern_report_content(self, content: str) -> str | None:
-        """Ensure pattern report contains numerically consistent sum/mean."""
-        lines = [line.strip() for line in content.splitlines() if line.strip()]
-        if len(lines) < 3:
-            return "pattern report must include extracted numbers, sum, and mean lines."
-
-        numbers_line = next((line for line in lines if line.lower().startswith("extracted numbers:")), "")
-        sum_line = next((line for line in lines if line.lower().startswith("sum:")), "")
-        mean_line = next((line for line in lines if line.lower().startswith("mean:")), "")
-        if not numbers_line or not sum_line or not mean_line:
-            return "pattern report must contain 'Extracted Numbers', 'Sum', and 'Mean' fields."
-
-        raw_numbers = numbers_line.split(":", 1)[1] if ":" in numbers_line else ""
-        number_tokens = [token.strip() for token in raw_numbers.split(",") if token.strip()]
-        if not number_tokens:
-            return "pattern report numbers list is empty."
-        values: list[float] = []
-        for token in number_tokens:
-            try:
-                values.append(float(token))
-            except ValueError:
-                return f"pattern report contains a non-numeric token: {token!r}."
-
-        sum_match = re.search(r"-?\d+(?:\.\d+)?", sum_line)
-        mean_match = re.search(r"-?\d+(?:\.\d+)?", mean_line)
-        if not sum_match or not mean_match:
-            return "pattern report sum/mean must contain numeric values."
-        reported_sum = float(sum_match.group(0))
-        reported_mean = float(mean_match.group(0))
-
-        expected_sum = sum(values)
-        expected_mean = expected_sum / len(values)
-        if round(reported_sum, 2) != round(expected_sum, 2):
-            return (
-                f"pattern report sum mismatch: got {reported_sum}, "
-                f"expected {round(expected_sum, 2)}."
-            )
-        if round(reported_mean, 3) != round(expected_mean, 3):
-            return (
-                f"pattern report mean mismatch: got {reported_mean}, "
-                f"expected {round(expected_mean, 3)}."
-            )
-        return None
+        return content_validator.validate_pattern_report_content(content)

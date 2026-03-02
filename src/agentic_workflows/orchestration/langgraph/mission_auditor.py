@@ -70,9 +70,15 @@ def audit_run(
     missions: list[str],
     mission_reports: list[dict[str, Any]],
     tool_history: list[dict[str, Any]],
+    role_tool_scopes: dict[str, list[str]] | None = None,
 ) -> AuditReport:
     """Audit a completed run.  Returns an AuditReport with one finding per check."""
     report = AuditReport(run_id=run_id)
+    allowed_tools: set[str] | None = None
+    if role_tool_scopes:
+        allowed_tools = set()
+        for scope in role_tool_scopes.values():
+            allowed_tools.update(scope)
 
     for i, mission_report in enumerate(mission_reports):
         mission_id = mission_report.get("mission_id", i + 1)
@@ -84,7 +90,12 @@ def audit_run(
 
         # 1. Tool presence check
         findings.extend(
-            _check_tool_presence(mission_id, mission_text, used_tools)
+            _check_tool_presence(
+                mission_id,
+                mission_text,
+                used_tools,
+                allowed_tools=allowed_tools,
+            )
         )
 
         # 2. List count check
@@ -178,6 +189,7 @@ def _check_tool_presence(
     mission_id: int,
     mission_text: str,
     used_tools: list[str],
+    allowed_tools: set[str] | None = None,
 ) -> list[AuditFinding]:
     """Warn if no tool from a keyword-implied group was called for this mission.
 
@@ -214,6 +226,8 @@ def _check_tool_presence(
         if group_key in checked_groups:
             continue
         checked_groups.add(group_key)
+        if allowed_tools is not None and not any(tool in allowed_tools for tool in tool_group):
+            continue
         if not any(t in used_tools for t in tool_group):
             findings.append(
                 AuditFinding(
