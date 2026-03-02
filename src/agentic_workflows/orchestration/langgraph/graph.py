@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from agentic_workflows.logger import get_logger
+from agentic_workflows.observability import observe
 from agentic_workflows.orchestration.langgraph import (
     action_parser,
     content_validator,
@@ -57,6 +58,40 @@ except ImportError:  # pragma: no cover
 class MemoizationPolicyViolation(RuntimeError):
     """Raised when memoization policy retries are exhausted."""
 
+
+# Fields in RunState that carry Annotated[list[T], operator.add] reducers.
+# Sequential graph nodes mutate these lists in-place and return the full state
+# dict; the reducer would double each list on every step unless we zero out the
+# delta in the returned dict. Wrap every graph node with _sequential_node() to
+# apply this correction automatically.
+_ANNOTATED_LIST_FIELDS: frozenset[str] = frozenset(
+    {"tool_history", "memo_events", "seen_tool_signatures", "mission_reports"}
+)
+
+
+def _sequential_node(fn):  # type: ignore[no-untyped-def]
+    """Wrap a sequential LangGraph node so Annotated list fields return [] (empty delta).
+
+    Background: RunState has four list fields annotated with operator.add so that
+    parallel Send() branches can append without overwriting each other (Phase 4).
+    In sequential operation every node returns the full state dict; the reducer
+    would concatenate old+returned, doubling those lists on each graph step.
+    By zeroing out those fields in the returned dict, operator.add(old, []) is a
+    no-op — the in-place mutations already committed to state are preserved.
+    """
+
+    def wrapper(state: RunState) -> RunState:
+        result = fn(state)
+        if isinstance(result, dict):
+            for field in _ANNOTATED_LIST_FIELDS:
+                if field in result:
+                    result[field] = []  # type: ignore[assignment]
+        return result  # type: ignore[return-value]
+
+    wrapper.__name__ = getattr(fn, "__name__", repr(fn))
+    wrapper.__qualname__ = getattr(fn, "__qualname__", repr(fn))
+    return wrapper
+
     pass
 
 
@@ -94,6 +129,7 @@ class LangGraphOrchestrator:
         self.max_content_validation_retries = max_content_validation_retries
         self.max_duplicate_tool_retries = max_duplicate_tool_retries
         self.max_finish_rejections = max_finish_rejections
+        self.strict_single_action_mode = self._env_bool("P1_STRICT_SINGLE_ACTION", False)
         self.tools: dict[str, Tool] = build_tool_registry(self.memo_store)
         self._invalidate_known_poisoned_cache_entries()
         self.system_prompt = self._build_system_prompt()
@@ -162,10 +198,10 @@ class LangGraphOrchestrator:
             )
 
         builder = StateGraph(RunState)
-        builder.add_node("plan", self._plan_next_action)
-        builder.add_node("execute", self._route_to_specialist)
-        builder.add_node("policy", self._enforce_memo_policy)
-        builder.add_node("finalize", self._finalize)
+        builder.add_node("plan", _sequential_node(self._plan_next_action))
+        builder.add_node("execute", _sequential_node(self._route_to_specialist))
+        builder.add_node("policy", _sequential_node(self._enforce_memo_policy))
+        builder.add_node("finalize", _sequential_node(self._finalize))
         builder.add_edge(START, "plan")
         builder.add_conditional_edges(
             "plan",
@@ -181,10 +217,18 @@ class LangGraphOrchestrator:
         builder.add_edge("finalize", END)
         return builder.compile()
 
-    def run(self, user_input: str, run_id: str | None = None) -> dict[str, Any]:
+    @observe("langgraph.orchestrator.run")
+    def run(
+        self,
+        user_input: str,
+        run_id: str | None = None,
+        *,
+        rerun_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Execute one end-to-end run and return audit-friendly artifacts."""
         state = new_run_state(self.system_prompt, user_input, run_id=run_id)
         state = ensure_state_defaults(state, system_prompt=self.system_prompt)
+        state["rerun_context"] = dict(rerun_context or {})
         structured_plan = parse_missions(user_input)
         missions = structured_plan.flat_missions
         contracts = self._build_mission_contracts_from_plan(structured_plan, missions)
@@ -342,6 +386,8 @@ class LangGraphOrchestrator:
                 state=state,
             )
             return state
+        if self._enforce_rerun_completion_guard(state):
+            return state
         # --- Action queue: pop next queued action before calling provider ---
         queue = state.get("pending_action_queue", [])
         if queue and not state.get("policy_flags", {}).get("memo_required", False):
@@ -368,42 +414,13 @@ class LangGraphOrchestrator:
                     queue_remaining=len(queue),
                 )
                 if validated.get("action") == "finish" and not self._all_missions_completed(state):
-                    finish_rejected = int(state["retry_counts"].get("finish_rejected", 0)) + 1
-                    state["retry_counts"]["finish_rejected"] = finish_rejected
-                    next_mission = self._next_incomplete_mission(state)
-                    if finish_rejected > self.max_finish_rejections:
-                        fail_message = (
-                            "Run stopped: planner repeatedly requested finish while tasks remained "
-                            f"incomplete (next task: {next_mission or 'unknown'})."
-                        )
-                        state["messages"].append({"role": "system", "content": fail_message})
-                        state["pending_action"] = {"action": "finish", "answer": fail_message}
-                        self.checkpoint_store.save(
-                            run_id=state["run_id"],
-                            step=state["step"],
-                            node_name="plan_queue_finish_fail_closed",
-                            state=state,
-                        )
-                        return state
-                    state["messages"].append(
-                        {
-                            "role": "system",
-                            "content": (
-                                "Finish rejected: missions remain incomplete. "
-                                f"Next task: {next_mission or 'unknown'}"
-                            ),
-                        }
-                    )
-                    state["pending_action"] = None
-                    self.checkpoint_store.save(
-                        run_id=state["run_id"],
-                        step=state["step"],
-                        node_name="plan_queue_finish_rejected",
+                    return self._reject_finish_and_recover(
                         state=state,
+                        rejected_action=validated,
+                        source="queue",
                     )
-                    return state
                 state["pending_action"] = validated
-                state["retry_counts"]["finish_rejected"] = 0
+                self._reset_finish_rejection_tracking(state)
                 state["retry_counts"]["provider_timeout"] = 0
                 self.checkpoint_store.save(
                     run_id=state["run_id"],
@@ -514,48 +531,27 @@ class LangGraphOrchestrator:
 
             action = self._validate_action_from_dict(tagged_actions[0])
             if len(all_actions) > 1:
-                state["pending_action_queue"] = tagged_actions[1:]
-                self.logger.info(
-                    "PLAN QUEUED step=%s queued=%s",
-                    state["step"],
-                    len(tagged_actions) - 1,
-                )
+                if self.strict_single_action_mode:
+                    state["pending_action_queue"] = []
+                    self.logger.info(
+                        "PLAN STRICT SINGLE ACTION step=%s discarded=%s",
+                        state["step"],
+                        len(tagged_actions) - 1,
+                    )
+                else:
+                    state["pending_action_queue"] = tagged_actions[1:]
+                    self.logger.info(
+                        "PLAN QUEUED step=%s queued=%s",
+                        state["step"],
+                        len(tagged_actions) - 1,
+                    )
                 state["retry_counts"]["provider_timeout"] = 0
             if action.get("action") == "finish" and not self._all_missions_completed(state):
-                finish_rejected = int(state["retry_counts"].get("finish_rejected", 0)) + 1
-                state["retry_counts"]["finish_rejected"] = finish_rejected
-                next_mission = self._next_incomplete_mission(state)
-                if finish_rejected > self.max_finish_rejections:
-                    fail_message = (
-                        "Run stopped: planner repeatedly requested finish while tasks remained "
-                        f"incomplete (next task: {next_mission or 'unknown'})."
-                    )
-                    state["messages"].append({"role": "system", "content": fail_message})
-                    state["pending_action"] = {"action": "finish", "answer": fail_message}
-                    self.checkpoint_store.save(
-                        run_id=state["run_id"],
-                        step=state["step"],
-                        node_name="plan_finish_fail_closed",
-                        state=state,
-                    )
-                    return state
-                state["messages"].append(
-                    {
-                        "role": "system",
-                        "content": (
-                            "Finish rejected: missions remain incomplete. "
-                            f"Next task: {next_mission or 'unknown'}"
-                        ),
-                    }
-                )
-                state["pending_action"] = None
-                self.checkpoint_store.save(
-                    run_id=state["run_id"],
-                    step=state["step"],
-                    node_name="plan_finish_rejected",
+                return self._reject_finish_and_recover(
                     state=state,
+                    rejected_action=action,
+                    source="provider",
                 )
-                return state
             self.logger.info("PLANNED ACTION step=%s action=%s", state["step"], action)
             planned_mission_id = int(action.get("__mission_id", 0))
             self._log_queue_mission_spacing(
@@ -570,7 +566,7 @@ class LangGraphOrchestrator:
                 queue_remaining=len(state.get("pending_action_queue", [])),
             )
             state["pending_action"] = action
-            state["retry_counts"]["finish_rejected"] = 0
+            self._reset_finish_rejection_tracking(state)
             self.checkpoint_store.save(
                 run_id=state["run_id"],
                 step=state["step"],
@@ -726,6 +722,199 @@ class LangGraphOrchestrator:
         except ValueError:
             return default
         return value if value > 0 else default
+
+    def _env_bool(self, name: str, default: bool) -> bool:
+        raw = (os.getenv(name) or "").strip().lower()
+        if not raw:
+            return default
+        if raw in {"1", "true", "yes", "on"}:
+            return True
+        if raw in {"0", "false", "no", "off"}:
+            return False
+        return default
+
+    def _reset_finish_rejection_tracking(self, state: RunState) -> None:
+        state["retry_counts"]["finish_rejected"] = 0
+        state["policy_flags"]["finish_rejection_streak"] = 0
+        state["policy_flags"]["last_finish_rejection_fingerprint"] = ""
+
+    def _rerun_target_mission_ids(self, state: RunState) -> set[int]:
+        rerun_context_raw = state.get("rerun_context", {})
+        rerun_context = rerun_context_raw if isinstance(rerun_context_raw, dict) else {}
+        return {
+            int(item)
+            for item in rerun_context.get("target_mission_ids", [])
+            if isinstance(item, int) and int(item) > 0
+        }
+
+    def _rerun_targets_completed(self, state: RunState) -> bool:
+        targets = self._rerun_target_mission_ids(state)
+        if not targets:
+            return False
+        reports = state.get("mission_reports", [])
+        status_by_id: dict[int, str] = {}
+        for report in reports:
+            mission_id = int(report.get("mission_id", 0) or 0)
+            if mission_id > 0:
+                status_by_id[mission_id] = str(report.get("status", "pending")).strip().lower()
+        return all(status_by_id.get(mission_id, "pending") == "completed" for mission_id in targets)
+
+    def _enforce_rerun_completion_guard(self, state: RunState) -> bool:
+        """Stop post-completion planning noise when rerun targets are already done."""
+        if not self._rerun_targets_completed(state):
+            return False
+        targets = sorted(self._rerun_target_mission_ids(state))
+        queue = list(state.get("pending_action_queue", []))
+        blocked_non_finish = sum(
+            1
+            for action in queue
+            if str(action.get("action", "")).strip().lower() != "finish"
+        )
+        if queue:
+            state["pending_action_queue"] = []
+        self.logger.warning(
+            (
+                "POST_COMPLETE_ACTION_BLOCKED step=%s rerun_targets=%s "
+                "blocked_non_finish=%s queue_depth=%s"
+            ),
+            state["step"],
+            targets,
+            blocked_non_finish,
+            len(queue),
+        )
+        answer = self._build_auto_finish_answer(state).strip() or "Rerun targets completed."
+        state["pending_action"] = {"action": "finish", "answer": answer}
+        self._reset_finish_rejection_tracking(state)
+        self.checkpoint_store.save(
+            run_id=state["run_id"],
+            step=state["step"],
+            node_name="plan_rerun_targets_completed",
+            state=state,
+        )
+        return True
+
+    def _purge_queued_finish_actions(self, state: RunState) -> int:
+        queue = list(state.get("pending_action_queue", []))
+        if not queue:
+            return 0
+        kept: list[dict[str, Any]] = []
+        purged = 0
+        for action in queue:
+            if str(action.get("action", "")).strip().lower() == "finish":
+                purged += 1
+                continue
+            kept.append(action)
+        if purged:
+            state["pending_action_queue"] = kept
+            self.logger.warning(
+                "PLAN QUEUE PURGE FINISH step=%s purged=%s queue_depth=%s",
+                state["step"],
+                purged,
+                len(kept),
+            )
+        return purged
+
+    def _reject_finish_and_recover(
+        self,
+        *,
+        state: RunState,
+        rejected_action: dict[str, Any],
+        source: str,
+    ) -> RunState:
+        finish_rejected = int(state["retry_counts"].get("finish_rejected", 0)) + 1
+        state["retry_counts"]["finish_rejected"] = finish_rejected
+        requirements = self._next_incomplete_mission_requirements(state)
+        missing_tools = requirements.get("missing_tools", [])
+        missing_files = requirements.get("missing_files", [])
+        queue_depth = len(state.get("pending_action_queue", []))
+        purged_finishes = self._purge_queued_finish_actions(state)
+        fingerprint = (
+            f"{requirements.get('mission_id', 0)}|{','.join(str(item) for item in missing_tools)}|"
+            f"{','.join(str(item) for item in missing_files)}|"
+            f"{self._planner_action_preview(rejected_action)}"
+        )
+        last_fingerprint = str(state["policy_flags"].get("last_finish_rejection_fingerprint", ""))
+        streak = 1 if fingerprint != last_fingerprint else int(
+            state["policy_flags"].get("finish_rejection_streak", 0)
+        ) + 1
+        state["policy_flags"]["last_finish_rejection_fingerprint"] = fingerprint
+        state["policy_flags"]["finish_rejection_streak"] = streak
+
+        self.logger.warning(
+            (
+                "FINISH REJECTED step=%s source=%s reason=incomplete_requirements "
+                "finish_rejected=%s queue_depth=%s purged_finishes=%s missing_tools=%s "
+                "missing_files=%s"
+            ),
+            state["step"],
+            source,
+            finish_rejected,
+            queue_depth,
+            purged_finishes,
+            missing_tools,
+            missing_files,
+        )
+
+        next_mission = self._next_incomplete_mission(state)
+        if finish_rejected > self.max_finish_rejections:
+            fail_message = (
+                "Run stopped: planner repeatedly requested finish while tasks remained "
+                f"incomplete (next task: {next_mission or 'unknown'})."
+            )
+            state["messages"].append({"role": "system", "content": fail_message})
+            state["pending_action"] = {"action": "finish", "answer": fail_message}
+            self.checkpoint_store.save(
+                run_id=state["run_id"],
+                step=state["step"],
+                node_name=f"plan_{source}_finish_fail_closed",
+                state=state,
+            )
+            return state
+
+        fallback_action = self._deterministic_fallback_action(state)
+        if fallback_action is not None and fallback_action.get("action") != "finish":
+            state["messages"].append(
+                {
+                    "role": "system",
+                    "content": (
+                        "Finish rejected: missions remain incomplete. "
+                        f"Next task: {next_mission or 'unknown'}. "
+                        "Orchestrator selected a deterministic recovery action."
+                    ),
+                }
+            )
+            self._log_planner_output(
+                state=state,
+                source=f"{source}_finish_recover",
+                action=fallback_action,
+                queue_remaining=len(state.get("pending_action_queue", [])),
+            )
+            state["pending_action"] = fallback_action
+            self.checkpoint_store.save(
+                run_id=state["run_id"],
+                step=state["step"],
+                node_name=f"plan_{source}_finish_recover",
+                state=state,
+            )
+            return state
+
+        state["messages"].append(
+            {
+                "role": "system",
+                "content": (
+                    "Finish rejected: missions remain incomplete. "
+                    f"Next task: {next_mission or 'unknown'}"
+                ),
+            }
+        )
+        state["pending_action"] = None
+        self.checkpoint_store.save(
+            run_id=state["run_id"],
+            step=state["step"],
+            node_name=f"plan_{source}_finish_rejected",
+            state=state,
+        )
+        return state
 
     def _generate_with_hard_timeout(self, messages: list[dict[str, str]]) -> str:
         """Protect planner generate() call with a hard wall-clock timeout."""

@@ -8,9 +8,11 @@ before each node executes.
 """
 
 import json
+import operator
+import os
 from datetime import UTC, datetime
 from hashlib import sha256
-from typing import Any, Literal, TypedDict, cast
+from typing import Annotated, Any, Literal, TypedDict, cast
 from uuid import uuid4
 
 
@@ -60,22 +62,24 @@ class RunState(TypedDict):
     # Logical mission tracking used for per-mission reporting.
     completed_tasks: list[str]
     # Tool execution audit trail.
-    tool_history: list[ToolRecord]
-    memo_events: list[MemoEvent]
+    tool_history: Annotated[list[ToolRecord], operator.add]  # type: ignore[misc]
+    memo_events: Annotated[list[MemoEvent], operator.add]  # type: ignore[misc]
     # Retry counters for diagnostics and guardrail enforcement.
     retry_counts: dict[str, int]
     policy_flags: dict[str, Any]
     # Duplicate-call prevention and tool usage telemetry.
-    seen_tool_signatures: list[str]
+    seen_tool_signatures: Annotated[list[str], operator.add]  # type: ignore[misc]
     tool_call_counts: dict[str, int]
     # Human-readable mission-level report data.
     missions: list[str]
-    mission_reports: list[MissionReport]
+    mission_reports: Annotated[list[MissionReport], operator.add]  # type: ignore[misc]
     active_mission_index: int
     active_mission_id: int
     mission_contracts: list[dict[str, Any]]
     # Structured plan from mission parser (serialized StructuredPlan).
     structured_plan: dict[str, Any] | None
+    # Explicit rerun scope metadata from reviewer/CLI.
+    rerun_context: dict[str, Any]
     # Planned action and terminal answer.
     pending_action: dict[str, Any] | None
     pending_action_queue: list[dict[str, Any]]
@@ -138,6 +142,7 @@ def new_run_state(system_prompt: str, user_input: str, run_id: str | None = None
         "active_mission_id": 0,
         "mission_contracts": [],
         "structured_plan": None,
+        "rerun_context": {},
         "pending_action": None,
         "pending_action_queue": [],
         "final_answer": "",
@@ -192,6 +197,8 @@ def ensure_state_defaults(state: RunState | dict[str, Any], *, system_prompt: st
         state_dict["mission_contracts"] = []
     if "structured_plan" not in state_dict:
         state_dict["structured_plan"] = None
+    if "rerun_context" not in state_dict:
+        state_dict["rerun_context"] = {}
     if "pending_action" not in state_dict:
         state_dict["pending_action"] = None
     if "pending_action_queue" not in state_dict:
@@ -229,5 +236,14 @@ def ensure_state_defaults(state: RunState | dict[str, Any], *, system_prompt: st
     policy_flags.setdefault("cache_reuse_misses", 0)
     policy_flags.setdefault("cache_reuse_attempted", [])
     policy_flags.setdefault("planner_timeout_mode", False)
+
+    # Message compaction — sliding window, drop oldest non-system messages
+    _threshold = int(os.getenv("P1_MESSAGE_COMPACTION_THRESHOLD", "40"))
+    _messages = state_dict.get("messages", [])
+    if len(_messages) > _threshold:
+        _system_msgs = [m for m in _messages if m.get("role") == "system"]
+        _non_system = [m for m in _messages if m.get("role") != "system"]
+        _keep_count = max(0, _threshold - len(_system_msgs))
+        state_dict["messages"] = _system_msgs + _non_system[-_keep_count:]
 
     return cast(RunState, state_dict)

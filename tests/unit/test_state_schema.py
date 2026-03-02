@@ -9,13 +9,10 @@ from __future__ import annotations
 import operator
 import typing
 
-import pytest
-
 from agentic_workflows.orchestration.langgraph.state_schema import (
     RunState,
     ensure_state_defaults,
 )
-
 
 # ---------------------------------------------------------------------------
 # Reducer annotation tests (Task 1)

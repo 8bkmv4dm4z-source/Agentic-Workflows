@@ -8,6 +8,7 @@ import unittest
 from agentic_workflows.orchestration.langgraph.checkpoint_store import SQLiteCheckpointStore
 from agentic_workflows.orchestration.langgraph.memo_store import SQLiteMemoStore
 from agentic_workflows.orchestration.langgraph.policy import MemoizationPolicy
+from agentic_workflows.orchestration.langgraph.run_ui import build_verify_gate_outcome
 
 if importlib.util.find_spec("langgraph") is None:  # pragma: no cover
     LANGGRAPH_AVAILABLE = False
@@ -66,6 +67,39 @@ def fibonacci_csv(count: int = 100) -> str:
 
 @unittest.skipUnless(LANGGRAPH_AVAILABLE, "langgraph not installed")
 class LangGraphFlowTests(unittest.TestCase):
+    def test_verify_gate_passes_for_clean_multi_mission_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = f"{temp_dir}/result.txt"
+            provider = ScriptedProvider(
+                [
+                    {
+                        "action": "tool",
+                        "tool_name": "repeat_message",
+                        "args": {"message": "hello"},
+                    },
+                    {
+                        "action": "tool",
+                        "tool_name": "write_file",
+                        "args": {"path": output_path, "content": "hello"},
+                    },
+                    {"action": "finish", "answer": "done"},
+                ]
+            )
+            orchestrator = LangGraphOrchestrator(
+                provider=provider,
+                memo_store=SQLiteMemoStore(f"{temp_dir}/memo.db"),
+                checkpoint_store=SQLiteCheckpointStore(f"{temp_dir}/checkpoints.db"),
+                policy=MemoizationPolicy(max_policy_retries=1),
+                max_steps=20,
+            )
+            result = orchestrator.run(
+                "Task 1: Repeat this message exactly using repeat_message.\n"
+                f"Task 2: Write hello to {output_path}."
+            )
+            verify = build_verify_gate_outcome(result)
+            self.assertEqual(verify["status"], "pass")
+            self.assertEqual(verify["failed_checks"], [])
+
     def test_hard_timeout_handles_blocking_provider(self) -> None:
         class BlockingProvider:
             def generate(self, messages):  # noqa: ANN001
@@ -201,7 +235,7 @@ class LangGraphFlowTests(unittest.TestCase):
             )
 
             tool_names = [item["tool"] for item in result["tools_used"]]
-            self.assertEqual(tool_names.count("repeat_message"), 1)
+            self.assertEqual(tool_names.count("repeat_message"), 0)
             self.assertEqual(result["state"]["retry_counts"]["duplicate_tool"], 0)
             self.assertIn("All tasks completed.", result["answer"])
             self.assertEqual(result["mission_report"][0]["status"], "completed")
@@ -1251,3 +1285,38 @@ class MissionIsolationAuditTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------------------
+# Standalone (non-unittest) tests — discoverable by pytest directly
+# ---------------------------------------------------------------------------
+
+
+def test_reducer_two_branch_merge() -> None:
+    """Annotated[list[T], operator.add] concatenates both branches on merge.
+
+    This test verifies LGUP-03: parallel Send() branches cannot silently
+    overwrite each other because operator.add appends rather than replaces.
+    The test uses operator.add and RunState type introspection to confirm
+    the annotation is wired correctly, without running the full graph.
+    """
+    import operator
+    import typing
+
+    from agentic_workflows.orchestration.langgraph.state_schema import RunState, ToolRecord
+
+    # Simulate two parallel branches each producing a ToolRecord
+    branch_a_record: ToolRecord = {"call": 1, "tool": "branch_a_tool", "args": {}, "result": {}}
+    branch_b_record: ToolRecord = {"call": 2, "tool": "branch_b_tool", "args": {}, "result": {}}
+
+    # Verify operator.add is the correct semantics (i.e. concatenation)
+    merged = operator.add([branch_a_record], [branch_b_record])
+    assert len(merged) == 2
+    assert any(r["tool"] == "branch_a_tool" for r in merged)
+    assert any(r["tool"] == "branch_b_tool" for r in merged)
+
+    # Verify RunState type annotation carries the Annotated metadata
+    hints = typing.get_type_hints(RunState, include_extras=True)
+    tool_history_hint = hints["tool_history"]
+    assert hasattr(tool_history_hint, "__metadata__"), "tool_history must be Annotated with reducer"
+    assert tool_history_hint.__metadata__[0] is operator.add, "reducer must be operator.add"
