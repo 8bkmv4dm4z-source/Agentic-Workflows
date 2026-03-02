@@ -220,3 +220,44 @@ class SQLiteMemoStore:
             len(entries),
         )
         return entries
+
+    def delete(
+        self, *, run_id: str, key: str, namespace: str = "run", value_hash: str | None = None
+    ) -> int:
+        """Delete memo entries by key (optionally constrained by hash)."""
+        with self._connect() as conn:
+            if value_hash:
+                cursor = conn.execute(
+                    """
+                    DELETE FROM memo_entries
+                    WHERE run_id = ? AND namespace = ? AND key = ? AND value_hash = ?
+                    """,
+                    (run_id, namespace, key, value_hash),
+                )
+            else:
+                cursor = conn.execute(
+                    """
+                    DELETE FROM memo_entries
+                    WHERE run_id = ? AND namespace = ? AND key = ?
+                    """,
+                    (run_id, namespace, key),
+                )
+            deleted = int(cursor.rowcount or 0)
+        self.logger.info(
+            "MEMO DELETE run_id=%s namespace=%s key=%s value_hash=%s deleted=%s",
+            run_id,
+            namespace,
+            key,
+            value_hash or "",
+            deleted,
+        )
+        return deleted
+
+    def get_cache_value(self, *, key: str, run_id: str = "shared") -> dict[str, Any] | None:
+        """Return cached dict payload for shared cache keys, if present."""
+        lookup = self.get(run_id=run_id, key=key, namespace="cache")
+        if not lookup.found:
+            return None
+        if not isinstance(lookup.value, dict):
+            return None
+        return lookup.value

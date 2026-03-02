@@ -41,6 +41,12 @@ class MissionReport(TypedDict):
     used_tools: list[str]
     tool_results: list[dict[str, Any]]
     result: str
+    status: Literal["pending", "in_progress", "completed", "failed"]
+    required_tools: list[str]
+    required_files: list[str]
+    written_files: list[str]
+    expected_fibonacci_count: int | None
+    contract_checks: list[str]
 
 
 class RunState(TypedDict):
@@ -64,11 +70,23 @@ class RunState(TypedDict):
     missions: list[str]
     mission_reports: list[MissionReport]
     active_mission_index: int
+    active_mission_id: int
+    mission_contracts: list[dict[str, Any]]
     # Structured plan from mission parser (serialized StructuredPlan).
     structured_plan: dict[str, Any] | None
     # Planned action and terminal answer.
     pending_action: dict[str, Any] | None
+    pending_action_queue: list[dict[str, Any]]
     final_answer: str
+    # Post-run audit report (set by _finalize).
+    audit_report: dict[str, Any] | None
+    # Multi-agent handoff state.
+    handoff_queue: list[dict[str, Any]]
+    handoff_results: list[dict[str, Any]]
+    active_specialist: str
+    # Token budget tracking.
+    token_budget_remaining: int
+    token_budget_used: int
 
 
 def utc_now_iso() -> str:
@@ -97,6 +115,7 @@ def new_run_state(system_prompt: str, user_input: str, run_id: str | None = None
             "memo_policy": 0,
             "provider_timeout": 0,
             "content_validation": 0,
+            "finish_rejected": 0,
         },
         "policy_flags": {
             "memo_required": False,
@@ -106,6 +125,7 @@ def new_run_state(system_prompt: str, user_input: str, run_id: str | None = None
             "memo_retrieve_misses": 0,
             "cache_reuse_hits": 0,
             "cache_reuse_misses": 0,
+            "cache_reuse_attempted": [],
             "planner_timeout_mode": False,
         },
         "seen_tool_signatures": [],
@@ -113,9 +133,18 @@ def new_run_state(system_prompt: str, user_input: str, run_id: str | None = None
         "missions": [],
         "mission_reports": [],
         "active_mission_index": -1,
+        "active_mission_id": 0,
+        "mission_contracts": [],
         "structured_plan": None,
         "pending_action": None,
+        "pending_action_queue": [],
         "final_answer": "",
+        "audit_report": None,
+        "handoff_queue": [],
+        "handoff_results": [],
+        "active_specialist": "supervisor",
+        "token_budget_remaining": 100_000,
+        "token_budget_used": 0,
     }
 
 
@@ -155,12 +184,30 @@ def ensure_state_defaults(state: RunState | dict[str, Any], *, system_prompt: st
         state_dict["mission_reports"] = []
     if "active_mission_index" not in state_dict:
         state_dict["active_mission_index"] = -1
+    if "active_mission_id" not in state_dict:
+        state_dict["active_mission_id"] = 0
+    if "mission_contracts" not in state_dict:
+        state_dict["mission_contracts"] = []
     if "structured_plan" not in state_dict:
         state_dict["structured_plan"] = None
     if "pending_action" not in state_dict:
         state_dict["pending_action"] = None
+    if "pending_action_queue" not in state_dict:
+        state_dict["pending_action_queue"] = []
     if "final_answer" not in state_dict:
         state_dict["final_answer"] = ""
+    if "audit_report" not in state_dict:
+        state_dict["audit_report"] = None
+    if "handoff_queue" not in state_dict:
+        state_dict["handoff_queue"] = []
+    if "handoff_results" not in state_dict:
+        state_dict["handoff_results"] = []
+    if "active_specialist" not in state_dict:
+        state_dict["active_specialist"] = "supervisor"
+    if "token_budget_remaining" not in state_dict:
+        state_dict["token_budget_remaining"] = 100_000
+    if "token_budget_used" not in state_dict:
+        state_dict["token_budget_used"] = 0
 
     retry_counts = state_dict["retry_counts"]
     retry_counts.setdefault("invalid_json", 0)
@@ -168,6 +215,7 @@ def ensure_state_defaults(state: RunState | dict[str, Any], *, system_prompt: st
     retry_counts.setdefault("provider_timeout", 0)
     retry_counts.setdefault("duplicate_tool", 0)
     retry_counts.setdefault("content_validation", 0)
+    retry_counts.setdefault("finish_rejected", 0)
 
     policy_flags = state_dict["policy_flags"]
     policy_flags.setdefault("memo_required", False)
@@ -177,6 +225,7 @@ def ensure_state_defaults(state: RunState | dict[str, Any], *, system_prompt: st
     policy_flags.setdefault("memo_retrieve_misses", 0)
     policy_flags.setdefault("cache_reuse_hits", 0)
     policy_flags.setdefault("cache_reuse_misses", 0)
+    policy_flags.setdefault("cache_reuse_attempted", [])
     policy_flags.setdefault("planner_timeout_mode", False)
 
     return cast(RunState, state_dict)

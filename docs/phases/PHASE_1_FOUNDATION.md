@@ -55,11 +55,25 @@ Transform the prototype repo into a properly packaged, testable, lintable Python
 
 ## Acceptance Criteria
 - [x] `pip install -e .` works
-- [x] All 94+ tests pass under new structure
-- [ ] `ruff check` clean
+- [x] All 165 tests pass (`pytest tests/ -q`)
+- [x] `ruff check` clean
 - [ ] Langfuse traces visible for demo run (if configured)
 - [x] `CLAUDE.md` < 150 lines
 - [x] No content duplication between `CLAUDE.md` and `AGENTS.md`
+
+## Post-Audit Bugfixes (2026-03-01)
+
+Five bugs found from `lastRun.txt` after the auditor was first exercised live. All fixed:
+
+| Bug | File | Fix |
+|-----|------|-----|
+| A — `[r]` re-ran WARN missions | `run.py` | Filter to `level == "fail"` only |
+| B — Re-run lost sub-task context | `run.py` | Extract full task block from `original_input` via regex |
+| C — Double `"Task N:"` prefix | `run.py` | Extracted block already has prefix; fallback guards against double-add |
+| D — `tool_presence` false positives | `mission_auditor.py` | Group-based warn: emit only when **no** tool in the group ran |
+| E — Fibonacci validator on unrelated writes | `graph.py` | Path guard: skip validation unless `"fib"` is in the file path |
+
+New test files: `tests/unit/test_run_helpers.py` (+11 tests), updated `tests/unit/test_mission_auditor.py` (+3 tests).
 
 ## Risks
 | Risk | Severity | Mitigation |

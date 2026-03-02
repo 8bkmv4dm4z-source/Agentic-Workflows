@@ -303,7 +303,201 @@ Regression test:
 | `json_parser` | JSON operations |
 | `regex_matcher` | Regex operations |
 
-## 15) Prompt plan for next iteration
+## 15) Bugfixes — 2026-03-01
+
+### What was fixed
+
+**1. Action Queue (pending_action_queue)**
+- Multi-action batching: planner can emit multiple JSON actions in one response; all are parsed and enqueued (`_extract_all_json_objects`, `_parse_all_actions_json` in `graph.py`).
+- Queue-pop: subsequent plan nodes pop the next action from the queue instead of calling the provider.
+- Timeout clear: when timeout mode is entered, the queue is drained to prevent stale queued actions from executing out of order.
+- State fields: `pending_action_queue: list[dict]` in `state_schema.py`; initialized to `[]` in `new_run_state` and `ensure_state_defaults`.
+
+**2. Recursion limit ×3 scaling**
+- `self._compiled.invoke(state, config={"recursion_limit": self.max_steps * 3})` in `graph.py` line ~168.
+- Prevents premature recursion limit errors on longer runs without inflating `max_steps`.
+
+**3. Mission completion write-guard**
+- Non-`write_file` tools are blocked from claiming write-keyword missions (preventing early mission completion on a `memoize` call).
+- Implemented in `graph.py:_record_mission_tool_event`.
+
+**4. Post-run Mission Auditor (`mission_auditor.py`)**
+- New file: `src/agentic_workflows/orchestration/langgraph/mission_auditor.py`
+- Deterministic, keyword-driven post-run checks — no LLM calls.
+- Six check types: `tool_presence`, `count_match`, `chain_integrity`, `fibonacci_count`, `mean_reuse`, `write_file_success`.
+- `chain_integrity` check catches the Mission 2 bug: `data_analysis` returned 12 `non_outliers` but `sort_array` received 11 (150 dropped by planner).
+- `fibonacci_count` check catches the Mission 5 bug: fib50.txt had 339 chars, expected ≥ 420 for 50 numbers.
+- Called in `graph.py:_finalize()` after mission logging; result stored in `state["audit_report"]` and returned in `run()`.
+- Unit tests: `tests/unit/test_mission_auditor.py`
+
+**5. Dynamic Fibonacci validator**
+- `graph.py:_validate_tool_result_for_active_mission` now extracts N from the mission text via `_extract_fibonacci_count()` instead of hardcoding 100.
+- Validates fib-50, fib-30, etc. correctly at write time.
+
+### Test count
+151 tests passing (0 failures, 0 errors). New tests in `tests/unit/test_mission_auditor.py`.
+
+---
+
+## 18) Audit/Re-run System Bugfixes — 2026-03-01 (post-live-run)
+
+Five bugs found from `lastRun.txt` analysis after the auditor was first exercised in a live run.
+
+### Bug A — `[r]` re-ran WARN missions (user-confirmed)
+
+**File:** `run.py:_get_failed_missions`
+
+**Problem:** Filter was `f.get("level") in ("fail", "warn")` — pressing `[r]` re-ran any mission that had a warning, even if nothing actually failed.
+
+**Fix:** Changed to `f.get("level") == "fail"`. Only hard failures trigger re-run.
+
+---
+
+### Bug B — Re-run lost sub-task context (user-confirmed)
+
+**File:** `run.py:_build_rerun_input`
+
+**Problem:** Used `r.get("mission", "")` which contains only the short mission title (e.g. `"Task 2: Data Analysis and Sorting"`). All sub-task data (inline lists, JSON samples, text blocks) from the original prompt was stripped.
+
+**Fix:** Added `original_input: str = ""` parameter. For each failed mission, extracts the full task block using:
+```python
+pattern = rf"Task\s+{mid}\s*:.*?(?=Task\s+\d+\s*:|$)"
+re.search(pattern, original_input, re.DOTALL | re.IGNORECASE)
+```
+The extracted block is used verbatim — all sub-tasks and inline data are preserved. Falls back to `r.get("mission")` if extraction fails.
+
+`_correction_loop` updated to pass `original_input` through to `_build_rerun_input`.
+
+---
+
+### Bug C — Double `"Task N:"` prefix (log-confirmed)
+
+**Evidence:** `lastRun.txt` line 68 showed `"Task 1: Task 1: Text Analysis Pipeline"`.
+
+**Problem:** `_build_rerun_input` prepended `f"Task {mid}: {mission}"` but `mission` already started with `"Task 1:"`.
+
+**Fix:** Bug B's extraction naturally avoids this (the extracted block already starts with `"Task N:"`). In the fallback path, a guard prevents double-prefix:
+```python
+if not re.match(r"Task\s+\d+", mission_text, re.IGNORECASE):
+    mission_text = f"Task {mid}: {mission_text}"
+```
+
+---
+
+### Bug D — `tool_presence` false positives (log-confirmed)
+
+**File:** `mission_auditor.py:_check_tool_presence`
+
+**Evidence:** Run had 0/5 clean missions. The `"analysis"` keyword maps to `["text_analysis", "data_analysis"]`. Any mission with "analysis" in its text got warned about both tools even when one of them ran.
+
+**Problem:** Old logic: iterate each suggested tool and warn if absent. This warned about `data_analysis` for a mission that used `text_analysis` (and vice versa) — treating alternatives as requirements.
+
+**Fix:** Group-based logic with `frozenset` deduplication. A finding is only emitted when **none** of the tools in a keyword group were used:
+```python
+if not any(t in used_tools for t in tool_group):
+    # warn: none from this group ran
+```
+Multiple keywords mapping to the same tool group (e.g. `"analyze"` + `"analysis"`) produce at most one finding via `checked_groups: set[frozenset[str]]`.
+
+---
+
+### Bug E — Fibonacci validator fired on unrelated writes (log-confirmed)
+
+**File:** `graph.py:_validate_tool_result_for_active_mission`
+
+**Evidence:** Tool #6 was `write_file` for `analysis_results.txt` but was rejected with `content_validation_failed`. Tasks 1–4 each completed with one tool, so Task 5 (Fibonacci) became the active mission. When `analysis_results.txt` was written, the validator applied fibonacci integer-sequence validation to non-integer content.
+
+**Problem:** No path guard — any `write_file` call while a fibonacci mission was active would be validated as fibonacci content.
+
+**Fix:** Added path guard before the mission text check:
+```python
+path = str(tool_args.get("path", "")).lower()
+if "fib" not in path:
+    return None  # not a fibonacci file — skip content validation
+```
+
+---
+
+### Test count
+165 tests passing (0 failures, 0 errors). +14 new tests:
+- `tests/unit/test_run_helpers.py` — 11 tests covering Bugs A, B, C
+- `tests/unit/test_mission_auditor.py` — 3 new tests covering Bug D group logic
+
+### Quick run commands (updated paths)
+
+```bash
+# All tests
+.venv/bin/python -m pytest tests/ -q
+
+# Unit tests only
+.venv/bin/python -m pytest tests/unit/ -q
+
+# Integration tests
+.venv/bin/python -m pytest tests/integration/ -q
+
+# Main run (with audit panel)
+.venv/bin/python -m agentic_workflows.orchestration.langgraph.run
+
+# Audit summary (all past runs)
+.venv/bin/python -m agentic_workflows.orchestration.langgraph.run_audit
+```
+
+---
+
+## 19) ReviewLastRun Skill Analysis — 2026-03-01
+
+Skill located at `.claude/skills/review-last-run.md`. Run against `lastRun.txt` (two runs: initial + `[r]` re-run).
+
+### Run 1 (4d82488c) — Initial run
+
+**Mission attribution: BROKEN across all missions.**
+- Mission 1 only gets `text_analysis`. Missions 2, 3, 4 each get one tool from Task 1/2 (sequential attribution).
+- Mission 5 becomes a catch-all for all remaining tools (15 tools from Tasks 2–5).
+- Root cause: `_record_mission_tool_event` completes a mission on the first tool that matches, in execution order. When the planner emits a large multi-task action batch, missions 1–4 each get the first tool that runs, leaving everything else to mission 5.
+
+**fib50.txt (Run 1):** Written with 48 numbers and malformed content (`'0, 1, 1, 2 5, , 3,8, ...'` — space-before-comma, empty token). Cached as `hash=8ae0dd6e...`. POISONED.
+
+**Finish claim:** Planner constructed a plausible-sounding answer from memory/context, not from actual mission tracking. "All 5 tasks completed" is false — Task 5 has 48 numbers and malformed CSV.
+
+**Audit accuracy:** Passed=1, warned=4, failed=1 (chain_integrity M5). Correct that chain failed, but misses M2/M3/M4 attribution failures entirely.
+
+### Run 2 (c86dcbf7) — Re-run (triggered before today's Bug B/C fix)
+
+**fib50.txt written with Task 4 regex output:** At step 11, the planner's queued batch included `write_file fib50.txt` with `content='1, 2, 3, 5, 10, 45.99, 123, 229.95'` — the numbers extracted by `regex_matcher` from Task 4's text. Cached as `hash=748caf86...`. POISONED.
+
+**Content validator silently dropped:** `content_validation_retries=0` despite `45.99` being non-integer. The validator fires and returns an error string, but when the action comes from the queue (not from a live planner call), the retry feedback path is suppressed. **Bug F2: content validation errors on queue-popped actions are silently dropped.**
+
+**Premature finish via timeout:** Planner timed out at step 12. `PLAN TIMEOUT FALLBACK` memoized the (wrong) fib50.txt result. `PLAN TIMEOUT MODE` immediately synthesized `finish` citing `result='memoized'` as proof of completion. **Bug F3: finish criterion in timeout mode is "memoize returned success" regardless of content.**
+
+**Audit false clean:** Mission 5 showed PASS. `_check_fibonacci_file_size` skipped because the mission title `"Task 5: Fibonacci with Analysis"` has no digit count — the "first 50" sub-task text was stripped from the re-run prompt. **Bug F5: fibonacci count check requires digit in mission title, not tool history.**
+
+### Open Bugs Identified (not yet fixed)
+
+| ID | Description | File |
+|----|-------------|------|
+| F1 | Mission attribution is sequential, not semantic — multi-task batches pollute all mission reports | `graph.py:_record_mission_tool_event` |
+| F2 | Content validation errors on queue-popped actions silently dropped | `graph.py` execute node queue-pop path |
+| F3 | Timeout-mode finish uses `memoize returned success` as completion proof | `graph.py` timeout fallback / finalize |
+| F4 | Cache stores any content without correctness check — poisoning on wrong writes | `graph.py` cache write path |
+| F5 | `_check_fibonacci_file_size` requires count digit in mission title — misses re-run scenario | `mission_auditor.py` |
+
+---
+
+## 16) Recommended Next Steps
+
+1. **Chain integrity planner hint** — when a tool result's list is about to be passed to the next tool, inject a system message pinning the exact count: `"Use exactly these N items from the previous result: [...]"`. This prevents the 150-drop class of bugs at the source (planner transcription error) rather than detecting them post-hoc.
+
+2. **Read_file tool registration** — `tools/read_file.py` exists but is not registered in `tools_registry.py`. Adding it lets the planner (and the auditor) verify file contents post-write, closing the loop on write correctness.
+
+3. **Structured result propagation** — add a `use_result` argument to tools that accept a prior tool's output by reference (tool history index). This removes the transcription error vector entirely: the planner passes an index instead of re-typing a list.
+
+4. **Mission auditor surfaced in run console** — the auditor is now integrated; the `AUDIT REVIEW` panel in `run.py` surfaces `PASS/WARN/FAIL` interactively. For CI/non-interactive runs, findings are appended to `lastRun.txt` automatically.
+
+5. **Phase 2 target — multi-agent orchestration** — one planner agent + N specialized executor agents, each owning a domain (text, data, file I/O). Eliminates cross-domain planner confusion and allows parallel mission execution with domain-expert sub-agents.
+
+---
+
+## 17) Prompt plan for next iteration
 
 Use this exact user prompt template when running `execution.langgraph.run`:
 
@@ -320,3 +514,46 @@ Use this exact user prompt template when running `execution.langgraph.run`:
    - "If instructed by system policy, call `memoize` immediately before any other tool."
 6. Add violation fallback:
    - "If unsure, output `finish` with an error summary in valid JSON rather than non-JSON text."
+
+---
+
+## 20) LastRun Communication Analysis — 2026-03-02
+
+Analysis of `lastRun.txt` covering two runs (initial d8c070e3 + re-run 48ede961).
+
+### Run 1 (d8c070e3): 5 missions, 21 tool calls, 18 steps
+
+| Mission | Status | Summary |
+|---------|--------|---------|
+| M1: Text Analysis | PASS | `text_analysis` → `string_ops` → `write_file` all succeeded. 15 chars to `analysis_results.txt`. |
+| M2: Data Analysis | WARN | Pipeline ran (`data_analysis` ×2 → `sort_array` → `math_stats`). `math_stats` mean computed on 5 items instead of 12 non_outliers (planner passed subset). |
+| M3: JSON Processing | PASS | `json_parser` → `regex_matcher` → `sort_array` → `write_file`. 17 chars to `users_sorted.txt`. |
+| M4: Pattern Matching | FAIL | `regex_matcher` extracted 5 numbers correctly. `math_stats` sum=413.94, mean=82.788. But `write_file` failed 2× with `content_validation_failed` — planner formatted content with bracket prefix `'[123'`. Pattern report never written. |
+| M5: Fibonacci | FAIL | `write_file` failed with `content_validation_failed` — planner sent non-CSV content. `fib50.txt` never written. 0 integers. |
+
+**Communication patterns:**
+1. **Content formatting bottleneck** — 3 `content_validation_retries`. Planner can extract correct numbers via tools but cannot format `write_file` content string correctly.
+2. **No timeout mode** — Both runs completed without `PLAN TIMEOUT MODE`. Honest fail-closed: `"Run failed closed after repeated deterministic content validation failures."`
+3. **Mean-reuse data loss** — M2 `math_stats` received 5 items instead of 12 non_outliers. Planner transcription error (same class as the old 150-drop bug).
+4. **Retry distribution:** `content_validation=3`, `duplicate_tool=1`, all others 0.
+
+### Run 2 (48ede961): Re-run of 3 failed missions (M3, M4, M5)
+
+| Re-run Mission | Status | Summary |
+|----------------|--------|---------|
+| M3 re-run | PASS | Clean execution. |
+| M4 re-run | PASS | Clean execution. |
+| M5 re-run | FAIL | `write_file` failed 3× with `content_validation_failed`. Planner still cannot format fibonacci CSV. |
+
+**False positives in audit:**
+- `repeat_message` flagged as missing in M5 — the "echo" sub-keyword in mission text maps to `repeat_message` via `_TOOL_KEYWORD_MAP`, but fibonacci missions don't need `repeat_message`.
+- Mission 3 audit found `pattern_report.txt` non-numeric token — this is cross-contamination from M4's `write_file` call being attributed to M3's audit scope during run 1.
+
+### Open issues from this run
+
+| Issue | Severity | Component |
+|-------|----------|-----------|
+| Planner cannot format `write_file` content as valid CSV/report | High | Planner prompt / content validation |
+| `math_stats` mean computed on planner-transcribed subset | Medium | Planner data propagation |
+| `repeat_message` false positive in fibonacci mission audit | Low | `mission_auditor.py` keyword filter |
+| Cross-mission `pattern_report.txt` audit contamination | Low | Audit scope isolation |

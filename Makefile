@@ -1,4 +1,4 @@
-.PHONY: install run test lint format typecheck audit clean
+.PHONY: install run test lint format typecheck audit clean clean-artifacts
 
 install:
 	pip install -e ".[dev]"
@@ -30,3 +30,6 @@ audit:
 clean:
 	rm -rf .tmp/ dist/ *.egg-info src/*.egg-info
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+
+clean-artifacts:
+	rm -f lastRun.txt analysis_results.txt pattern_report.txt users_sorted.txt fib*.txt

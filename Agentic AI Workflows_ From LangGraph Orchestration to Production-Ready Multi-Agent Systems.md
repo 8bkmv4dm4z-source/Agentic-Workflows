@@ -337,137 +337,121 @@ OWASP identifies six top threats for agent systems: prompt injection, tool abuse
 
 ## 🔍 7. Repo audit and protocol check
 
-### Current state snapshot (as of March 1, 2026)
+### Current state assessment
 
-Baseline engineering hygiene is mostly in place (package layout, tests, lint, CI workflow), but this repo still under-leverages the high-impact platform stack identified earlier in this report.
+The repo demonstrates awareness of modern agentic conventions — having both `AGENTS.md` and `CLAUDE.md` puts it ahead of most repositories. The `directives/`, `execution/`, and `tools/` structure follows sensible separation of concerns. CI/CD via `.github/workflows/` and test infrastructure in `tests/` show engineering discipline.
 
-- `pytest`: green (165 tests)
-- `ruff`: green
-- `mypy`: red (42 errors in 9 files)
+However, **significant gaps prevent this from being portfolio-ready** for GenAI roles.
 
-### Capability maturity matrix (impact-focused)
+### Critical issues to fix
 
-| Capability | Evidence from this research | Suggested tool/workflow | Current state | Highest-impact next move |
-|---|---|---|---|---|
-| Typed orchestration | LangGraph is the production baseline; v1.0 stable and widely adopted | `StateGraph` + typed `RunState` + conditional edges + checkpoints | Core LangGraph flow exists | Add explicit evaluator/replanner loop as first-class nodes |
-| Tool standardization | MCP is the interoperability layer ("USB-C for tools") | MCP server surface for deterministic tools | Tools exist, MCP surface not explicit | Publish tool registry through MCP-compatible contracts |
-| Memory reliability | Multi-agent failures are mostly memory failures | Layered memory: working + episodic + semantic + procedural (`mem0ai`) | Working memory exists in run state | Add memory adapter interface and persistent episodic store |
-| Observability + evals | Evals should be routine like unit tests | Langfuse traces + eval harness in CI | Observability module exists; type issues remain | Wire optional Langfuse cleanly and add regression eval suite |
-| Cost controls | Model routing can cut cost ~63%; prompt caching can cut repeated input cost ~90% | Router policy + cache keys + fallback chain | Provider abstraction exists | Add policy-driven model routing and caching strategy |
-| Agentic CI/CD | Deterministic CI for builds/tests, agents for judgment tasks | Split pipelines: deterministic gates + agentic review/docs workflows | `claude.yml` exists | Add dedicated deterministic gate workflow + agentic doc/review jobs |
+**Root-level Python files** (`errors.py`, `logger.py`, `schemas.py`) are the biggest structural anti-pattern. These aren't importable as a proper package, can't be installed with `pip install -e .`, and signal inexperience to reviewers. Move them into `src/agentic_workflows/` or `agentic_workflows/` with an `__init__.py`.
 
-### Architectural builds to prioritize
+**No `pyproject.toml`** — this is the PEP 517/518/621 standard and is expected in any modern Python project. It consolidates build system, dependencies, and tool configs (ruff, mypy, pytest) into one file. Keep `requirements.txt` as a pinned lockfile generated from `pyproject.toml`.
 
-#### Build A: Workflow-first reliability core
+**No `LICENSE`** — required for open source and checked by recruiters. Add MIT or Apache-2.0.
 
-Start from Anthropic's progression: prompt chaining -> routing -> parallelization -> orchestrator-workers -> evaluator-optimizer. Treat this as a graph pattern library, not ad-hoc control flow.
+**Duplicate test directories** (`tests/` and `test/tool_tests/`) violates the single-directory convention and creates confusion. Consolidate into `tests/unit/`, `tests/integration/`, and `tests/tools/`.
 
-**Target graph (single mission):**  
-`plan -> route -> execute_parallel -> evaluate -> replan_or_finalize`
+**`fib.txt` in root** is clearly a test/debug artifact. Delete it or move to `tests/fixtures/`.
 
-**Primary outputs:**
-- Reusable `WorkflowPattern` abstractions in `orchestration/langgraph/`
-- Structured evaluator outputs (`is_complete`, `defects`, `next_actions`)
-- Retry budget and termination policy encoded in state
+### The hybrid Python + Node.js question
 
-#### Build B: Supervisor + specialist handoff architecture
+Having `package.json` alongside Python is **acceptable** if justified — common reasons include MCP servers in TypeScript, Playwright browser automation, or front-end components. The **18.8% Jupyter Notebook** content is fine for a data systems engineering student. Document the dual-runtime setup in AGENTS.md to make it intentional rather than accidental.
 
-Implement hierarchical topology first (higher auditability), then optional peer handoffs for narrow tasks.
+### Recommended target structure
 
-**Target graph (multi-agent):**  
-`supervisor -> {research_agent | execution_agent | evaluation_agent} -> supervisor -> finalize`
+```
+agentic-workflows/
+├── .github/workflows/      # CI/CD + agentic workflows
+├── .claude/rules/           # Modular Claude Code rules
+├── src/agentic_workflows/   # Proper Python package
+│   ├── __init__.py
+│   ├── errors.py
+│   ├── logger.py
+│   ├── schemas.py
+│   ├── core/                # (was p0/) — MVP agent implementations
+│   ├── orchestration/       # (was execution/) — LangGraph graphs
+│   ├── directives/          # Agent prompts and instruction templates
+│   └── tools/               # Tool implementations + MCP servers
+├── tests/
+│   ├── unit/
+│   ├── integration/
+│   └── conftest.py
+├── AGENTS.md
+├── CLAUDE.md
+├── PROJECT_BLUEPRINT.md
+├── README.md
+├── LICENSE
+├── pyproject.toml
+├── Dockerfile
+├── .env.example
+├── .pre-commit-config.yaml
+└── Makefile
+```
 
-**Primary outputs:**
-- Directive-per-specialist contract in `directives/`
-- Handoff metadata schema (reason, expected output, return condition)
-- Per-agent token/runtime budgets with escalation thresholds
-
-#### Build C: Memory, observability, and evaluation plane
-
-Move from "works in one run" to "learns and is diagnosable across runs."
-
-**Target layers:**
-- Working memory: in-graph state
-- Episodic memory: append-only session log
-- Semantic memory: retrieval-backed long-term knowledge
-- Trace/evals: request-level spans + benchmark suite
-
-**Primary outputs:**
-- `MemoryBackend` interface (`add/search/get`) with local and Mem0 adapters
-- Langfuse optional instrumentation path that type-checks cleanly
-- CI eval stage with task-quality thresholds
-
-#### Build D: Agentic control plane in CI/CD
-
-Enforce a strict split: deterministic checks stay deterministic; agentic tasks stay advisory/assisted.
-
-**Pipeline split:**
-- Deterministic: lint, unit/integration tests, type checks, packaging checks
-- Agentic: PR review suggestions, issue triage, doc synchronization, release-note drafting
-
-**Primary outputs:**
-- `.github/workflows/quality-gate.yml` (required)
-- `.github/workflows/agentic-review.yml` (non-blocking, auditable)
-- Artifact trail for every agentic action (inputs, outputs, reviewer override)
+> ⚡ **Pro Tip:** Rename `p0/` to `core/` and `execution/` to `orchestration/` — self-documenting names eliminate the need for visitors to guess what non-standard abbreviations mean. Keep the P0/P1 terminology in documentation (`P1_WALKTHROUGH.md`) where it's explained, not in folder names.
 
 ---
 
 ## 🗺️ Master roadmap: four phases to production
 
-### Phase 1 — Workflow primitives and type baseline (Week 1-2)
+### Phase 1 — Foundation cleanup (Week 1-2)
 
-**Goal:** Make orchestration patterns reusable and type-safe.
+**Goal:** Make the repo structurally sound and portfolio-ready.
 
-Implement `plan/route/parallel/evaluate/replan` primitives as explicit graph nodes. Close `mypy` errors while preserving passing tests/lint. Add typed evaluator outputs and a retry-budget policy in state schema.
+Restructure Python files into a proper package under `src/agentic_workflows/`. Add `pyproject.toml` with build system, dependencies, ruff, mypy, and pytest configuration. Add `LICENSE` (MIT), `.env.example`, and `Makefile` with standard targets. Consolidate test directories. Remove `fib.txt`. Add `.pre-commit-config.yaml` with ruff linting. Update CLAUDE.md and AGENTS.md per the conventions described above — keep CLAUDE.md under 150 lines, structure AGENTS.md with build commands, architecture overview, and coding conventions.
 
-### Phase 2 — Multi-agent specialization and handoffs (Week 3-4)
+### Phase 2 — Single-agent enhancement (Week 3-4)
 
-**Goal:** Convert one generalized agent into a supervised specialist team.
+**Goal:** Build a robust single-task agent with proper tool integration.
 
-Add 2-3 specialist directives (research, executor, evaluator), implement supervisor routing and handoff metadata contracts, and benchmark hierarchical topology before enabling peer handoffs.
+Install the core stack: `langgraph`, `langchain-anthropic`, `anthropic`, `pydantic`, `instructor`. Build one complete LangGraph `StateGraph` wrapping the existing core agent logic. Define typed state schemas extending `schemas.py`. Wrap existing tools as `@tool` functions with proper docstrings. Add `langgraph.json` for LangGraph Studio local debugging. Implement structured outputs using Pydantic models. Add basic Langfuse tracing with the `@observe()` decorator. Write pytest tests covering tool execution, schema validation, and agent response quality.
 
-### Phase 3 — Memory + eval + observability layer (Week 5-6)
+### Phase 3 — Multi-agent orchestration (Week 5-8)
 
-**Goal:** Make behavior measurable and improvable across runs.
+**Goal:** Evolve to supervisor pattern with specialized sub-agents.
 
-Introduce memory adapters (local + Mem0-ready), add Langfuse tracing hooks with graceful fallback, and create an eval harness that runs against mission benchmarks in CI.
+Implement the Plan-and-Execute pattern using LangGraph's subgraph composition. Create 2-3 specialized agents (e.g., research, execution, evaluation) with their own directives in `directives/`. Build a supervisor graph that routes tasks to appropriate specialists. Add Mem0 for cross-session memory persistence. Implement human-in-the-loop via `interrupt()` for high-stakes decisions. Add MCP server endpoints for external tool consumption. Configure prompt caching for cost optimization. Set up model routing — Haiku for simple tasks, Sonnet for complex reasoning.
 
-### Phase 4 — Production control plane (Week 7-8)
+### Phase 4 — Production hardening (Week 9-12)
 
-**Goal:** Separate deterministic enforcement from agentic assistance.
+**Goal:** Ship a production-grade, observable, secure multi-agent platform.
 
-Ship required quality-gate workflows (`pytest`, `ruff`, `mypy`) and non-blocking agentic workflows (review/docs/triage). Add cost governance (model routing + cache policy + token budgets) and security guardrails for tool execution.
+Add `Dockerfile` and `docker-compose.yml` for the full stack (agent API, Redis, vector store, Langfuse). Implement comprehensive observability dashboards via Langfuse (cost tracking, latency monitoring, trace visualization). Build evaluation suites — automated evals that run in CI via `.github/workflows/`. Add security controls: input validation, tool-scoping, token budgets, secrets management. Set up GitHub Agentic Workflows for automated PR review and documentation sync. Implement fallback chains and graceful degradation. Add a `CHANGELOG.md` documenting the evolution. Create a polished `README.md` with architecture diagram, setup instructions, and demo GIFs.
 
 ---
 
 ## ⚡ Quick wins this week
 
-These are the most leveraged actions to increase architectural depth, not just local cleanup:
+These ten actions require minimal effort but dramatically improve the repo's quality and portfolio readiness.
 
-1. **Implement evaluator node contract** — Add a typed evaluator output model (`complete`, `quality_score`, `replan_reason`) and wire replan gating.
+1. **Add `pyproject.toml`** — Copy the template from Phase 1, run `pip install -e .` to verify. Takes 15 minutes and signals modern Python fluency.
 
-2. **Add model routing policy** — Route easy tasks to cheaper models and hard tasks to stronger models; persist routing decisions for cost analysis.
+2. **Add `LICENSE`** — Create an MIT license file. One-click on GitHub via "Add file" → Choose a license template.
 
-3. **Introduce prompt-cache boundary** — Define stable cache keys for static context blocks and mission templates.
+3. **Move root `.py` files into a package** — Create `src/agentic_workflows/`, move `errors.py`, `logger.py`, `schemas.py` in, add `__init__.py`. Update all imports.
 
-4. **Create specialist directives** — Split `phase1_langgraph.md` into role directives (supervisor/research/executor/evaluator) with explicit I/O expectations.
+4. **Delete `fib.txt`** — Remove the debug artifact and add `*.txt` patterns to `.gitignore` if appropriate.
 
-5. **Add handoff schema** — Standardize inter-agent transfer payloads (`task`, `constraints`, `success_criteria`, `return_contract`).
+5. **Consolidate test directories** — Move `test/tool_tests/` into `tests/tools/`, delete the `test/` folder.
 
-6. **Build memory adapter interface** — Keep current local behavior but expose Mem0-compatible methods for future persistence.
+6. **Add `.env.example`** — Document all required environment variables (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `LANGCHAIN_API_KEY`) without exposing actual values.
 
-7. **Make observability optional-and-typed** — Ensure Langfuse instrumentation compiles cleanly when installed and no-ops cleanly when absent.
+7. **Enrich `CLAUDE.md`** — Follow the What/Why/How framework. Add build commands, test commands, and project structure map. Trim to under 150 lines.
 
-8. **Create dual CI workflows** — One required deterministic gate, one non-blocking agentic assist workflow.
+8. **Install Claude Code Action** — Add a workflow file that triggers Claude on `@claude` mentions in PRs and issues. Copy from [anthropics/claude-code-action](https://github.com/anthropics/claude-code-action).
 
-9. **Add benchmark suite** — Track mission completion rate, replan frequency, tool failure rate, and median latency per mission.
+9. **Add one LangGraph graph** — Install `langgraph` and `langchain-anthropic`, build a single `StateGraph` wrapping the existing core logic. This is the foundation everything else builds on.
 
-10. **Publish architecture README** — Document the workflow pattern ladder and why each phase adds complexity.
+10. **Set up Langfuse** — `pip install langfuse`, add the `@observe()` decorator to your main agent function. Free cloud tier gives 50k observations/month — instant observability with three lines of code.
 
 ---
 
 ## Conclusion
 
-The highest-value shift is from "project hygiene improvement" to "capability system design." This Compass now emphasizes concrete architectural builds and workflow patterns that map directly to the tool stack identified in the research: LangGraph for control flow, MCP for tool contracts, Mem0-style memory layering, Langfuse + evals for reliability, and split deterministic/agentic CI for safe operations.
+The agentic AI ecosystem in early 2026 has reached an inflection point where **standards are crystallizing** — AGENTS.md is supported by 60,000+ repos, MCP is the USB-C of AI tool integration, and LangGraph v1.0 provides industrial-grade orchestration. The Agentic-Workflows repo has strong conceptual foundations (the `directives/` + `execution/` + `tools/` separation is genuinely good architectural thinking) but needs structural modernization to match the maturity of the ecosystem it targets.
 
-That combination is what turns a functional agent repo into a production-ready multi-agent platform.
+The most impactful insight from this research: **Anthropic and OpenAI converge on the same message** — start with the simplest possible agent, invest in evaluation before architecture, and scale complexity only when clearly needed. The P0 → P1 transition pattern already embedded in the repo is exactly right. The gap isn't in vision — it's in execution discipline (packaging, testing, observability, security) that separates student projects from production-grade systems.
+
+The four-phase roadmap above transforms this repo from a promising prototype into a **portfolio centerpiece** that demonstrates mastery of the exact skills GenAI teams are hiring for: typed orchestration, eval-driven development, cost-aware multi-agent coordination, and production observability.

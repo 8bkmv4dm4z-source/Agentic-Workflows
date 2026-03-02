@@ -205,6 +205,21 @@ class LangGraphFlowTests(unittest.TestCase):
             self.assertIn("failed to produce a valid json action", result["answer"].lower())
             self.assertEqual(result["state"]["retry_counts"]["invalid_json"], 3)
 
+    def test_repeated_finish_requests_fail_closed_without_recursion(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            provider = ScriptedProvider([{"action": "finish", "answer": "done"}])
+            orchestrator = LangGraphOrchestrator(
+                provider=provider,
+                memo_store=SQLiteMemoStore(f"{temp_dir}/memo.db"),
+                checkpoint_store=SQLiteCheckpointStore(f"{temp_dir}/checkpoints.db"),
+                policy=MemoizationPolicy(max_policy_retries=1),
+                max_steps=40,
+                max_finish_rejections=2,
+            )
+            result = orchestrator.run("Task 1: repeat hello")
+            self.assertIn("repeatedly requested finish", result["answer"].lower())
+            self.assertGreaterEqual(result["state"]["retry_counts"]["finish_rejected"], 3)
+
     def test_soft_retry_then_memoize(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = f"{temp_dir}/fib.txt"
@@ -349,7 +364,7 @@ class LangGraphFlowTests(unittest.TestCase):
             self.assertEqual(first_call["result"]["sorted"], [1, 2, 5, 8])
             self.assertEqual(result["state"]["completed_tasks"], ["Task 1: sort these numbers"])
 
-    def test_multiple_json_objects_recover_first_action(self) -> None:
+    def test_multiple_json_objects_queue_all_actions(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             provider = RawScriptedProvider(
                 [
@@ -366,7 +381,10 @@ class LangGraphFlowTests(unittest.TestCase):
                 max_steps=20,
             )
             result = orchestrator.run("Task 1: repeat")
-            self.assertEqual([item["tool"] for item in result["tools_used"]], ["repeat_message"])
+            self.assertEqual(
+                [item["tool"] for item in result["tools_used"]],
+                ["repeat_message", "sort_array"],
+            )
             self.assertEqual(result["state"]["retry_counts"]["invalid_json"], 0)
 
     def test_action_alias_direct_tool_name_is_normalized(self) -> None:
@@ -386,7 +404,10 @@ class LangGraphFlowTests(unittest.TestCase):
                 max_steps=20,
             )
             result = orchestrator.run("Task 1: retrieve fib memo")
-            self.assertEqual([item["tool"] for item in result["tools_used"]], ["retrieve_memo"])
+            self.assertEqual(
+                [item["tool"] for item in result["tools_used"]],
+                ["retrieve_memo", "retrieve_memo"],
+            )
             self.assertEqual(result["state"]["retry_counts"]["invalid_json"], 0)
 
     def test_duplicate_after_completion_auto_finishes(self) -> None:
@@ -915,6 +936,288 @@ class LangGraphFlowTests(unittest.TestCase):
             result = orchestrator.run("Task 1: regex match")
             self.assertEqual(result["tools_used"][0]["args"]["pattern"], r"\d+")
             self.assertEqual(result["tools_used"][0]["result"]["matches"], ["123"])
+
+
+    def test_recursion_limit_scales_with_max_steps(self) -> None:
+        """A 4-step mission with max_steps=5 must complete without GraphRecursionError."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            provider = ScriptedProvider(
+                [
+                    {
+                        "action": "tool",
+                        "tool_name": "repeat_message",
+                        "args": {"message": "step1"},
+                    },
+                    {
+                        "action": "tool",
+                        "tool_name": "sort_array",
+                        "args": {"items": [3, 1, 2], "order": "asc"},
+                    },
+                    {
+                        "action": "tool",
+                        "tool_name": "string_ops",
+                        "args": {"text": "hello", "operation": "uppercase"},
+                    },
+                    {
+                        "action": "tool",
+                        "tool_name": "repeat_message",
+                        "args": {"message": "step4"},
+                    },
+                    {"action": "finish", "answer": "all done"},
+                ]
+            )
+            orchestrator = LangGraphOrchestrator(
+                provider=provider,
+                memo_store=SQLiteMemoStore(f"{temp_dir}/memo.db"),
+                checkpoint_store=SQLiteCheckpointStore(f"{temp_dir}/checkpoints.db"),
+                policy=MemoizationPolicy(max_policy_retries=1),
+                max_steps=5,
+            )
+            result = orchestrator.run(
+                "Task 1: repeat step1\n"
+                "Task 2: sort numbers\n"
+                "Task 3: uppercase hello\n"
+                "Task 4: repeat step4"
+            )
+            self.assertEqual(result["answer"], "all done")
+            tools = [item["tool"] for item in result["tools_used"]]
+            self.assertEqual(
+                tools, ["repeat_message", "sort_array", "string_ops", "repeat_message"]
+            )
+
+
+@unittest.skipUnless(LANGGRAPH_AVAILABLE, "langgraph not installed")
+class MissionIsolationAuditTests(unittest.TestCase):
+    """Run each main mission in isolation and assert audit cleanliness."""
+
+    def _run_single_mission(self, prompt: str, responses: list[dict]) -> dict:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            orchestrator = LangGraphOrchestrator(
+                provider=ScriptedProvider(responses),
+                memo_store=SQLiteMemoStore(f"{temp_dir}/memo.db"),
+                checkpoint_store=SQLiteCheckpointStore(f"{temp_dir}/checkpoints.db"),
+                policy=MemoizationPolicy(max_policy_retries=2),
+                max_steps=40,
+            )
+            result = orchestrator.run(prompt)
+            self.assertEqual(len(result["state"]["missions"]), 1)
+            self.assertIsNotNone(result.get("audit_report"))
+            self.assertEqual(result["audit_report"]["failed"], 0)
+            self.assertEqual(result["audit_report"]["warned"], 0)
+            return result
+
+    def test_task1_text_analysis_pipeline_isolated_audit_clean(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            out_path = os.path.join(td, "analysis_results.txt")
+            prompt = (
+                "Task 1: Text Analysis Pipeline\n"
+                '  1a. Analyze this text for word count, sentence count, and key terms: "The quick brown fox jumps over the lazy dog. The dog barked loudly at the fox. Meanwhile, the brown cat watched from the fence."\n'
+                f'  1b. Uppercase the following key terms and write them to "{out_path}": "fox, dog, brown"'
+            )
+            result = self._run_single_mission(
+                prompt=prompt,
+                responses=[
+                    {
+                        "action": "tool",
+                        "tool_name": "text_analysis",
+                        "args": {
+                            "text": "The quick brown fox jumps over the lazy dog. The dog barked loudly at the fox. Meanwhile, the brown cat watched from the fence.",
+                            "operation": "full_report",
+                        },
+                    },
+                    {
+                        "action": "tool",
+                        "tool_name": "string_ops",
+                        "args": {"text": "fox, dog, brown", "operation": "uppercase"},
+                    },
+                    {
+                        "action": "tool",
+                        "tool_name": "write_file",
+                        "args": {"path": out_path, "content": "FOX, DOG, BROWN"},
+                    },
+                    {"action": "finish", "answer": "done"},
+                ],
+            )
+            used = result["mission_report"][0]["used_tools"]
+            self.assertIn("text_analysis", used)
+            self.assertIn("string_ops", used)
+            self.assertIn("write_file", used)
+
+    def test_task2_data_analysis_sorting_isolated_audit_clean(self) -> None:
+        numbers = [45, 23, 67, 12, 89, 34, 56, 78, 91, 150, 2, 33]
+        sorted_desc = sorted(numbers, reverse=True)
+        prompt = (
+            "Task 1: Data Analysis and Sorting\n"
+            "  1a. Analyze these numbers for summary statistics and outliers: [45, 23, 67, 12, 89, 34, 56, 78, 91, 150, 2, 33]\n"
+            "  1b. Sort the non-outlier values in descending order\n"
+            "  1c. Calculate the mean of the sorted non-outlier array"
+        )
+        result = self._run_single_mission(
+            prompt=prompt,
+            responses=[
+                {
+                    "action": "tool",
+                    "tool_name": "data_analysis",
+                    "args": {"numbers": numbers, "operation": "outliers"},
+                },
+                {
+                    "action": "tool",
+                    "tool_name": "sort_array",
+                    "args": {"items": numbers, "order": "desc"},
+                },
+                {
+                    "action": "tool",
+                    "tool_name": "math_stats",
+                    "args": {"operation": "mean", "numbers": sorted_desc},
+                },
+                {"action": "finish", "answer": "done"},
+            ],
+        )
+        used = result["mission_report"][0]["used_tools"]
+        self.assertIn("data_analysis", used)
+        self.assertIn("sort_array", used)
+        self.assertIn("math_stats", used)
+
+    def test_task3_json_processing_isolated_audit_clean(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            out_path = os.path.join(td, "users_sorted.txt")
+            prompt = (
+                "Task 1: JSON Processing\n"
+                "  1a. Parse and validate this JSON: '{\"users\":[{\"name\":\"Alice\",\"score\":95},{\"name\":\"Bob\",\"score\":82},{\"name\":\"Charlie\",\"score\":91}]}'\n"
+                '  1b. Extract all user names using regex from: "Alice scored 95, Bob scored 82, Charlie scored 91"\n'
+                f'  1c. Sort the names alphabetically, then write them to "{out_path}"'
+            )
+            result = self._run_single_mission(
+                prompt=prompt,
+                responses=[
+                    {
+                        "action": "tool",
+                        "tool_name": "json_parser",
+                        "args": {
+                            "text": '{"users":[{"name":"Alice","score":95},{"name":"Bob","score":82},{"name":"Charlie","score":91}]}',
+                            "operation": "parse",
+                        },
+                    },
+                    {
+                        "action": "tool",
+                        "tool_name": "regex_matcher",
+                        "args": {
+                            "text": "Alice scored 95, Bob scored 82, Charlie scored 91",
+                            "pattern": r"[A-Za-z]+",
+                            "operation": "find_all",
+                        },
+                    },
+                    {
+                        "action": "tool",
+                        "tool_name": "sort_array",
+                        "args": {"items": ["Alice", "Bob", "Charlie"], "order": "asc"},
+                    },
+                    {
+                        "action": "tool",
+                        "tool_name": "write_file",
+                        "args": {"path": out_path, "content": "Alice, Bob, Charlie"},
+                    },
+                    {"action": "finish", "answer": "done"},
+                ],
+            )
+            used = result["mission_report"][0]["used_tools"]
+            self.assertIn("json_parser", used)
+            self.assertIn("regex_matcher", used)
+            self.assertIn("sort_array", used)
+            self.assertIn("write_file", used)
+
+    def test_task4_pattern_matching_transform_isolated_audit_clean(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            out_path = os.path.join(td, "pattern_report.txt")
+            prompt = (
+                "Task 1: Pattern Matching and Transform\n"
+                '  1a. Use regex to extract all numbers from: "Order #123 has 5 items at $45.99 each, totaling $229.95 with 10% discount"\n'
+                "  1b. Calculate the sum and mean of the extracted numbers\n"
+                f'  1c. Write a summary of extracted numbers and their stats to "{out_path}"'
+            )
+            report_content = (
+                "Extracted Numbers: 123, 5, 45.99, 229.95, 10\n"
+                "Sum: 413.94\n"
+                "Mean: 82.788"
+            )
+            result = self._run_single_mission(
+                prompt=prompt,
+                responses=[
+                    {
+                        "action": "tool",
+                        "tool_name": "regex_matcher",
+                        "args": {
+                            "text": "Order #123 has 5 items at $45.99 each, totaling $229.95 with 10% discount",
+                            "pattern": r"\d+\.?\d*",
+                            "operation": "find_all",
+                        },
+                    },
+                    {
+                        "action": "tool",
+                        "tool_name": "math_stats",
+                        "args": {"operation": "sum", "numbers": [123, 5, 45.99, 229.95, 10]},
+                    },
+                    {
+                        "action": "tool",
+                        "tool_name": "math_stats",
+                        "args": {"operation": "mean", "numbers": [123, 5, 45.99, 229.95, 10]},
+                    },
+                    {
+                        "action": "tool",
+                        "tool_name": "write_file",
+                        "args": {"path": out_path, "content": report_content},
+                    },
+                    {"action": "finish", "answer": "done"},
+                ],
+            )
+            used = result["mission_report"][0]["used_tools"]
+            self.assertIn("regex_matcher", used)
+            self.assertIn("math_stats", used)
+            self.assertIn("write_file", used)
+
+    def test_task5_fibonacci_analysis_isolated_audit_clean(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            out_path = os.path.join(td, "fib50.txt")
+            prompt = (
+                "Task 1: Fibonacci with Analysis\n"
+                f'  1a. Write the first 50 fibonacci numbers to "{out_path}"\n'
+                '  1b. Repeat the final summary as confirmation: "All 5 tasks completed successfully"'
+            )
+            result = self._run_single_mission(
+                prompt=prompt,
+                responses=[
+                    {
+                        "action": "tool",
+                        "tool_name": "data_analysis",
+                        "args": {"numbers": [0, 1, 1, 2, 3, 5], "operation": "summary_stats"},
+                    },
+                    {
+                        "action": "tool",
+                        "tool_name": "repeat_message",
+                        "args": {"message": "All 5 tasks completed successfully"},
+                    },
+                    {
+                        "action": "tool",
+                        "tool_name": "write_file",
+                        "args": {"path": out_path, "content": fibonacci_csv(50)},
+                    },
+                    {
+                        "action": "tool",
+                        "tool_name": "memoize",
+                        "args": {
+                            "key": f"write_file:{out_path}",
+                            "value": {"path": out_path, "source": "isolation"},
+                            "source_tool": "write_file",
+                        },
+                    },
+                    {"action": "finish", "answer": "done"},
+                ],
+            )
+            used = result["mission_report"][0]["used_tools"]
+            self.assertIn("data_analysis", used)
+            self.assertIn("repeat_message", used)
+            self.assertIn("write_file", used)
+            self.assertIn("memoize", used)
 
 
 if __name__ == "__main__":

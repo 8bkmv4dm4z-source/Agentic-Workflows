@@ -1,84 +1,121 @@
 # Phase 1 SOP: LangGraph Stateful Orchestrator
 
 ## Goal
-Build a LangGraph-based orchestrator with:
-- State graph execution
-- Durable checkpointing via SQLite
-- Schema-first memoization store
-- Policy-based memoization enforcement for heavy deterministic work
 
-This SOP is intentionally notebook-friendly while keeping production code in `execution/langgraph/`.
+Build and operate a LangGraph-based orchestrator with:
+
+- state graph execution (`plan -> execute -> policy -> finalize`)
+- durable checkpointing via SQLite
+- schema-first memoization store
+- policy enforcement for heavy deterministic work
+- deterministic post-run auditing
+
+Implementation path in this repo:
+`src/agentic_workflows/orchestration/langgraph/`
 
 ## Inputs
-- User task prompt
-- `.env` with `OPENAI_API_KEY` or `GROQ_API_KEY`
-- Existing tool modules under `tools/`
+
+- user task prompt
+- `.env` provider configuration (`P1_PROVIDER` plus provider-specific credentials)
+- deterministic tools in `src/agentic_workflows/tools/`
 
 ## Outputs
-- Run result object:
+
+- run result object containing:
   - `answer`
   - `tools_used`
   - `run_id`
   - `memo_events`
+  - `mission_report`
+  - `audit_report`
 - SQLite memo store at `.tmp/memo_store.db`
-- Run audit row fields include provider/cache reliability counters:
-  - `provider_timeout_retries`
-  - `cache_reuse_hits`
-  - `cache_reuse_misses`
+- SQLite checkpoint snapshots at `.tmp/langgraph_checkpoints.db`
+- optional run summary CSV from `run_audit.py`
 
 ## Run Steps
+
 1. Install dependencies:
-   - `python3 -m venv .venv`
-   - `.venv/bin/pip install -r requirements.txt`
+   - `pip install -e ".[dev]"`
 2. Optional timeout control:
    - set `P1_PLAN_CALL_TIMEOUT_SECONDS` (for example `20`) to bound planner wall time.
-3. Run LangGraph orchestrator:
-   - `.venv/bin/python -m execution.langgraph.run`
-4. Inspect memo entries:
-   - Use `SQLiteMemoStore.get(run_id=..., key=..., namespace="run")`
-5. Inspect run audit:
-   - `.venv/bin/python -m execution.langgraph.run_audit`
+3. Run orchestrator demo:
+   - `python -m agentic_workflows.orchestration.langgraph.run`
+4. Inspect run audit summary:
+   - `python -m agentic_workflows.orchestration.langgraph.run_audit`
+5. Inspect memo entries programmatically:
+   - use `SQLiteMemoStore.get(run_id=..., key=..., namespace="run")`
 
 ## Policy Rules
-- Memoization is required for heavy deterministic `write_file` outputs.
-- If the model skips memoization, orchestrator emits corrective system feedback.
-- After max policy retries, run fails closed with `MemoizationPolicyViolation`.
-- If planner times out, orchestrator may switch to deterministic timeout fallback actions.
-- After first planner timeout, timeout mode may continue deterministic actions without further planner calls.
 
-## Debugging
-- If model returns invalid JSON repeatedly:
-  - check provider model supports JSON mode
-  - verify system prompt is first message
-- If memo policy loops:
-  - verify model can call `memoize`
-  - lower task scope or increase `max_policy_retries` for diagnostics
-- If provider fails:
-  - set `OPENAI_API_KEY`; fallback is Groq in `build_provider`
-- If planner is slow/stuck:
-  - verify `PLAN PROVIDER CALL` / `PLAN PROVIDER TIMEOUT` logs
-  - lower `P1_PLAN_CALL_TIMEOUT_SECONDS`
-  - confirm `PLAN TIMEOUT FALLBACK` or `PLAN TIMEOUT MODE` appears
-  - confirm mission still enforces memo policy (`memoize` before finish)
-- If cache reuse is enabled:
-  - confirm cache-hit `write_file` is attributed to the correct mission (no Task N -> Task N+1 shift)
-  - confirm run does not finalize early when later missions are still incomplete
+- Memoization is required for heavy deterministic write-like outputs.
+- If memoization is skipped, orchestrator emits corrective system feedback and retries.
+- After max policy retries, run fails closed with `MemoizationPolicyViolation`.
+- Planner timeout can trigger deterministic fallback actions.
+- After first planner timeout, timeout mode can continue with deterministic actions.
+- Duplicate tool calls are rejected and bounded by retry budgets.
+
+## Runtime Contracts
+
+- Plan node:
+  - emits exactly one pending action at a time
+  - gates premature `finish` when missions remain
+- Execute node:
+  - normalizes arg aliases before tool invocation
+  - records tool history and mission report updates for success/error paths
+- Policy node:
+  - sets `memo_required` flags and suggested memo keys
+- Finalize node:
+  - creates final answer, runs deterministic audit, persists final checkpoint
 
 ## Tool Inventory (12 tools)
 
-Core tools: `repeat_message`, `sort_array`, `string_ops`, `math_stats`, `write_file`, `memoize`, `retrieve_memo`
-
-Analysis/parsing tools (added 2026-02-28): `task_list_parser`, `text_analysis`, `data_analysis`, `json_parser`, `regex_matcher`
+- Core:
+  - `repeat_message`, `sort_array`, `string_ops`, `math_stats`, `write_file`,
+    `memoize`, `retrieve_memo`
+- Analysis/parsing:
+  - `task_list_parser`, `text_analysis`, `data_analysis`, `json_parser`, `regex_matcher`
 
 ## Structured Mission Parser
 
-- Entry point: `execution/langgraph/mission_parser.py::parse_missions()`
-- Produces `StructuredPlan` with `MissionStep` objects (id, description, parent_id, suggested_tools, dependencies, status)
-- Supports numbered tasks (`Task N:`), dot/paren format (`1.`, `2)`), bullet lists (`- `, `* `), and nested sub-tasks (`1a.`, `1.1`)
-- Falls back to original regex extraction for unrecognized formats
-- `Shared_plan.md` is written at run start and finalize with IMPLEMENTED/PENDING markers
+- Entry point:
+  - `src/agentic_workflows/orchestration/langgraph/mission_parser.py::parse_missions()`
+- Produces `StructuredPlan` and `MissionStep` structures with dependencies/tool hints.
+- Supports numbered tasks (`Task N:`), list formats (`1.`, `2)`), bullets, and nested sub-tasks
+  (`1a.`, `1.1`).
+- Falls back to regex extraction if structured parsing fails or times out.
+- `Shared_plan.md` is written at run start and finalize with `IMPLEMENTED` / `PENDING` markers.
 
-## Extension Path (Phase 1 -> 2)
-- Replace SQLite backend with Postgres implementation behind same store interface.
-- Add semantic memo keying (beyond file-path exact/basename).
-- Add `StateGraph` checkpointer and HITL interrupts for high-risk tools.
+## Directive Usage
+
+This file is the Phase 1 SOP. Role-specific directives refine behavior:
+
+- `supervisor.md`
+- `executor.md`
+- `evaluator.md`
+
+Current runtime builds a strict system prompt in code; directives serve as behavioral
+specifications and implementation checklists.
+
+## Debugging
+
+- Repeated invalid JSON:
+  - verify provider/model supports JSON-object outputs
+  - verify system prompt remains first message in state
+- Memo policy loops:
+  - verify planner can issue `memoize` call with `run_id`
+  - inspect `retry_counts["memo_policy"]` in checkpoint state
+- Planner timeout/stall:
+  - inspect logs for `PLAN PROVIDER TIMEOUT`, `PLAN TIMEOUT FALLBACK`, `PLAN TIMEOUT MODE`
+  - lower `P1_PLAN_CALL_TIMEOUT_SECONDS`
+- Provider failures:
+  - ensure `P1_PROVIDER` and required keys/env vars are set
+- Unexpected cache behavior:
+  - inspect `policy_flags["cache_reuse_hits"]`/`cache_reuse_misses`
+  - validate mission attribution in `mission_report`
+
+## Extension Path (Phase 1 -> Phase 2)
+
+- Introduce role-specific prompt loading directly from directive files.
+- Expand specialist routing beyond current executor pass-through.
+- Support richer memo keying and cross-run semantic reuse policies.
+- Add high-risk tool interrupt/HITL checkpoints where needed.

@@ -20,6 +20,7 @@ from pydantic import ValidationError
 from agentic_workflows.logger import get_logger
 from agentic_workflows.orchestration.langgraph.checkpoint_store import SQLiteCheckpointStore
 from agentic_workflows.orchestration.langgraph.memo_store import SQLiteMemoStore
+from agentic_workflows.orchestration.langgraph.mission_auditor import audit_run
 from agentic_workflows.orchestration.langgraph.mission_parser import StructuredPlan, parse_missions
 from agentic_workflows.orchestration.langgraph.policy import MemoizationPolicy
 from agentic_workflows.orchestration.langgraph.provider import (
@@ -28,6 +29,7 @@ from agentic_workflows.orchestration.langgraph.provider import (
     build_provider,
 )
 from agentic_workflows.orchestration.langgraph.state_schema import (
+    AgentMessage,
     MemoEvent,
     RunState,
     ensure_state_defaults,
@@ -67,6 +69,8 @@ class LangGraphOrchestrator:
         max_provider_timeout_retries: int = 3,
         plan_call_timeout_seconds: float | None = None,
         max_content_validation_retries: int = 2,
+        max_duplicate_tool_retries: int = 6,
+        max_finish_rejections: int = 6,
     ) -> None:
         self.provider = provider or build_provider()
         self.memo_store = memo_store or SQLiteMemoStore()
@@ -82,7 +86,10 @@ class LangGraphOrchestrator:
             else self._env_float("P1_PLAN_CALL_TIMEOUT_SECONDS", 45.0)
         )
         self.max_content_validation_retries = max_content_validation_retries
+        self.max_duplicate_tool_retries = max_duplicate_tool_retries
+        self.max_finish_rejections = max_finish_rejections
         self.tools: dict[str, Tool] = build_tool_registry(self.memo_store)
+        self._invalidate_known_poisoned_cache_entries()
         self.system_prompt = self._build_system_prompt()
         self._compiled = self._compile_graph()
 
@@ -120,6 +127,27 @@ class LangGraphOrchestrator:
             "Always obey system feedback messages."
         )
 
+    def _invalidate_known_poisoned_cache_entries(self) -> None:
+        """Purge known-bad cached write inputs discovered during run review."""
+        poisoned = (
+            ("write_file_input:fib50.txt", "9192a11413589198351eed65372ca8ced1b495337040e432d5a0cd806da4d41d"),
+            ("write_file_input:pattern_report.txt", "c89dfcb4f7885053f1ae4d9326ffd2cdc95109dcfc10c7c6315cf33e39e1712f"),
+        )
+        for key, value_hash in poisoned:
+            deleted = self.memo_store.delete(
+                run_id="shared",
+                key=key,
+                namespace="cache",
+                value_hash=value_hash,
+            )
+            if deleted:
+                self.logger.info(
+                    "CACHE INVALIDATION key=%s value_hash=%s deleted=%s",
+                    key,
+                    value_hash,
+                    deleted,
+                )
+
     def _compile_graph(self):
         """Compile runtime graph topology: plan -> execute -> policy -> finalize."""
         if StateGraph is None:
@@ -153,10 +181,13 @@ class LangGraphOrchestrator:
         state = ensure_state_defaults(state, system_prompt=self.system_prompt)
         structured_plan = parse_missions(user_input)
         missions = structured_plan.flat_missions
+        contracts = self._build_mission_contracts_from_plan(structured_plan, missions)
         state["missions"] = missions
         state["structured_plan"] = structured_plan.to_dict()
-        state["mission_reports"] = self._initialize_mission_reports(missions)
+        state["mission_contracts"] = contracts
+        state["mission_reports"] = self._initialize_mission_reports(missions, contracts=contracts)
         state["active_mission_index"] = -1
+        state["active_mission_id"] = 0
         self._write_shared_plan(state)
         self.logger.info("RUN START run_id=%s missions=%s", state["run_id"], len(missions))
         self.checkpoint_store.save(
@@ -165,7 +196,7 @@ class LangGraphOrchestrator:
             node_name="init",
             state=state,
         )
-        final_state = self._compiled.invoke(state, config={"recursion_limit": self.max_steps})
+        final_state = self._compiled.invoke(state, config={"recursion_limit": self.max_steps * 3})
         final_state = ensure_state_defaults(final_state, system_prompt=self.system_prompt)
         memo_entries = self.memo_store.list_entries(run_id=final_state["run_id"])
         derived_snapshot = self._build_derived_snapshot(final_state, memo_entries)
@@ -181,6 +212,7 @@ class LangGraphOrchestrator:
             "memo_store_entries": memo_entries,
             "derived_snapshot": derived_snapshot,
             "checkpoints": self.checkpoint_store.list_checkpoints(final_state["run_id"]),
+            "audit_report": final_state.get("audit_report"),
             "state": final_state,
         }
 
@@ -197,10 +229,25 @@ class LangGraphOrchestrator:
     def _plan_next_action(self, state: RunState) -> RunState:
         """Call the model planner and parse one strict JSON action."""
         state = ensure_state_defaults(state, system_prompt=self.system_prompt)
+        self._compact_messages(state)
         pending_action = state.get("pending_action") or {}
         if pending_action.get("action") == "finish":
             return state
         state["step"] = state.get("step", 0) + 1
+        if state["step"] > self.max_steps:
+            fail_message = (
+                "Run stopped: exceeded orchestrator step budget before mission completion. "
+                "Review mission attribution and planner behavior."
+            )
+            state["messages"].append({"role": "system", "content": fail_message})
+            state["pending_action"] = {"action": "finish", "answer": fail_message}
+            self.checkpoint_store.save(
+                run_id=state["run_id"],
+                step=state["step"],
+                node_name="plan_step_budget_fail_closed",
+                state=state,
+            )
+            return state
         if self._maybe_complete_next_write_from_cache(state):
             if self._all_missions_completed(state):
                 state["pending_action"] = {
@@ -214,6 +261,71 @@ class LangGraphOrchestrator:
                 state=state,
             )
             return state
+        # --- Action queue: pop next queued action before calling provider ---
+        queue = state.get("pending_action_queue", [])
+        if queue and not state.get("policy_flags", {}).get("memo_required", False):
+            next_action_raw = queue.pop(0)
+            state["pending_action_queue"] = queue
+            try:
+                validated = self._validate_action_from_dict(next_action_raw)
+                self.logger.info(
+                    "PLAN QUEUE POP step=%s queue_remaining=%s action=%s",
+                    state["step"],
+                    len(queue),
+                    validated,
+                )
+                if validated.get("action") == "finish" and not self._all_missions_completed(state):
+                    finish_rejected = int(state["retry_counts"].get("finish_rejected", 0)) + 1
+                    state["retry_counts"]["finish_rejected"] = finish_rejected
+                    next_mission = self._next_incomplete_mission(state)
+                    if finish_rejected > self.max_finish_rejections:
+                        fail_message = (
+                            "Run stopped: planner repeatedly requested finish while tasks remained "
+                            f"incomplete (next task: {next_mission or 'unknown'})."
+                        )
+                        state["messages"].append({"role": "system", "content": fail_message})
+                        state["pending_action"] = {"action": "finish", "answer": fail_message}
+                        self.checkpoint_store.save(
+                            run_id=state["run_id"],
+                            step=state["step"],
+                            node_name="plan_queue_finish_fail_closed",
+                            state=state,
+                        )
+                        return state
+                    state["messages"].append(
+                        {
+                            "role": "system",
+                            "content": (
+                                "Finish rejected: missions remain incomplete. "
+                                f"Next task: {next_mission or 'unknown'}"
+                            ),
+                        }
+                    )
+                    state["pending_action"] = None
+                    self.checkpoint_store.save(
+                        run_id=state["run_id"],
+                        step=state["step"],
+                        node_name="plan_queue_finish_rejected",
+                        state=state,
+                    )
+                    return state
+                state["pending_action"] = validated
+                state["retry_counts"]["finish_rejected"] = 0
+                state["retry_counts"]["provider_timeout"] = 0
+                self.checkpoint_store.save(
+                    run_id=state["run_id"],
+                    step=state["step"],
+                    node_name="plan_queue_pop",
+                    state=state,
+                )
+                return state
+            except (ValueError, Exception) as exc:
+                self.logger.warning(
+                    "PLAN QUEUE SKIP step=%s error=%s",
+                    state["step"],
+                    str(exc),
+                )
+                state["pending_action_queue"] = queue
         if bool(state.get("policy_flags", {}).get("planner_timeout_mode", False)):
             fallback_action = self._deterministic_fallback_action(state)
             if fallback_action is not None:
@@ -234,6 +346,16 @@ class LangGraphOrchestrator:
         if progress_message:
             state["messages"].append({"role": "system", "content": progress_message})
 
+        # --- Token budget gate: switch to deterministic fallback when exhausted ---
+        budget_remaining = state.get("token_budget_remaining", 100_000)
+        if budget_remaining <= 0:
+            self.logger.info(
+                "TOKEN BUDGET EXHAUSTED step=%s used=%s — switching to deterministic fallback",
+                state["step"],
+                state.get("token_budget_used", 0),
+            )
+            state["policy_flags"]["planner_timeout_mode"] = True
+
         try:
             self.logger.info(
                 "PLAN PROVIDER CALL step=%s timeout_seconds=%.2f",
@@ -244,9 +366,66 @@ class LangGraphOrchestrator:
             self.logger.info("MODEL OUTPUT step=%s output=%s", state["step"], model_output[:500])
             state["messages"].append({"role": "assistant", "content": model_output})
             state["policy_flags"]["planner_timeout_mode"] = False
-            action = self._validate_action(model_output)
+            # --- Token budget tracking (rough estimate: 1 token ≈ 4 chars) ---
+            estimated_tokens = len(model_output) // 4 + sum(
+                len(str(m.get("content", ""))) // 4 for m in state["messages"][-2:]
+            )
+            state["token_budget_used"] = state.get("token_budget_used", 0) + estimated_tokens
+            state["token_budget_remaining"] = max(
+                0, state.get("token_budget_remaining", 100_000) - estimated_tokens
+            )
+            all_actions = self._parse_all_actions_json(model_output)
+            if not all_actions:
+                raise ValueError("no valid JSON action objects found in model output")
+            tagged_actions: list[dict[str, Any]] = []
+            mission_preview = self._mission_preview_from_state(state)
+            for raw_action in all_actions:
+                action_with_meta = dict(raw_action)
+                mission_id = self._resolve_mission_id_for_action(
+                    state, action_with_meta, preview=mission_preview
+                )
+                if mission_id > 0:
+                    action_with_meta["__mission_id"] = mission_id
+                    preview_entry = mission_preview.setdefault(
+                        mission_id, {"used_tools": set(), "written_files": set()}
+                    )
+                    tool_name = str(action_with_meta.get("tool_name", "")).strip()
+                    if tool_name:
+                        preview_entry["used_tools"].add(tool_name)
+                    if tool_name == "write_file":
+                        path = str(action_with_meta.get("args", {}).get("path", "")).strip()
+                        if path:
+                            basename = path.replace("\\", "/").rsplit("/", 1)[-1]
+                            preview_entry["written_files"].add(basename)
+                tagged_actions.append(action_with_meta)
+
+            action = self._validate_action_from_dict(tagged_actions[0])
+            if len(all_actions) > 1:
+                state["pending_action_queue"] = tagged_actions[1:]
+                self.logger.info(
+                    "PLAN QUEUED step=%s queued=%s",
+                    state["step"],
+                    len(tagged_actions) - 1,
+                )
+                state["retry_counts"]["provider_timeout"] = 0
             if action.get("action") == "finish" and not self._all_missions_completed(state):
+                finish_rejected = int(state["retry_counts"].get("finish_rejected", 0)) + 1
+                state["retry_counts"]["finish_rejected"] = finish_rejected
                 next_mission = self._next_incomplete_mission(state)
+                if finish_rejected > self.max_finish_rejections:
+                    fail_message = (
+                        "Run stopped: planner repeatedly requested finish while tasks remained "
+                        f"incomplete (next task: {next_mission or 'unknown'})."
+                    )
+                    state["messages"].append({"role": "system", "content": fail_message})
+                    state["pending_action"] = {"action": "finish", "answer": fail_message}
+                    self.checkpoint_store.save(
+                        run_id=state["run_id"],
+                        step=state["step"],
+                        node_name="plan_finish_fail_closed",
+                        state=state,
+                    )
+                    return state
                 state["messages"].append(
                     {
                         "role": "system",
@@ -266,6 +445,7 @@ class LangGraphOrchestrator:
                 return state
             self.logger.info("PLANNED ACTION step=%s action=%s", state["step"], action)
             state["pending_action"] = action
+            state["retry_counts"]["finish_rejected"] = 0
             self.checkpoint_store.save(
                 run_id=state["run_id"],
                 step=state["step"],
@@ -300,6 +480,7 @@ class LangGraphOrchestrator:
                     }
                 )
                 state["policy_flags"]["planner_timeout_mode"] = True
+                state["pending_action_queue"] = []
                 state["pending_action"] = fallback_action
                 self.checkpoint_store.save(
                     run_id=state["run_id"],
@@ -437,6 +618,17 @@ class LangGraphOrchestrator:
             raise RuntimeError(str(payload))
         return str(payload)
 
+    def _route_to_specialist(self, state: RunState) -> RunState:
+        """Route the pending action to the appropriate specialist.
+
+        Currently a pass-through: all actions go to the executor (_execute_action).
+        When multi-agent routing is active, this will inspect the action and
+        delegate to supervisor/executor/evaluator based on task type.
+        """
+        state = ensure_state_defaults(state, system_prompt=self.system_prompt)
+        state["active_specialist"] = "executor"
+        return self._execute_action(state)
+
     def _execute_action(self, state: RunState) -> RunState:
         """Execute planned tool action, including duplicate and policy checks."""
         state = ensure_state_defaults(state, system_prompt=self.system_prompt)
@@ -453,6 +645,15 @@ class LangGraphOrchestrator:
 
         tool_name = str(action.get("tool_name", ""))
         tool_args = self._normalize_tool_args(tool_name, dict(action.get("args", {})))
+        mission_id = action.get("__mission_id")
+        mission_index = -1
+        if isinstance(mission_id, int) and mission_id > 0:
+            mission_index = mission_id - 1
+        else:
+            mission_index = self._next_incomplete_mission_index(state)
+        if mission_index >= 0:
+            state["active_mission_index"] = mission_index
+            state["active_mission_id"] = mission_index + 1
 
         lookup_candidates = self._memo_lookup_candidates_for_action(
             tool_name=tool_name, tool_args=tool_args
@@ -551,9 +752,8 @@ class LangGraphOrchestrator:
 
         signature = f"{tool_name}:{json.dumps(tool_args, sort_keys=True, default=str)}"
         if signature in state["seen_tool_signatures"]:
-            state["retry_counts"]["duplicate_tool"] = (
-                int(state["retry_counts"]["duplicate_tool"]) + 1
-            )
+            duplicate_retry_count = int(state["retry_counts"].get("duplicate_tool", 0)) + 1
+            state["retry_counts"]["duplicate_tool"] = duplicate_retry_count
             next_mission = self._next_incomplete_mission(state)
             if not next_mission and self._all_missions_completed(state):
                 state["pending_action"] = {
@@ -564,6 +764,20 @@ class LangGraphOrchestrator:
                     run_id=state["run_id"],
                     step=state["step"],
                     node_name="execute_duplicate_finish",
+                    state=state,
+                )
+                return state
+            if duplicate_retry_count > self.max_duplicate_tool_retries:
+                fail_message = (
+                    "Run stopped: repeated duplicate tool actions prevented mission progress. "
+                    f"Next task: {next_mission or 'unknown'}."
+                )
+                state["messages"].append({"role": "system", "content": fail_message})
+                state["pending_action"] = {"action": "finish", "answer": fail_message}
+                self.checkpoint_store.save(
+                    run_id=state["run_id"],
+                    step=state["step"],
+                    node_name="execute_duplicate_fail_closed",
                     state=state,
                 )
                 return state
@@ -603,6 +817,7 @@ class LangGraphOrchestrator:
             tool_name=tool_name,
             tool_args=tool_args,
             tool_result=tool_result,
+            mission_index=mission_index if mission_index >= 0 else None,
         )
         if validation_error:
             retry_count = int(state["retry_counts"].get("content_validation", 0)) + 1
@@ -628,7 +843,13 @@ class LangGraphOrchestrator:
                 "result": tool_result,
             }
         )
-        self._record_mission_tool_event(state, tool_name, tool_result)
+        self._record_mission_tool_event(
+            state,
+            tool_name,
+            tool_result,
+            mission_index=mission_index if mission_index >= 0 else None,
+            tool_args=tool_args,
+        )
         progress_hint = (
             self._progress_hint_message(state)
             or "Continue with the next task or finish when all tasks are complete."
@@ -792,6 +1013,29 @@ class LangGraphOrchestrator:
                 mission.get("used_tools", []),
                 mission.get("result", ""),
             )
+        audit = audit_run(
+            run_id=state["run_id"],
+            missions=state.get("missions", []),
+            mission_reports=state.get("mission_reports", []),
+            tool_history=state.get("tool_history", []),
+        )
+        state["audit_report"] = audit.to_dict()
+        self.logger.info(
+            "AUDIT REPORT run_id=%s passed=%s warned=%s failed=%s",
+            state["run_id"],
+            audit.passed,
+            audit.warned,
+            audit.failed,
+        )
+        for finding in audit.findings:
+            if finding.level != "pass":
+                self.logger.warning(
+                    "AUDIT %s mission=%s check=%s detail=%s",
+                    finding.level.upper(),
+                    finding.mission_id,
+                    finding.check,
+                    finding.detail,
+                )
         self._write_shared_plan(state)
         self.checkpoint_store.save(
             run_id=state["run_id"],
@@ -953,6 +1197,191 @@ class LangGraphOrchestrator:
                     return text[start : index + 1]
         return None
 
+    def _extract_all_json_objects(self, text: str) -> list[str]:
+        """Extract all top-level balanced JSON objects from text."""
+        objects: list[str] = []
+        pos = 0
+        while pos < len(text):
+            start = text.find("{", pos)
+            if start < 0:
+                break
+            depth = 0
+            in_string = False
+            escaped = False
+            for index in range(start, len(text)):
+                char = text[index]
+                if in_string:
+                    if escaped:
+                        escaped = False
+                    elif char == "\\":
+                        escaped = True
+                    elif char == '"':
+                        in_string = False
+                    continue
+                if char == '"':
+                    in_string = True
+                    continue
+                if char == "{":
+                    depth += 1
+                    continue
+                if char == "}":
+                    depth -= 1
+                    if depth == 0:
+                        objects.append(text[start : index + 1])
+                        pos = index + 1
+                        break
+            else:
+                break  # unbalanced — stop
+        return objects
+
+    def _parse_all_actions_json(self, model_output: str) -> list[dict[str, Any]]:
+        """Parse all JSON action objects from planner output."""
+        try:
+            data = json.loads(model_output)
+            if isinstance(data, dict):
+                return [data]
+        except json.JSONDecodeError:
+            pass
+
+        candidates = self._extract_all_json_objects(model_output)
+        actions = []
+        for candidate in candidates:
+            try:
+                parsed = json.loads(candidate)
+                if isinstance(parsed, dict) and "action" in parsed:
+                    actions.append(parsed)
+            except (json.JSONDecodeError, ValueError):
+                continue
+        return actions
+
+    def _validate_action_from_dict(self, action_dict: dict[str, Any]) -> dict[str, Any]:
+        """Validate a pre-parsed action dict against Pydantic schemas."""
+        raw = dict(action_dict)
+        mission_id = raw.get("__mission_id")
+        sanitized = {key: value for key, value in raw.items() if not key.startswith("__")}
+        validated = self._validate_action(json.dumps(sanitized))
+        if isinstance(mission_id, int) and mission_id > 0:
+            validated["__mission_id"] = mission_id
+        return validated
+
+    def _mission_preview_from_state(self, state: RunState) -> dict[int, dict[str, set[str]]]:
+        """Build mutable mission usage preview for action tagging within one planner turn."""
+        preview: dict[int, dict[str, set[str]]] = {}
+        for report in state.get("mission_reports", []):
+            mission_id = int(report.get("mission_id", 0))
+            if mission_id <= 0:
+                continue
+            preview[mission_id] = {
+                "used_tools": {str(tool) for tool in report.get("used_tools", [])},
+                "written_files": {
+                    str(path).replace("\\", "/").rsplit("/", 1)[-1]
+                    for path in report.get("written_files", [])
+                },
+            }
+        return preview
+
+    def _resolve_mission_id_for_action(
+        self,
+        state: RunState,
+        action: dict[str, Any],
+        *,
+        preview: dict[int, dict[str, set[str]]] | None = None,
+    ) -> int:
+        """Resolve which mission an action should be attributed to."""
+        if str(action.get("action", "")).strip().lower() != "tool":
+            return 0
+        reports = state.get("mission_reports", [])
+        if not reports:
+            return 0
+        tool_name = str(action.get("tool_name", "")).strip()
+        args = dict(action.get("args", {}))
+        helper_tools = {"memoize", "retrieve_memo"}
+
+        def _requirements_for_report(report: dict[str, Any]) -> tuple[set[str], set[str]]:
+            tools = set(report.get("required_tools", []))
+            files = {
+                str(path).replace("\\", "/").rsplit("/", 1)[-1]
+                for path in report.get("required_files", [])
+            }
+            if not tools and not files:
+                inferred_tools, inferred_files, _ = self._infer_requirements_from_text(
+                    str(report.get("mission", ""))
+                )
+                tools = set(inferred_tools)
+                files = {
+                    str(path).replace("\\", "/").rsplit("/", 1)[-1]
+                    for path in inferred_files
+                }
+            return tools, files
+
+        # Path-based mapping for deterministic write-related actions.
+        path_hint = ""
+        if tool_name == "write_file":
+            path_hint = str(args.get("path", "")).strip()
+        elif tool_name == "memoize":
+            key = str(args.get("key", "")).strip()
+            if key.startswith("write_file:"):
+                path_hint = key.split(":", 1)[1].strip()
+        if path_hint:
+            basename = path_hint.replace("\\", "/").rsplit("/", 1)[-1]
+            for report in reports:
+                required_files = _requirements_for_report(report)[1]
+                if basename and basename in required_files:
+                    return int(report.get("mission_id", 0))
+
+        # Prefer missions where this required tool has not yet been observed.
+        for report in reports:
+            if str(report.get("status", "pending")) == "completed":
+                continue
+            required_tools = _requirements_for_report(report)[0]
+            mission_id = int(report.get("mission_id", 0))
+            already_used = set(report.get("used_tools", []))
+            if preview and mission_id in preview:
+                already_used = set(preview[mission_id].get("used_tools", set()))
+            if tool_name in required_tools and tool_name not in already_used:
+                return int(report.get("mission_id", 0))
+
+        # Fallback: any incomplete mission that expects the tool.
+        for report in reports:
+            if str(report.get("status", "pending")) == "completed":
+                continue
+            required_tools = _requirements_for_report(report)[0]
+            if tool_name in required_tools:
+                return int(report.get("mission_id", 0))
+
+        # Queue-aware fallback: assign to the next mission still incomplete in preview.
+        for report in reports:
+            if str(report.get("status", "pending")) == "completed":
+                continue
+            mission_id = int(report.get("mission_id", 0))
+            required_tools, required_files = _requirements_for_report(report)
+            already_used = set(report.get("used_tools", []))
+            written_files = {
+                str(path).replace("\\", "/").rsplit("/", 1)[-1]
+                for path in report.get("written_files", [])
+            }
+            if preview and mission_id in preview:
+                already_used = set(preview[mission_id].get("used_tools", set()))
+                written_files = set(preview[mission_id].get("written_files", set()))
+
+            observed_tools = set(already_used)
+            observed_non_helper_tools = {tool for tool in already_used if tool not in helper_tools}
+            if required_tools or required_files:
+                missing_tools = required_tools - observed_tools
+                missing_files = required_files - written_files
+                if missing_tools or missing_files:
+                    return mission_id
+                continue
+
+            # Generic mission: one non-helper tool call completes it.
+            if not observed_non_helper_tools:
+                return mission_id
+
+        next_index = self._next_incomplete_mission_index(state)
+        if 0 <= next_index < len(reports):
+            return int(reports[next_index].get("mission_id", 0))
+        return 0
+
     def _deterministic_fallback_action(self, state: RunState) -> dict[str, Any] | None:
         """Build a safe tool/finish action from local state when provider times out."""
         policy_flags = state.get("policy_flags", {})
@@ -1025,6 +1454,12 @@ class LangGraphOrchestrator:
         ):
             path = self._extract_write_path_from_mission(mission) or "fib.txt"
             count = self._extract_fibonacci_count(mission)
+            mission_index = self._next_incomplete_mission_index(state)
+            reports = state.get("mission_reports", [])
+            if 0 <= mission_index < len(reports):
+                expected = reports[mission_index].get("expected_fibonacci_count")
+                if isinstance(expected, int) and expected > 0:
+                    count = expected
             return {
                 "action": "tool",
                 "tool_name": "write_file",
@@ -1045,8 +1480,10 @@ class LangGraphOrchestrator:
     def _extract_fibonacci_count(self, mission: str) -> int:
         patterns = (
             r"(\d+)(?:st|nd|rd|th)\s+number",
-            r"first\s+(\d+)\s+(?:numbers|terms)",
+            r"first\s+(\d+)\s+(?:fibonacci\s+)?(?:numbers|terms)",
+            r"first\s+(\d+)\s+fibonacci",
             r"until\s+the\s+(\d+)\s+(?:number|numbers|terms)",
+            r"(\d+)\s+fibonacci\s+(?:numbers|terms)?",
             r"(\d+)\s+(?:numbers|terms)",
         )
         mission_lower = mission.lower()
@@ -1077,18 +1514,233 @@ class LangGraphOrchestrator:
             return task_lines
         return ["Primary mission"]
 
-    def _initialize_mission_reports(self, missions: list[str]) -> list[dict[str, Any]]:
+    def _infer_requirements_from_text(
+        self, text: str
+    ) -> tuple[set[str], set[str], int | None]:
+        """Infer required tools/files from mission or sub-task text."""
+        lower = text.lower()
+        required_tools: set[str] = set()
+        required_files: set[str] = set()
+
+        if re.search(r"\b(uppercase|lowercase|reverse)\b", lower):
+            required_tools.add("string_ops")
+        if re.search(r"\b(repeat|confirmation)\b", lower):
+            required_tools.add("repeat_message")
+        if re.search(r"\bretrieve\b", lower) and re.search(r"\bmemo(?:ize)?\b", lower):
+            required_tools.add("retrieve_memo")
+        if re.search(r"\bmemoize\b", lower):
+            required_tools.add("memoize")
+        if re.search(r"\bjson\b", lower):
+            required_tools.add("json_parser")
+        if re.search(r"\b(regex|pattern)\b", lower):
+            required_tools.add("regex_matcher")
+        if re.search(r"\bextract\b", lower) and (
+            re.search(r"\bname\b", lower) or re.search(r"\bnumbers?\b", lower)
+        ):
+            required_tools.add("regex_matcher")
+        if (
+            re.search(r"\bsort\b", lower)
+            or re.search(r"\bascending\b", lower)
+            or re.search(r"\bdescending\b", lower)
+            or re.search(r"\balphabetic(?:ally)?\b", lower)
+        ):
+            required_tools.add("sort_array")
+        if re.search(r"\b(mean|sum|median|average)\b", lower):
+            required_tools.add("math_stats")
+        if (
+            re.search(r"\boutliers?\b", lower)
+            or re.search(r"\bstatistics?\b", lower)
+            or (re.search(r"\banaly(?:s|z)e\b", lower) and re.search(r"\bnumbers?\b", lower))
+        ):
+            required_tools.add("data_analysis")
+        if re.search(r"\banaly(?:s|z)e\b", lower) and re.search(r"\btext\b", lower):
+            required_tools.add("text_analysis")
+        if (
+            re.search(r"\bwrite(?:_file)?\b", lower)
+            or "save to" in lower
+            or "output to" in lower
+        ):
+            required_tools.add("write_file")
+            path = self._extract_write_path_from_mission(text)
+            if path:
+                required_files.add(path.replace("\\", "/").rsplit("/", 1)[-1])
+
+        expected_fibonacci_count: int | None = None
+        if "fibonacci" in lower:
+            required_tools.add("write_file")
+            expected_fibonacci_count = self._extract_fibonacci_count(text)
+            path = self._extract_write_path_from_mission(text)
+            if path:
+                required_files.add(path.replace("\\", "/").rsplit("/", 1)[-1])
+
+        return required_tools, required_files, expected_fibonacci_count
+
+    def _build_mission_contracts_from_plan(
+        self, structured_plan: StructuredPlan, missions: list[str]
+    ) -> list[dict[str, Any]]:
+        """Derive per-mission completion contracts from structured plan data."""
+        contracts: list[dict[str, Any]] = []
+        children_by_parent: dict[str, list[Any]] = {}
+        for step in structured_plan.steps:
+            if step.parent_id is not None:
+                children_by_parent.setdefault(step.parent_id, []).append(step)
+
+        top_level = [step for step in structured_plan.steps if step.parent_id is None]
+        for idx, mission in enumerate(missions):
+            mission_id = idx + 1
+            parent = next((step for step in top_level if step.id == str(mission_id)), None)
+            if parent is None and idx < len(top_level):
+                parent = top_level[idx]
+
+            required_tools: set[str] = set()
+            required_files: set[str] = set()
+            expected_fibonacci_count: int | None = None
+            checks: list[str] = []
+            mission_texts: list[str] = [mission]
+
+            base_tools, base_files, base_fib = self._infer_requirements_from_text(mission)
+            required_tools.update(base_tools)
+            required_files.update(base_files)
+            if base_fib is not None:
+                expected_fibonacci_count = base_fib
+
+            if parent is not None:
+                for child in children_by_parent.get(parent.id, []):
+                    mission_texts.append(child.description)
+                    tools, files, fib_count = self._infer_requirements_from_text(child.description)
+                    # Child tool mentions are often alternative implementation hints.
+                    # Keep completion contracts stable by only requiring write_file when
+                    # child text expects an output artifact.
+                    if files:
+                        required_tools.add("write_file")
+                    required_files.update(files)
+                    if fib_count is not None:
+                        required_tools.add("write_file")
+                        expected_fibonacci_count = fib_count
+
+            if expected_fibonacci_count is not None:
+                checks.append(f"fibonacci_count={expected_fibonacci_count}")
+            if required_files:
+                checks.append("required_files")
+            if required_tools:
+                checks.append("required_tools")
+            if any(
+                "pattern" in text.lower()
+                and ("sum" in text.lower() or "mean" in text.lower())
+                for text in mission_texts
+            ):
+                checks.append("pattern_report_consistency")
+
+            contracts.append(
+                {
+                    "mission_id": mission_id,
+                    "required_tools": sorted(required_tools),
+                    "required_files": sorted(required_files),
+                    "expected_fibonacci_count": expected_fibonacci_count,
+                    "contract_checks": checks,
+                }
+            )
+        return contracts
+
+    def _initialize_mission_reports(
+        self, missions: list[str], *, contracts: list[dict[str, Any]] | None = None
+    ) -> list[dict[str, Any]]:
         """Build initial mission report objects before tool execution starts."""
-        return [
-            {
-                "mission_id": index + 1,
-                "mission": mission,
-                "used_tools": [],
-                "tool_results": [],
-                "result": "",
+        contracts = contracts or []
+        reports: list[dict[str, Any]] = []
+        for index, mission in enumerate(missions):
+            contract = contracts[index] if index < len(contracts) else {}
+            reports.append(
+                {
+                    "mission_id": index + 1,
+                    "mission": mission,
+                    "used_tools": [],
+                    "tool_results": [],
+                    "result": "",
+                    "status": "pending",
+                    "required_tools": list(contract.get("required_tools", [])),
+                    "required_files": list(contract.get("required_files", [])),
+                    "written_files": [],
+                    "expected_fibonacci_count": contract.get("expected_fibonacci_count"),
+                    "contract_checks": list(contract.get("contract_checks", [])),
+                }
+            )
+        return reports
+
+    def _next_incomplete_mission_index(self, state: RunState) -> int:
+        reports = state.get("mission_reports", [])
+        for index, report in enumerate(reports):
+            if str(report.get("status", "pending")) != "completed":
+                return index
+        return -1
+
+    def _refresh_mission_status(self, state: RunState, mission_index: int) -> None:
+        """Recompute mission completion from required tools/files."""
+        reports = state.get("mission_reports", [])
+        if mission_index < 0 or mission_index >= len(reports):
+            return
+        report = reports[mission_index]
+        required_tools = set(report.get("required_tools", []))
+        required_files = {
+            str(path).replace("\\", "/").rsplit("/", 1)[-1]
+            for path in report.get("required_files", [])
+        }
+        if not required_tools and not required_files:
+            inferred_tools, inferred_files, inferred_fib_count = self._infer_requirements_from_text(
+                str(report.get("mission", ""))
+            )
+            required_tools = set(inferred_tools)
+            required_files = {
+                str(path).replace("\\", "/").rsplit("/", 1)[-1]
+                for path in inferred_files
             }
-            for index, mission in enumerate(missions)
-        ]
+            if inferred_tools and not report.get("required_tools"):
+                report["required_tools"] = sorted(required_tools)
+            if inferred_files and not report.get("required_files"):
+                report["required_files"] = sorted(required_files)
+            if (
+                inferred_fib_count is not None
+                and not isinstance(report.get("expected_fibonacci_count"), int)
+            ):
+                report["expected_fibonacci_count"] = inferred_fib_count
+        observed_tools = {str(tool) for tool in report.get("used_tools", [])}
+        observed_non_helper_tools = {
+            tool for tool in observed_tools if tool not in {"memoize", "retrieve_memo"}
+        }
+        written_files = {
+            str(path).replace("\\", "/").rsplit("/", 1)[-1]
+            for path in report.get("written_files", [])
+        }
+
+        if required_tools or required_files:
+            missing_tools = sorted(required_tools - observed_tools)
+        else:
+            missing_tools = [] if observed_non_helper_tools else ["<non_helper_tool>"]
+        missing_files = sorted(required_files - written_files)
+
+        latest_result: dict[str, Any] = {}
+        tool_results = report.get("tool_results", [])
+        if tool_results and isinstance(tool_results[-1], dict):
+            candidate = tool_results[-1].get("result")
+            if isinstance(candidate, dict):
+                latest_result = candidate
+        has_latest_error = "error" in latest_result
+
+        if missing_tools or missing_files:
+            if has_latest_error:
+                report["status"] = "failed"
+            else:
+                report["status"] = "in_progress" if report.get("used_tools") else "pending"
+        else:
+            report["status"] = "failed" if has_latest_error else "completed"
+
+        completed_tasks = state.get("completed_tasks", [])
+        mission_text = str(report.get("mission", "")).strip()
+        if report["status"] == "completed":
+            if mission_text and mission_text not in completed_tasks:
+                completed_tasks.append(mission_text)
+        elif mission_text in completed_tasks:
+            completed_tasks.remove(mission_text)
 
     def _record_mission_tool_event(
         self,
@@ -1097,78 +1749,95 @@ class LangGraphOrchestrator:
         tool_result: dict[str, Any],
         *,
         mission_index: int | None = None,
+        tool_args: dict[str, Any] | None = None,
     ) -> None:
-        """Attach tool usage/results to current mission report."""
+        """Attach tool usage/results to the intended mission report."""
         reports = state.get("mission_reports", [])
         if not reports:
-            reports = self._initialize_mission_reports(["Primary mission"])
+            contracts = state.get("mission_contracts", [])
+            reports = self._initialize_mission_reports(["Primary mission"], contracts=contracts)
             state["mission_reports"] = reports
             state["missions"] = ["Primary mission"]
             state["active_mission_index"] = -1
+            state["active_mission_id"] = 0
 
-        helper_tools = {"memoize", "retrieve_memo"}
-        completed_tasks = state.get("completed_tasks", [])
-        if mission_index is not None:
-            index = min(max(mission_index, 0), len(reports) - 1)
-        elif tool_name in helper_tools:
-            index = int(state.get("active_mission_index", -1))
-            memo_required = bool(state.get("policy_flags", {}).get("memo_required", False))
-            next_mission = self._next_incomplete_mission(state).lower()
-            if tool_name == "memoize" and "memo" in next_mission:
-                index = min(len(completed_tasks), len(reports) - 1)
-            elif tool_name == "memoize" and memo_required and 0 <= index < len(reports):
-                pass
+        pending = state.get("pending_action") or {}
+        pending_mission_id = pending.get("__mission_id")
+        if mission_index is None and isinstance(pending_mission_id, int):
+            mission_index = pending_mission_id - 1
+        if mission_index is None:
+            active = int(state.get("active_mission_index", -1))
+            if tool_name in {"memoize", "retrieve_memo"} and 0 <= active < len(reports):
+                mission_index = active
             else:
-                index = min(len(completed_tasks), len(reports) - 1)
-        else:
-            index = min(len(completed_tasks), len(reports) - 1)
+                mission_index = self._next_incomplete_mission_index(state)
+        index = min(max(mission_index if mission_index is not None else 0, 0), len(reports) - 1)
 
         state["active_mission_index"] = index
+        state["active_mission_id"] = index + 1
         mission = reports[index]
+        mission.setdefault("status", "pending")
+        mission.setdefault("required_tools", [])
+        mission.setdefault("required_files", [])
+        mission.setdefault("written_files", [])
+        mission.setdefault("expected_fibonacci_count", None)
+        mission.setdefault("contract_checks", [])
         mission["used_tools"].append(tool_name)
         mission["tool_results"].append({"tool": tool_name, "result": tool_result})
         mission["result"] = str(tool_result)
-        if "error" not in tool_result:
-            mission_text = str(mission.get("mission", "")).strip()
-            mission_text_lower = mission_text.lower()
-            should_mark_complete = tool_name not in helper_tools
-            if tool_name == "retrieve_memo" and any(
-                marker in mission_text_lower for marker in ("retrieve", "lookup", "memo")
-            ):
-                should_mark_complete = True
-            if tool_name == "memoize" and "memo" in mission_text_lower:
-                should_mark_complete = True
-            if should_mark_complete and mission_text and mission_text not in completed_tasks:
-                completed_tasks.append(mission_text)
+        if (
+            tool_name == "write_file"
+            and isinstance(tool_args, dict)
+            and "error" not in tool_result
+        ):
+            written_path = str(tool_args.get("path", "")).strip()
+            if written_path:
+                basename = written_path.replace("\\", "/").rsplit("/", 1)[-1]
+                if basename and basename not in mission["written_files"]:
+                    mission["written_files"].append(basename)
+        self._refresh_mission_status(state, index)
 
     def _next_incomplete_mission(self, state: RunState) -> str:
-        """Return the next mission string that has not been marked complete."""
-        missions = state.get("missions", [])
-        completed_count = len(state.get("completed_tasks", []))
-        if completed_count < len(missions):
-            return str(missions[completed_count])
+        """Return next mission text with non-completed status."""
+        reports = state.get("mission_reports", [])
+        next_index = self._next_incomplete_mission_index(state)
+        if 0 <= next_index < len(reports):
+            return str(reports[next_index].get("mission", ""))
         return ""
 
     def _all_missions_completed(self, state: RunState) -> bool:
-        """Whether all extracted missions have been completed."""
-        missions = state.get("missions", [])
-        if not missions:
+        """Whether every mission report status is completed."""
+        reports = state.get("mission_reports", [])
+        if not reports:
             return False
-        return len(state.get("completed_tasks", [])) >= len(missions)
+        return all(str(report.get("status", "pending")) == "completed" for report in reports)
 
     def _progress_hint_message(self, state: RunState) -> str:
         """Create a compact progress hint for the planner."""
-        missions = state.get("missions", [])
-        if not missions:
-            return ""
-        completed_count = len(state.get("completed_tasks", []))
+        reports = state.get("mission_reports", [])
+        if not reports:
+            missions = state.get("missions", [])
+            if not missions:
+                return ""
+            completed_count = len(state.get("completed_tasks", []))
+            next_mission = self._next_incomplete_mission(state)
+            if next_mission:
+                return (
+                    f"Progress: completed {completed_count}/{len(missions)} tasks. "
+                    f"Next task: {next_mission}"
+                )
+            return f"Progress: completed {completed_count}/{len(missions)} tasks. Emit finish now."
+
+        completed_count = sum(
+            1 for report in reports if str(report.get("status", "pending")) == "completed"
+        )
         next_mission = self._next_incomplete_mission(state)
         if next_mission:
             return (
-                f"Progress: completed {completed_count}/{len(missions)} tasks. "
+                f"Progress: completed {completed_count}/{len(reports)} tasks. "
                 f"Next task: {next_mission}"
             )
-        return f"Progress: completed {completed_count}/{len(missions)} tasks. Emit finish now."
+        return f"Progress: completed {completed_count}/{len(reports)} tasks. Emit finish now."
 
     def _build_auto_finish_answer(self, state: RunState) -> str:
         """Build deterministic summary when all missions are complete."""
@@ -1177,9 +1846,54 @@ class LangGraphOrchestrator:
         for report in mission_reports:
             mission = str(report.get("mission", "")).strip()
             result = str(report.get("result", "")).strip()
-            if mission and result:
+            status = str(report.get("status", "pending"))
+            if mission and result and status == "completed":
                 summary_parts.append(f"{mission} -> {result}")
         return " ".join(summary_parts)
+
+    def _compact_messages(self, state: RunState, *, max_messages: int = 50) -> None:
+        """Compact older messages when the transcript exceeds *max_messages*.
+
+        Preserves the system prompt (first message) and the latest *keep_recent*
+        messages.  Everything in between is summarized into a single digest
+        message to prevent context overflow on long runs.
+        """
+        messages = state.get("messages", [])
+        if len(messages) <= max_messages:
+            return
+
+        keep_recent = max_messages // 2
+        # System prompt is always messages[0]
+        system_msg = messages[0] if messages and messages[0].get("role") == "system" else None
+        recent = messages[-keep_recent:]
+        middle = messages[1:-keep_recent] if system_msg else messages[:-keep_recent]
+
+        # Build a compact digest of the middle messages
+        tool_calls: list[str] = []
+        for msg in middle:
+            content = str(msg.get("content", ""))[:200]
+            role = msg.get("role", "?")
+            if role == "tool" or (role == "assistant" and "tool_name" in content):
+                tool_calls.append(content[:80])
+
+        digest_lines = [
+            f"[Context compacted: {len(middle)} messages summarized]",
+            f"Tool calls in compacted window: {len(tool_calls)}",
+        ]
+        if tool_calls:
+            digest_lines.append("Recent tool summaries: " + "; ".join(tool_calls[-5:]))
+
+        digest_msg: AgentMessage = {
+            "role": "system",
+            "content": "\n".join(digest_lines),
+        }
+
+        compacted: list[AgentMessage] = []
+        if system_msg:
+            compacted.append(system_msg)
+        compacted.append(digest_msg)
+        compacted.extend(recent)
+        state["messages"] = compacted
 
     def _normalize_tool_args(self, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
         """Normalize common argument aliases before tool execution."""
@@ -1274,6 +1988,7 @@ class LangGraphOrchestrator:
             "memo_keys": [entry.get("key", "") for entry in memo_entries],
             "mission_count": len(state.get("mission_reports", [])),
             "duplicate_tool_retries": state.get("retry_counts", {}).get("duplicate_tool", 0),
+            "finish_rejections": state.get("retry_counts", {}).get("finish_rejected", 0),
             "memo_policy_retries": state.get("retry_counts", {}).get("memo_policy", 0),
             "provider_timeout_retries": state.get("retry_counts", {}).get("provider_timeout", 0),
             "content_validation_retries": state.get("retry_counts", {}).get(
@@ -1375,18 +2090,19 @@ class LangGraphOrchestrator:
         self, *, state: RunState, memo_hit: dict[str, Any]
     ) -> None:
         """Treat memo hit as completion for the next deterministic write mission."""
-        mission_text = self._next_incomplete_mission(state).strip()
-        if not mission_text:
-            return
-        completed_tasks = state.get("completed_tasks", [])
-        if mission_text not in completed_tasks:
-            completed_tasks.append(mission_text)
         reports = state.get("mission_reports", [])
         if not reports:
             return
-        index = min(max(len(completed_tasks) - 1, 0), len(reports) - 1)
+        index = self._next_incomplete_mission_index(state)
+        if index < 0:
+            return
         state["active_mission_index"] = index
+        state["active_mission_id"] = index + 1
         reports[index]["result"] = str(memo_hit)
+        reports[index]["status"] = "completed"
+        mission_text = str(reports[index].get("mission", "")).strip()
+        if mission_text and mission_text not in state.get("completed_tasks", []):
+            state["completed_tasks"].append(mission_text)
 
     def _cache_key_for_path(self, path: str) -> str:
         """Build cache key for reusable write_file inputs."""
@@ -1404,12 +2120,16 @@ class LangGraphOrchestrator:
 
     def _extract_write_path_from_mission(self, mission: str) -> str:
         """Extract target file path from mission text when present."""
-        quoted = re.search(r"""["']([^"']+\.[A-Za-z0-9]+)["']""", mission)
-        if quoted:
-            return quoted.group(1).strip()
-        unquoted = re.search(r"(/?[A-Za-z0-9_./\\-]+\.[A-Za-z0-9]+)", mission)
-        if unquoted:
-            return unquoted.group(1).strip().rstrip(".,;:")
+        ext = r"[A-Za-z][A-Za-z0-9]{0,9}"
+        quoted_matches = re.findall(rf"""["']([^"']+\.(?:{ext}))["']""", mission)
+        if quoted_matches:
+            return quoted_matches[-1].strip()
+        for match in re.finditer(rf"(/?[A-Za-z0-9_./\\-]+\.(?:{ext}))", mission):
+            candidate = match.group(1).strip().rstrip(".,;:")
+            # Guard against decimal numbers being interpreted as file paths.
+            if re.fullmatch(r"\d+\.\d+", candidate):
+                continue
+            return candidate
         return ""
 
     def _maybe_complete_next_write_from_cache(self, state: RunState) -> bool:
@@ -1425,7 +2145,8 @@ class LangGraphOrchestrator:
             return False
         reports = state.get("mission_reports", [])
         if reports:
-            target_index = min(len(state.get("completed_tasks", [])), len(reports) - 1)
+            next_index = self._next_incomplete_mission_index(state)
+            target_index = next_index if next_index >= 0 else len(reports) - 1
             if str(reports[target_index].get("mission", "")).strip() != mission:
                 for idx, report in enumerate(reports):
                     if str(report.get("mission", "")).strip() == mission:
@@ -1433,6 +2154,40 @@ class LangGraphOrchestrator:
                         break
         else:
             target_index = 0
+
+        helper_tools = {"memoize", "retrieve_memo"}
+        report = reports[target_index] if 0 <= target_index < len(reports) else {}
+        required_tools = set(report.get("required_tools", []))
+        required_files = {
+            str(path).replace("\\", "/").rsplit("/", 1)[-1]
+            for path in report.get("required_files", [])
+        }
+        if not required_tools and not required_files:
+            inferred_tools, inferred_files, _ = self._infer_requirements_from_text(mission)
+            required_tools = set(inferred_tools)
+            required_files = {
+                str(path).replace("\\", "/").rsplit("/", 1)[-1]
+                for path in inferred_files
+            }
+
+        # Cache reuse is only safe when mission completion is essentially a write output.
+        non_helper_required = {tool for tool in required_tools if tool not in helper_tools}
+        if non_helper_required - {"write_file"}:
+            self.logger.info(
+                "CACHE REUSE SKIP step=%s mission=%s reason=complex_required_tools tools=%s",
+                state["step"],
+                mission,
+                sorted(non_helper_required),
+            )
+            return False
+
+        attempted_entries = {
+            str(item)
+            for item in state.get("policy_flags", {}).get("cache_reuse_attempted", [])
+        }
+        attempt_key = f"{target_index}:{target_path.replace('\\', '/').rsplit('/', 1)[-1]}"
+        if attempt_key in attempted_entries:
+            return False
 
         for key in self._write_cache_candidates(target_path):
             lookup = self.memo_store.get_latest(key=key, namespace="cache")
@@ -1457,6 +2212,7 @@ class LangGraphOrchestrator:
                 tool_name="write_file",
                 tool_args=write_args,
                 tool_result=tool_result,
+                mission_index=target_index,
             )
             if validation_error:
                 self.logger.warning(
@@ -1471,6 +2227,7 @@ class LangGraphOrchestrator:
                 int(state["policy_flags"].get("cache_reuse_hits", 0)) + 1
             )
             state["active_mission_index"] = target_index
+            state["active_mission_id"] = target_index + 1
             state["tool_call_counts"]["write_file"] = (
                 int(state["tool_call_counts"].get("write_file", 0)) + 1
             )
@@ -1488,6 +2245,7 @@ class LangGraphOrchestrator:
                 "write_file",
                 tool_result,
                 mission_index=target_index,
+                tool_args=write_args,
             )
             progress_hint = (
                 self._progress_hint_message(state)
@@ -1512,8 +2270,12 @@ class LangGraphOrchestrator:
                     created_at=utc_now_iso(),
                 )
             )
+            attempted_entries.add(attempt_key)
+            state["policy_flags"]["cache_reuse_attempted"] = sorted(attempted_entries)
             return True
 
+        attempted_entries.add(attempt_key)
+        state["policy_flags"]["cache_reuse_attempted"] = sorted(attempted_entries)
         state["policy_flags"]["cache_reuse_misses"] = (
             int(state["policy_flags"].get("cache_reuse_misses", 0)) + 1
         )
@@ -1565,6 +2327,7 @@ class LangGraphOrchestrator:
         tool_name: str,
         tool_args: dict[str, Any],
         tool_result: dict[str, Any],
+        mission_index: int | None = None,
     ) -> str | None:
         """Apply deterministic content validation for mission-specific write constraints."""
         if tool_name != "write_file":
@@ -1572,26 +2335,56 @@ class LangGraphOrchestrator:
         if "error" in tool_result:
             return None
 
-        mission_text = self._next_incomplete_mission(state).lower()
-        if "fibonacci" not in mission_text:
-            return None
+        reports = state.get("mission_reports", [])
+        index = mission_index if mission_index is not None else int(state.get("active_mission_index", -1))
+        mission_report = reports[index] if 0 <= index < len(reports) else {}
+        mission_text = str(mission_report.get("mission", "")).lower()
+        contract_checks = {
+            str(check).strip().lower() for check in mission_report.get("contract_checks", [])
+        }
 
-        content = str(tool_args.get("content", ""))
-        numbers = self._parse_csv_int_list(content)
-        if numbers is None:
-            return "write_file content must be a comma-separated list of integers."
-        if len(numbers) != 100:
-            return f"fibonacci content must contain exactly 100 integers, got {len(numbers)}."
-        if numbers[0] != 0 or numbers[1] != 1:
-            return "fibonacci content must start with 0, 1."
+        # Fibonacci-specific strict validation.
+        fib_count = mission_report.get("expected_fibonacci_count")
+        fib_contract_expected = isinstance(fib_count, int) and fib_count > 0
+        is_fibonacci_mission = fib_contract_expected or ("fibonacci" in mission_text)
+        if is_fibonacci_mission:
+            expected_count = mission_report.get("expected_fibonacci_count")
+            if not isinstance(expected_count, int) or expected_count <= 0:
+                expected_count = self._extract_fibonacci_count(mission_text)
 
-        for index in range(2, len(numbers)):
-            expected = numbers[index - 1] + numbers[index - 2]
-            if numbers[index] != expected:
+            content = str(tool_args.get("content", ""))
+            numbers = self._parse_csv_int_list(content)
+            if numbers is None:
+                return "write_file content must be a comma-separated list of integers."
+            if len(numbers) != expected_count:
                 return (
-                    "fibonacci sequence mismatch at index "
-                    f"{index}: got {numbers[index]}, expected {expected}."
+                    f"fibonacci content must contain exactly {expected_count} integers, "
+                    f"got {len(numbers)}."
                 )
+            if len(numbers) < 2 or numbers[0] != 0 or numbers[1] != 1:
+                return "fibonacci content must start with 0, 1."
+
+            for seq_index in range(2, len(numbers)):
+                expected = numbers[seq_index - 1] + numbers[seq_index - 2]
+                if numbers[seq_index] != expected:
+                    return (
+                        "fibonacci sequence mismatch at index "
+                        f"{seq_index}: got {numbers[seq_index]}, expected {expected}."
+                    )
+
+        # Pattern report numeric consistency validation.
+        should_validate_pattern_report = "pattern_report_consistency" in contract_checks
+        # Legacy fallback when contract metadata is unavailable.
+        if not contract_checks and "pattern" in mission_text:
+            should_validate_pattern_report = (
+                "sum" in mission_text or "mean" in mission_text
+            )
+        if should_validate_pattern_report:
+            content = str(tool_args.get("content", ""))
+            pattern_error = self._validate_pattern_report_content(content)
+            if pattern_error:
+                return pattern_error
+
         return None
 
     def _parse_csv_int_list(self, content: str) -> list[int] | None:
@@ -1605,3 +2398,47 @@ class LangGraphOrchestrator:
                 return None
             numbers.append(int(token))
         return numbers
+
+    def _validate_pattern_report_content(self, content: str) -> str | None:
+        """Ensure pattern report contains numerically consistent sum/mean."""
+        lines = [line.strip() for line in content.splitlines() if line.strip()]
+        if len(lines) < 3:
+            return "pattern report must include extracted numbers, sum, and mean lines."
+
+        numbers_line = next((line for line in lines if line.lower().startswith("extracted numbers:")), "")
+        sum_line = next((line for line in lines if line.lower().startswith("sum:")), "")
+        mean_line = next((line for line in lines if line.lower().startswith("mean:")), "")
+        if not numbers_line or not sum_line or not mean_line:
+            return "pattern report must contain 'Extracted Numbers', 'Sum', and 'Mean' fields."
+
+        raw_numbers = numbers_line.split(":", 1)[1] if ":" in numbers_line else ""
+        number_tokens = [token.strip() for token in raw_numbers.split(",") if token.strip()]
+        if not number_tokens:
+            return "pattern report numbers list is empty."
+        values: list[float] = []
+        for token in number_tokens:
+            try:
+                values.append(float(token))
+            except ValueError:
+                return f"pattern report contains a non-numeric token: {token!r}."
+
+        sum_match = re.search(r"-?\d+(?:\.\d+)?", sum_line)
+        mean_match = re.search(r"-?\d+(?:\.\d+)?", mean_line)
+        if not sum_match or not mean_match:
+            return "pattern report sum/mean must contain numeric values."
+        reported_sum = float(sum_match.group(0))
+        reported_mean = float(mean_match.group(0))
+
+        expected_sum = sum(values)
+        expected_mean = expected_sum / len(values)
+        if round(reported_sum, 2) != round(expected_sum, 2):
+            return (
+                f"pattern report sum mismatch: got {reported_sum}, "
+                f"expected {round(expected_sum, 2)}."
+            )
+        if round(reported_mean, 3) != round(expected_mean, 3):
+            return (
+                f"pattern report mean mismatch: got {reported_mean}, "
+                f"expected {round(expected_mean, 3)}."
+            )
+        return None

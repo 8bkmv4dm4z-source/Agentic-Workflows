@@ -20,6 +20,11 @@ node_modules/
 .ipynb_checkpoints/
 *.db
 fib*.txt
+lastRun.txt
+analysis_results.txt
+pattern_report.txt
+users_sorted.txt
+*.md:Zone.Identifier
 
 # Caches
 .pytest_cache/

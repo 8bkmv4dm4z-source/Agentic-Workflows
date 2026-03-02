@@ -126,14 +126,23 @@ _TOOL_KEYWORD_MAP: dict[str, list[str]] = {
 }
 
 
-def parse_missions(user_input: str, timeout_seconds: float = 5.0) -> StructuredPlan:
+def parse_missions(
+    user_input: str,
+    timeout_seconds: float = 5.0,
+    max_plan_steps: int = 7,
+) -> StructuredPlan:
     """Parse user input into a StructuredPlan.
 
     Tries structured parsing first, falls back to flat regex extraction.
     Protected by a hard timeout to prevent runaway parsing on huge inputs.
+
+    If the parsed plan has more than *max_plan_steps* top-level steps,
+    excess steps are merged into the last allowed step to prevent
+    over-decomposition (guidance doc recommendation: 3-7 steps per plan).
     """
     if timeout_seconds <= 0:
-        return _parse_missions_inner(user_input)
+        plan = _parse_missions_inner(user_input)
+        return _enforce_step_limit(plan, max_plan_steps)
 
     outbox: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
 
@@ -148,11 +157,11 @@ def parse_missions(user_input: str, timeout_seconds: float = 5.0) -> StructuredP
     try:
         kind, payload = outbox.get(timeout=timeout_seconds)
     except queue.Empty:
-        return _build_fallback_plan(user_input)
+        return _enforce_step_limit(_build_fallback_plan(user_input), max_plan_steps)
 
     if kind == "err":
-        return _build_fallback_plan(user_input)
-    return payload
+        return _enforce_step_limit(_build_fallback_plan(user_input), max_plan_steps)
+    return _enforce_step_limit(payload, max_plan_steps)
 
 
 def _parse_missions_inner(user_input: str) -> StructuredPlan:
@@ -334,14 +343,75 @@ def _detect_dependencies(steps: list[MissionStep]) -> None:
 def _steps_to_flat_missions(steps: list[MissionStep]) -> list[str]:
     """Convert steps into flat mission strings for backward compat.
 
-    Only top-level steps become flat missions (sub-tasks are implicit).
+    Top-level steps become flat missions and include child sub-task context.
+    This preserves critical constraints (for example: file paths/counts)
+    for downstream validators without changing mission count semantics.
     """
+    children_map: dict[str, list[MissionStep]] = {}
+    for step in steps:
+        if step.parent_id is None:
+            continue
+        children_map.setdefault(step.parent_id, []).append(step)
+
     flat: list[str] = []
     for step in steps:
         if step.parent_id is None:
-            # Reconstruct "Task N: description" format
-            flat.append(f"Task {step.id}: {step.description}")
+            mission = f"Task {step.id}: {step.description}"
+            children = children_map.get(step.id, [])
+            if children:
+                child_descriptions = "; ".join(
+                    f"{child.id}. {child.description}" for child in children
+                )
+                mission = f"{mission} | Subtasks: {child_descriptions}"
+            flat.append(mission)
     return flat if flat else [s.description for s in steps]
+
+
+def _enforce_step_limit(plan: StructuredPlan, max_steps: int) -> StructuredPlan:
+    """Merge excess top-level steps when the plan exceeds *max_steps*.
+
+    Sub-tasks (steps with a parent_id) are not counted toward the limit.
+    When merging, excess steps are folded into the last allowed step's
+    description so no information is lost.
+    """
+    if max_steps <= 0:
+        return plan
+
+    top_level = [s for s in plan.steps if s.parent_id is None]
+    if len(top_level) <= max_steps:
+        return plan
+
+    keep = top_level[:max_steps]
+    excess = top_level[max_steps:]
+
+    # Merge excess descriptions into the last kept step
+    last = keep[-1]
+    merged_desc = [last.description]
+    for s in excess:
+        merged_desc.append(s.description)
+        # Also merge any suggested tools
+        for tool in s.suggested_tools:
+            if tool not in last.suggested_tools:
+                last.suggested_tools.append(tool)
+    last.description = " | ".join(merged_desc)
+
+    # Rebuild steps: kept top-level + their children + excess children reparented
+    excess_ids = {s.id for s in excess}
+    kept_ids = {s.id for s in keep}
+    new_steps: list[MissionStep] = []
+    for s in plan.steps:
+        if s.parent_id is None:
+            if s.id in kept_ids:
+                new_steps.append(s)
+        else:
+            if s.parent_id in excess_ids:
+                # Reparent to the last kept step
+                s.parent_id = last.id
+            new_steps.append(s)
+
+    # Rebuild flat missions
+    flat = _steps_to_flat_missions(new_steps)
+    return StructuredPlan(steps=new_steps, flat_missions=flat, parsing_method=plan.parsing_method)
 
 
 def _build_fallback_plan(user_input: str) -> StructuredPlan:
