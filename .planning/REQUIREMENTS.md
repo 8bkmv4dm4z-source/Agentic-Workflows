@@ -9,8 +9,8 @@
 
 - [x] **LGUP-01**: Developer can remove the `langgraph<1.0` pin and upgrade to `>=1.0.9` without breaking any of the 208 existing tests
 - [ ] **LGUP-02**: Developer can use `ToolNode` + `tools_condition` via `langchain-anthropic` binding, replacing the manual XML/JSON envelope parser in `graph.py`
-- [ ] **LGUP-03**: All `RunState` list fields (`tool_history`, `mission_reports`, `memo_events`, `seen_tool_signatures`) use `Annotated[list[T], operator.add]` reducers so parallel `Send()` branches cannot silently overwrite each other
-- [ ] **LGUP-04**: Message history is compacted when it exceeds a configurable threshold (default 40 messages) before specialist delegation multiplies message volume
+- [x] **LGUP-03**: All `RunState` list fields (`tool_history`, `mission_reports`, `memo_events`, `seen_tool_signatures`) use `Annotated[list[T], operator.add]` reducers so parallel `Send()` branches cannot silently overwrite each other
+- [x] **LGUP-04**: Message history is compacted when it exceeds a configurable threshold (default 40 messages) before specialist delegation multiplies message volume
 
 ### Multi-Agent Delegation
 
@@ -84,8 +84,8 @@
 |-------------|-------|--------|
 | LGUP-01 | Phase 2 | Complete |
 | LGUP-02 | Phase 2 | Pending |
-| LGUP-03 | Phase 2 | Pending |
-| LGUP-04 | Phase 2 | Pending |
+| LGUP-03 | Phase 2 | Complete (02-02) |
+| LGUP-04 | Phase 2 | Complete (02-02) |
 | OBSV-02 | Phase 2 | Pending |
 | LRNG-02 | Phase 2 | Pending |
 | MAGT-01 | Phase 3 | Pending |

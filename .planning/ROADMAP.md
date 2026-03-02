@@ -45,8 +45,8 @@ Starting from a working single-agent LangGraph foundation (208 tests green, 4-no
   6. docs/ADR/ directory exists with at least one ADR documenting the langgraph<1.0 pin removal decision
 **Plans**: 5 plans
 Plans:
-- [ ] 02-01-PLAN.md — Upgrade langgraph version pin and verify 208 tests pass (LGUP-01)
-- [ ] 02-02-PLAN.md — Add Annotated reducers to RunState list fields and message compaction (LGUP-03, LGUP-04)
+- [x] 02-01-PLAN.md — Upgrade langgraph version pin and verify 208 tests pass (LGUP-01)
+- [x] 02-02-PLAN.md — Add Annotated reducers to RunState list fields and message compaction (LGUP-03, LGUP-04)
 - [ ] 02-03-PLAN.md — Wire ToolNode + tools_condition for Anthropic provider path (LGUP-02)
 - [ ] 02-04-PLAN.md — Wire @observe() on run() and establish docs/ADR/ log (OBSV-02, LRNG-02)
 - [ ] 02-05-PLAN.md — Create GitHub Actions CI pipeline (success criterion #5)
@@ -118,7 +118,7 @@ Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation | Complete | Complete | 2026-03-02 |
-| 2. LangGraph Upgrade and Single-Agent Hardening | 1/5 | In Progress|  |
+| 2. LangGraph Upgrade and Single-Agent Hardening | 2/5 | In Progress|  |
 | 3. Specialist Subgraph Architecture | 0/3 | Not started | - |
 | 4. Multi-Agent Integration and Model Routing | 0/TBD | Not started | - |
 | 5. Observability Layer and Architecture Snapshot | 0/TBD | Not started | - |
