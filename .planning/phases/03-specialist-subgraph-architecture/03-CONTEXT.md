@@ -15,10 +15,12 @@ Create `ExecutorState` and `EvaluatorState` TypedDicts in dedicated modules with
 
 ### State Isolation Depth
 - **Rich TypedDicts mirroring the directive input/output contracts** — not thin wrappers
-- `ExecutorState` contains the fields the executor directive defines as input/output: `task_id`, `specialist`, `mission_id`, `tool_scope`, `input_context`, `token_budget`, `tool_history`, `seen_tool_signatures`, `result`, `tokens_used`, `status`
-- `EvaluatorState` contains the evaluator directive's contract fields: `task_id`, `specialist`, `mission_id`, `mission_reports`, `tool_history`, `missions`, `mission_contracts`, `audit_report`, `tokens_used`, `status`
-- Neither state inherits from `RunState` — overlap is intentional but each field is independently declared
-- A unit test must assert `set(ExecutorState.__annotations__) & set(RunState.__annotations__) == set()` (and same for EvaluatorState)
+- **Prefixed field names to guarantee zero key overlap with `RunState`:**
+  - `ExecutorState` fields: `task_id`, `specialist`, `mission_id`, `tool_scope`, `input_context`, `token_budget`, `exec_tool_history`, `exec_seen_signatures`, `result`, `tokens_used`, `status`
+  - `EvaluatorState` fields: `task_id`, `specialist`, `mission_id`, `eval_mission_reports`, `eval_tool_history`, `eval_missions`, `eval_mission_contracts`, `eval_audit_report`, `tokens_used`, `status`
+- The `exec_` / `eval_` prefix convention ensures zero overlap without ambiguity; `task_id`, `specialist`, `mission_id`, `tokens_used`, `status` are safe (absent from `RunState`)
+- Neither state inherits from `RunState` or any other TypedDict
+- A unit test must assert `set(ExecutorState.__annotations__).isdisjoint(set(RunState.__annotations__))` (and same for EvaluatorState)
 
 ### Tool Scope Enforcement
 - **Strict enforcement in the executor subgraph** — only tools listed in `tool_scope` from the `TaskHandoff` are registered into the subgraph's `ToolNode`
@@ -71,7 +73,7 @@ Create `ExecutorState` and `EvaluatorState` TypedDicts in dedicated modules with
 
 - The unit test for executor subgraph: create a `TaskHandoff` with `tool_scope=["sort_array"]`, invoke `build_executor_subgraph()`, pass it a handoff with a sort task in `input_context`, assert `HandoffResult` with `status="success"` and sorted output
 - The unit test for evaluator subgraph: pass a minimal `TaskHandoff` with populated `mission_reports` in `input_context`, invoke, assert `HandoffResult` with `audit_report` populated
-- State key overlap test: `assert set(ExecutorState.__annotations__).isdisjoint(set(RunState.__annotations__))` — the ROADMAP success criterion makes this the primary acceptance gate
+- State key overlap test: `assert set(ExecutorState.__annotations__).isdisjoint(set(RunState.__annotations__))` — the ROADMAP success criterion makes this the primary acceptance gate; field names are pre-resolved via the `exec_` / `eval_` prefix convention so no renaming pass is needed after wave 1
 
 </specifics>
 
