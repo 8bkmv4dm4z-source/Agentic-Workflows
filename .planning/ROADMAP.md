@@ -118,7 +118,7 @@ Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation | Complete | Complete | 2026-03-02 |
-| 2. LangGraph Upgrade and Single-Agent Hardening | 2/5 | In Progress|  |
+| 2. LangGraph Upgrade and Single-Agent Hardening | 3/5 | In Progress|  |
 | 3. Specialist Subgraph Architecture | 0/3 | Not started | - |
 | 4. Multi-Agent Integration and Model Routing | 0/TBD | Not started | - |
 | 5. Observability Layer and Architecture Snapshot | 0/TBD | Not started | - |
