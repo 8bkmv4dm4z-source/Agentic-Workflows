@@ -43,7 +43,13 @@ Starting from a working single-agent LangGraph foundation (208 tests green, 4-no
   4. Message history is compacted before it exceeds 40 messages — a test triggers compaction and asserts the condensed history is smaller than the threshold
   5. GitHub Actions workflow runs ruff check, mypy, and pytest on every push using ScriptedProvider, with zero live LLM calls
   6. docs/ADR/ directory exists with at least one ADR documenting the langgraph<1.0 pin removal decision
-**Plans**: TBD
+**Plans**: 5 plans
+Plans:
+- [ ] 02-01-PLAN.md — Upgrade langgraph version pin and verify 208 tests pass (LGUP-01)
+- [ ] 02-02-PLAN.md — Add Annotated reducers to RunState list fields and message compaction (LGUP-03, LGUP-04)
+- [ ] 02-03-PLAN.md — Wire ToolNode + tools_condition for Anthropic provider path (LGUP-02)
+- [ ] 02-04-PLAN.md — Wire @observe() on run() and establish docs/ADR/ log (OBSV-02, LRNG-02)
+- [ ] 02-05-PLAN.md — Create GitHub Actions CI pipeline (success criterion #5)
 
 ### Phase 3: Specialist Subgraph Architecture
 **Goal**: Executor and evaluator specialists exist as independently-compiled LangGraph StateGraphs with isolated state schemas — testable and invokable in isolation, before any routing is wired
@@ -108,7 +114,7 @@ Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation | Complete | Complete | 2026-03-02 |
-| 2. LangGraph Upgrade and Single-Agent Hardening | 0/TBD | Not started | - |
+| 2. LangGraph Upgrade and Single-Agent Hardening | 0/5 | In progress | - |
 | 3. Specialist Subgraph Architecture | 0/TBD | Not started | - |
 | 4. Multi-Agent Integration and Model Routing | 0/TBD | Not started | - |
 | 5. Observability Layer and Architecture Snapshot | 0/TBD | Not started | - |
