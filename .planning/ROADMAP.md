@@ -76,7 +76,11 @@ Plans:
   2. Multi-mission workload with 3+ missions completes without dropping any mission report or tool_history entry — MissionAuditor chain_integrity check passes
   3. Model router makes routing decisions based on task complexity signals (e.g., token_budget_remaining, mission type keyword) — two different task types demonstrably route to different model strengths in an integration test
   4. Subgraphs are compiled without checkpointer argument so parent graph propagates checkpointing — checkpoint replay after a two-mission run restores all mission reports correctly
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+- [ ] 04-01-PLAN.md — Cache compiled subgraphs in __init__ and wire _route_to_specialist() with exec_tool_history copy-back (MAGT-05)
+- [ ] 04-02-PLAN.md — Multi-mission integration tests: tool_history preservation + MissionAuditor chain_integrity + checkpoint replay (MAGT-06)
+- [ ] 04-03-PLAN.md — Wire ModelRouter in LangGraphOrchestrator __init__ and _generate_with_hard_timeout() (OBSV-03)
 
 ### Phase 5: Observability Layer and Architecture Snapshot
 **Goal**: Langfuse CallbackHandler is wired in graph invocation config for automatic node-level tracing; @observe() closes the open Phase 1 item on the provider path; a Before/After architecture snapshot documents the Phase 1 to Phase 4 progression
@@ -120,7 +124,7 @@ Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7
 | 1. Foundation | Complete | Complete | 2026-03-02 |
 | 2. LangGraph Upgrade and Single-Agent Hardening | 4/5 | In Progress|  |
 | 3. Specialist Subgraph Architecture | 3/3 | Complete   | 2026-03-03 |
-| 4. Multi-Agent Integration and Model Routing | 0/TBD | Not started | - |
+| 4. Multi-Agent Integration and Model Routing | 0/3 | Not started | - |
 | 5. Observability Layer and Architecture Snapshot | 0/TBD | Not started | - |
 | 6. Production Service Layer | 0/TBD | Not started | - |
 | 7. Production Persistence and CI | 0/TBD | Not started | - |
