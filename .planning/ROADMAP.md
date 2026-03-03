@@ -125,7 +125,7 @@ Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7
 | 1. Foundation | Complete | Complete | 2026-03-02 |
 | 2. LangGraph Upgrade and Single-Agent Hardening | 4/5 | In Progress|  |
 | 3. Specialist Subgraph Architecture | 3/3 | Complete   | 2026-03-03 |
-| 4. Multi-Agent Integration and Model Routing | 3/4 | Gap Closure In Progress | - |
+| 4. Multi-Agent Integration and Model Routing | 5/6 | In Progress|  |
 | 5. Observability Layer and Architecture Snapshot | 0/TBD | Not started | - |
 | 6. Production Service Layer | 0/TBD | Not started | - |
 | 7. Production Persistence and CI | 0/TBD | Not started | - |
