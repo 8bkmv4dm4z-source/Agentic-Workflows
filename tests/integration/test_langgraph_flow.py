@@ -1048,6 +1048,62 @@ class LangGraphFlowTests(unittest.TestCase):
                 tools, ["repeat_message", "sort_array", "string_ops", "repeat_message"]
             )
 
+    def test_subgraph_routing_populates_mission_used_tools(self) -> None:
+        """Regression test: _route_to_specialist() must populate mission_reports[*].used_tools.
+
+        Plan 04-01 introduced a regression where routing via _execute_action() preserved
+        mission attribution (_record_mission_tool_event()) but the subgraph routing path did
+        not.  This test ensures that tool actions routed via _route_to_specialist() always
+        produce non-empty used_tools in mission_reports and a passing MissionAuditor run.
+        """
+        with tempfile.TemporaryDirectory() as temp_dir:
+            provider = ScriptedProvider(
+                [
+                    {
+                        "action": "tool",
+                        "tool_name": "sort_array",
+                        "args": {"items": [5, 3, 1, 4, 2], "order": "asc"},
+                    },
+                    {"action": "finish", "answer": "done"},
+                ]
+            )
+            orchestrator = LangGraphOrchestrator(
+                provider=provider,
+                memo_store=SQLiteMemoStore(f"{temp_dir}/memo.db"),
+                checkpoint_store=SQLiteCheckpointStore(f"{temp_dir}/checkpoints.db"),
+                policy=MemoizationPolicy(max_policy_retries=1),
+                max_steps=20,
+            )
+            result = orchestrator.run("Task 1: Sort these numbers using sort_array.")
+            # Mission attribution must be non-empty — core regression assertion
+            self.assertIn(
+                "sort_array",
+                result["mission_report"][0]["used_tools"],
+                "sort_array must appear in mission_reports[0].used_tools after routing via "
+                "_route_to_specialist(); empty used_tools indicates missing "
+                "_record_mission_tool_event() in the routing path",
+            )
+            # MissionAuditor required_tools_missing check must not fire
+            self.assertEqual(
+                result["audit_report"]["failed"],
+                0,
+                "audit_report must have zero FAIL findings; non-zero indicates "
+                "required_tools_missing check firing due to empty used_tools",
+            )
+            # via_subgraph tag must be present on the tool_history entry
+            self.assertTrue(
+                result["tools_used"][-1].get("via_subgraph"),
+                "last tool_history entry must carry via_subgraph=True to confirm "
+                "it was dispatched through _route_to_specialist()",
+            )
+            # tool_call_counts must be incremented for the routed tool
+            self.assertGreaterEqual(
+                result["derived_snapshot"]["tool_call_counts"].get("sort_array", 0),
+                1,
+                "tool_call_counts['sort_array'] must be >= 1 after routing sort_array "
+                "via _route_to_specialist()",
+            )
+
 
 @unittest.skipUnless(LANGGRAPH_AVAILABLE, "langgraph not installed")
 class MissionIsolationAuditTests(unittest.TestCase):
