@@ -237,3 +237,153 @@ verifies it remains eliminated as the codebase evolves.
   TypedDict (unchanged in Phase 3; 26 fields listed in annotations)
 - `docs/ADR/` — Phase 2 architectural decision records (ADR-0001 through ADR-0004)
   for LangGraph upgrade context
+
+---
+
+## Phase 4: Wiring Subgraph Invocation
+
+This section documents the Phase 4 changes that connected the specialist subgraphs
+built in Phase 3 to the main execution path. After Phase 4, tool dispatch no longer
+falls through to `_execute_action()` directly — it routes through a compiled
+`CompiledStateGraph` and merges the results back into `RunState`.
+
+### What Changed
+
+The primary change is in `_route_to_specialist()` inside `LangGraphOrchestrator`
+in `graph.py`. Phase 3 left this method as a thin wrapper that recorded handoff
+metadata but still called `self._execute_action(state)` for the actual tool
+dispatch. Phase 4 replaces that fallthrough with a direct invocation of the cached
+executor subgraph.
+
+Before Phase 4, the execution block in `_route_to_specialist()` was:
+
+```python
+pre_calls = len(state.get("tool_history", []))
+state = self._execute_action(state)
+post_calls = len(state.get("tool_history", []))
+status = "success" if post_calls > pre_calls else "error"
+```
+
+After Phase 4, the same block dispatches through the compiled subgraph:
+
+```python
+exec_state = {
+    "task_id": task_id,
+    "specialist": "executor",
+    "mission_id": max(0, mission_id),
+    "tool_scope": tool_scope,
+    "input_context": {"tool_name": tool_name, "args": ..., "step": state["step"]},
+    "token_budget": int(state.get("token_budget_remaining", 4096)),
+    "exec_tool_history": [],
+    "exec_seen_signatures": list(state.get("seen_tool_signatures", [])),
+    "result": {},
+    "tokens_used": 0,
+    "status": "success",
+}
+result_state = self._executor_subgraph.invoke(exec_state)
+for i, entry in enumerate(result_state.get("exec_tool_history", [])):
+    tagged = dict(entry)
+    tagged["via_subgraph"] = True
+    tagged["call"] = len(state["tool_history"]) + i + 1
+    state["tool_history"].append(tagged)
+```
+
+Additionally, `LangGraphOrchestrator.__init__()` now caches both compiled subgraphs
+as instance attributes after `build_tool_registry()` completes:
+
+```python
+self._executor_subgraph = build_executor_subgraph(memo_store=self.memo_store)
+self._evaluator_subgraph = build_evaluator_subgraph()
+```
+
+### Why
+
+Phase 3 built the specialist subgraphs in isolation — a deliberate sequencing
+choice that made each subgraph independently testable before any integration risk
+was introduced. Phase 4 connects them to the live execution path.
+
+Caching the compiled subgraphs in `__init__()` is a direct consequence of the
+performance implication of `StateGraph.compile()`. Compilation is not free: it
+traverses the node graph, validates edges, installs reducers, and prepares the
+invocation runtime. In a multi-mission run where `_route_to_specialist()` is
+called once per tool action, re-running `build_executor_subgraph()` on every call
+would compile the graph N times for N tool dispatches. Caching once per
+orchestrator instance reduces that to a single compile at startup.
+
+The `via_subgraph=True` tag on tool history entries serves two purposes. First,
+it provides a clear audit trail that distinguishes tool calls dispatched through
+the specialist subgraph path from those that went through `_execute_action()`
+directly (the fallback path for unknown specialists). Second, it makes the routing
+decision visible to downstream consumers — `MissionAuditor`, for example, can
+detect which execution mode was used for each tool call without inspecting the
+handoff queue.
+
+### Which LangGraph Classes Implement It
+
+**`CompiledStateGraph.invoke(state_dict)`**
+
+The method introduced in the Phase 3 preview section is now the active call site.
+`self._executor_subgraph.invoke(exec_state)` passes an `ExecutorState`-shaped dict
+to the compiled graph, which runs the `execute_node` function, appends the tool
+result to `exec_tool_history`, and returns the updated state dict. Because
+`CompiledStateGraph` is stored as a Python object in `self._executor_subgraph`, the
+call is an ordinary method call — no LangGraph graph machinery is involved at the
+call site.
+
+**`StateGraph(ExecutorState)` and `StateGraph.compile()`**
+
+These are the classes that produce the `CompiledStateGraph`. They run at
+orchestrator initialization time (inside `build_executor_subgraph()`), not at
+dispatch time. The wrapper-function pattern — calling `.invoke()` inside a
+regular Python method rather than via `builder.add_node(compiled_subgraph)` — is
+required here because `ExecutorState` and `RunState` share no keys. LangGraph's
+`add_node` shortcut for subgraphs assumes the subgraph output is a subset of the
+parent state schema; the zero-key-overlap design from Phase 3 intentionally rules
+out that shortcut and requires the explicit copy-back loop shown above.
+
+### State Merge Detail
+
+`exec_tool_history` entries produced by the executor subgraph have the shape:
+
+```python
+{"tool": str, "args": dict, "result": dict}
+```
+
+`RunState.tool_history` entries (typed as `ToolRecord`) require an additional
+`"call"` integer field that records the global invocation sequence number.
+The copy-back loop assigns `call = len(state["tool_history"]) + i + 1` before
+appending each entry, where `i` is the entry's index within the current batch.
+This formula ensures that call numbers are contiguous with pre-existing entries
+and reflect the correct ordering even when the subgraph produces multiple entries
+in one dispatch (currently one entry per dispatch, but the loop handles N).
+
+The `via_subgraph=True` field is added to the copy in the same loop. This field
+is not part of the `ToolRecord` TypedDict annotation and is therefore "extra"
+metadata that passes through unvalidated at runtime (Python TypedDicts do not
+enforce extra keys). `MissionAuditor._map_tool_history_to_missions()` uses the
+`call` field for cursor ordering; the `via_subgraph` field is transparent to it.
+
+### Evaluator Position
+
+The evaluator subgraph (`self._evaluator_subgraph`) is compiled and cached in
+`__init__()` but is **not** invoked during `_route_to_specialist()`. When
+`_select_specialist_for_action()` returns `"evaluator"` for a tool action, the
+implementation routes the tool through the executor subgraph instead. The
+evaluator subgraph is reserved for `_finalize()` time — the point where the
+complete run data is available and the canonical `audit_report` is produced.
+
+This design decision follows the analysis in RESEARCH.md (Pitfall 4). Invoking
+the evaluator subgraph mid-run would produce a partial-run audit using only the
+tool history and mission reports accumulated up to that step. The resulting
+`eval_audit_report` would reflect an incomplete picture of the run. When
+`_finalize()` then calls `audit_run()` to produce the canonical audit, it would
+overwrite whatever partial result the mid-run evaluator had written to
+`state["audit_report"]`. The correct integration point for the evaluator subgraph
+is `_finalize()` itself — which already owns the canonical audit write and has
+access to the complete run state. The `eval_audit_report -> RunState.audit_report`
+merge path described in the Phase 4 CONTEXT.md State Merge Strategy is therefore
+deferred to Phase 5.
+
+The evaluator subgraph cache in `__init__()` is retained because Phase 5 will need
+it at `_finalize()` time, and pre-compiling at initialization keeps the `_finalize()`
+code path free from compilation cost.
