@@ -13,7 +13,7 @@ Starting from a working single-agent LangGraph foundation (208 tests green, 4-no
 
 - [x] **Phase 1: Foundation** - LangGraph orchestration, multi-provider support, tool registry, RunState, 208 tests (COMPLETE)
 - [ ] **Phase 2: LangGraph Upgrade and Single-Agent Hardening** - Remove <1.0 pin, adopt ToolNode/tools_condition, add RunState reducers, wire observability and CI
-- [ ] **Phase 3: Specialist Subgraph Architecture** - Build isolated ExecutorState/EvaluatorState TypedDicts and independently-compiled specialist StateGraphs
+- [x] **Phase 3: Specialist Subgraph Architecture** - Build isolated ExecutorState/EvaluatorState TypedDicts and independently-compiled specialist StateGraphs (completed 2026-03-03)
 - [ ] **Phase 4: Multi-Agent Integration and Model Routing** - Wire _route_to_specialist() to real compiled subgraphs, stabilize multi-mission result preservation, implement real model routing
 - [ ] **Phase 5: Observability Layer and Architecture Snapshot** - Wire Langfuse CallbackHandler for automatic graph tracing, produce phase progression documentation
 - [ ] **Phase 6: Production Service Layer** - FastAPI HTTP service with POST /run, GET /run/{id}, and SSE streaming endpoint
@@ -119,7 +119,7 @@ Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7
 |-------|----------------|--------|-----------|
 | 1. Foundation | Complete | Complete | 2026-03-02 |
 | 2. LangGraph Upgrade and Single-Agent Hardening | 4/5 | In Progress|  |
-| 3. Specialist Subgraph Architecture | 2/3 | In Progress|  |
+| 3. Specialist Subgraph Architecture | 3/3 | Complete   | 2026-03-03 |
 | 4. Multi-Agent Integration and Model Routing | 0/TBD | Not started | - |
 | 5. Observability Layer and Architecture Snapshot | 0/TBD | Not started | - |
 | 6. Production Service Layer | 0/TBD | Not started | - |

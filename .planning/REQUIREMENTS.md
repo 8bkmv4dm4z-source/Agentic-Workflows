@@ -37,7 +37,7 @@
 
 ### Learning System
 
-- [ ] **LRNG-01**: Every non-trivial refactor (any change touching graph.py, state_schema.py, or specialist files) is accompanied by a WALKTHROUGH update that explains: what changed, why it changed, and which LangGraph/Python classes implement the change
+- [x] **LRNG-01**: Every non-trivial refactor (any change touching graph.py, state_schema.py, or specialist files) is accompanied by a WALKTHROUGH update that explains: what changed, why it changed, and which LangGraph/Python classes implement the change
 - [x] **LRNG-02**: An Architecture Decision Log (`docs/ADR/`) records each significant design decision with context, alternatives considered, and rationale — populated as decisions are made during each phase
 - [ ] **LRNG-03**: Each completed phase produces a "Before/After" architecture snapshot showing the system state before and after the phase — making the progression of the build explicit and reviewable
 
@@ -92,7 +92,7 @@
 | MAGT-02 | Phase 3 | Complete |
 | MAGT-03 | Phase 3 | Complete |
 | MAGT-04 | Phase 3 | Complete |
-| LRNG-01 | Phase 3 | Pending |
+| LRNG-01 | Phase 3 | Complete |
 | MAGT-05 | Phase 4 | Pending |
 | MAGT-06 | Phase 4 | Pending |
 | OBSV-03 | Phase 4 | Pending |

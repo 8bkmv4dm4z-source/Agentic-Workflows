@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-03-03T00:39:55.652Z"
+last_updated: "2026-03-03T00:45:03.598Z"
 progress:
   total_phases: 2
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 8
-  completed_plans: 7
+  completed_plans: 8
 ---
 
 # Project State
@@ -23,11 +23,11 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 ## Current Position
 
 Phase: 3 of 7 (Specialist Subgraph Architecture)
-Plan: 2 of 3 in current phase (03-01 DONE, 03-02 DONE)
-Status: In progress — 03-02 complete; EvaluatorState + build_evaluator_subgraph() created and tested
-Last activity: 2026-03-03 — 03-02 complete; EvaluatorState + build_evaluator_subgraph() ready; 311 tests passing
+Plan: 3 of 3 in current phase (03-01 DONE, 03-02 DONE, 03-03 DONE)
+Status: Phase 3 COMPLETE — isolation acceptance gate + WALKTHROUGH_PHASE3.md created; 355 tests passing
+Last activity: 2026-03-03 — 03-03 complete; LRNG-01 satisfied; Phase 3 fully done; ready for Phase 4
 
-Progress: [████░░░░░░] 25% (Phase 1 complete, Phase 2 complete, Phase 3 plans 01-02 done)
+Progress: [█████░░░░░] 30% (Phase 1 complete, Phase 2 complete, Phase 3 complete)
 
 ## Performance Metrics
 
@@ -41,10 +41,10 @@ Progress: [████░░░░░░] 25% (Phase 1 complete, Phase 2 comple
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 02-langgraph-upgrade | 5 | 20 min | 4 min |
-| 03-specialist-subgraph | 2 | 4 min | 2 min |
+| 03-specialist-subgraph | 3 | 7 min | 2 min |
 
 **Recent Trend:**
-- Last 7 plans: 02-01 (3 min), 02-02 (7 min), 02-03 (5 min), 02-04 (N/A), 02-05 (3 min), 03-01 (2 min), 03-02 (2 min)
+- Last 7 plans: 02-03 (5 min), 02-04 (N/A), 02-05 (3 min), 03-01 (2 min), 03-02 (2 min), 03-03 (3 min)
 - Trend: Stable
 
 *Updated after each plan completion*
@@ -76,6 +76,8 @@ Recent decisions affecting current work:
 - [Phase 03-02]: eval_ prefix on all RunState-colliding fields guarantees zero overlap without TypedDict inheritance
 - [Phase 03-02]: build_evaluator_subgraph() takes no parameters — tool scope not relevant for evaluator; audit_run() accepts input via state fields
 - [Phase 03-02]: evaluate_node catches all exceptions from audit_run() and returns status=error (fail-closed, not crash)
+- [Phase 03]: Use __annotations__ not get_type_hints() for TypedDict isolation assertion — avoids resolving forward references
+- [Phase 03]: WALKTHROUGH_PHASE3.md is standalone file at docs/ root per LRNG-01 requirement
 
 ### Pending Todos
 
@@ -92,5 +94,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-03-03
-Stopped at: Plan 03-02 complete — EvaluatorState + build_evaluator_subgraph() created, 311 tests green
+Stopped at: Plan 03-03 complete — state isolation acceptance gate + WALKTHROUGH_PHASE3.md; Phase 3 done; 355 tests green
 Resume file: None
