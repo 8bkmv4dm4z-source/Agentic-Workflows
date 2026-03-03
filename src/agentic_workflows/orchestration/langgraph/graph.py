@@ -30,12 +30,15 @@ from agentic_workflows.orchestration.langgraph.handoff import create_handoff, cr
 from agentic_workflows.orchestration.langgraph.memo_store import SQLiteMemoStore
 from agentic_workflows.orchestration.langgraph.mission_auditor import audit_run
 from agentic_workflows.orchestration.langgraph.mission_parser import StructuredPlan, parse_missions
+from agentic_workflows.orchestration.langgraph.model_router import ModelRouter, TaskComplexity
 from agentic_workflows.orchestration.langgraph.policy import MemoizationPolicy
 from agentic_workflows.orchestration.langgraph.provider import (
     ChatProvider,
     ProviderTimeoutError,
     build_provider,
 )
+from agentic_workflows.orchestration.langgraph.specialist_evaluator import build_evaluator_subgraph
+from agentic_workflows.orchestration.langgraph.specialist_executor import build_executor_subgraph
 from agentic_workflows.orchestration.langgraph.state_schema import (
     AgentMessage,
     MemoEvent,
@@ -111,10 +114,11 @@ class LangGraphOrchestrator:
         self,
         *,
         provider: ChatProvider | None = None,
+        fast_provider: ChatProvider | None = None,
         memo_store: SQLiteMemoStore | None = None,
         checkpoint_store: SQLiteCheckpointStore | None = None,
         policy: MemoizationPolicy | None = None,
-        max_steps: int = 40,
+        max_steps: int = 80,
         max_invalid_plan_retries: int = 8,
         max_provider_timeout_retries: int = 3,
         plan_call_timeout_seconds: float | None = None,
@@ -123,6 +127,10 @@ class LangGraphOrchestrator:
         max_finish_rejections: int = 6,
     ) -> None:
         self.provider = provider or build_provider()
+        self._router = ModelRouter(
+            strong_provider=self.provider,
+            fast_provider=fast_provider,
+        )
         self.memo_store = memo_store or SQLiteMemoStore()
         self.checkpoint_store = checkpoint_store or SQLiteCheckpointStore()
         self.policy = policy or MemoizationPolicy()
@@ -140,6 +148,8 @@ class LangGraphOrchestrator:
         self.max_finish_rejections = max_finish_rejections
         self.strict_single_action_mode = self._env_bool("P1_STRICT_SINGLE_ACTION", False)
         self.tools: dict[str, Tool] = build_tool_registry(self.memo_store)
+        self._executor_subgraph = build_executor_subgraph(memo_store=self.memo_store)
+        self._evaluator_subgraph = build_evaluator_subgraph()
         self._invalidate_known_poisoned_cache_entries()
         self.system_prompt = self._build_system_prompt()
         self._compiled = self._compile_graph()
@@ -355,6 +365,12 @@ class LangGraphOrchestrator:
         state["mission_reports"] = self._initialize_mission_reports(missions, contracts=contracts)
         state["active_mission_index"] = -1
         state["active_mission_id"] = 0
+        self._emit_trace(state, "parser",
+            method=structured_plan.parsing_method,
+            step_count=len(structured_plan.steps),
+            flat_count=len(structured_plan.flat_missions),
+            flat_previews=[m[:80] for m in structured_plan.flat_missions[:5]],
+        )
         self._write_shared_plan(state)
         self.logger.info("RUN START run_id=%s missions=%s", state["run_id"], len(missions))
         self.checkpoint_store.save(
@@ -382,6 +398,15 @@ class LangGraphOrchestrator:
             "audit_report": final_state.get("audit_report"),
             "state": final_state,
         }
+
+    def _emit_trace(self, state: RunState, stage: str, **fields: Any) -> None:
+        """Append a pipeline trace event to policy_flags['pipeline_trace']."""
+        policy_flags = state.get("policy_flags")
+        if not isinstance(policy_flags, dict):
+            return
+        trace = policy_flags.setdefault("pipeline_trace", [])
+        if isinstance(trace, list):
+            trace.append({"stage": stage, "step": state.get("step", 0), **fields})
 
     def _route_after_plan(self, state: RunState) -> str:
         """Route graph transitions based on the planner's pending action."""
@@ -476,6 +501,16 @@ class LangGraphOrchestrator:
             bool(state.get("policy_flags", {}).get("memo_required", False)),
         )
         self._log_parser_state(state)
+        self._emit_trace(state, "loop_state",
+            step=state["step"],
+            queue_depth=len(state.get("pending_action_queue", [])),
+            completed_count=sum(
+                1 for r in state.get("mission_reports", [])
+                if str(r.get("status", "")) == "completed"
+            ),
+            total_count=len(state.get("mission_reports", [])),
+            timeout_mode=bool(state.get("policy_flags", {}).get("planner_timeout_mode", False)),
+        )
         if state["step"] > self.max_steps:
             fail_message = (
                 "Run stopped: exceeded orchestrator step budget before mission completion. "
@@ -530,6 +565,12 @@ class LangGraphOrchestrator:
                     action=validated,
                     queue_remaining=len(queue),
                 )
+                self._emit_trace(state, "planner_output",
+                    source="queue_pop",
+                    action_type=str(validated.get("action", "")),
+                    tool_name=str(validated.get("tool_name", "")),
+                    mission_id=int(validated.get("__mission_id", 0) or 0),
+                )
                 if validated.get("action") == "finish" and not self._all_missions_completed(state):
                     return self._reject_finish_and_recover(
                         state=state,
@@ -573,6 +614,12 @@ class LangGraphOrchestrator:
                     source="timeout_mode",
                     action=fallback_action,
                     queue_remaining=len(state.get("pending_action_queue", [])),
+                )
+                self._emit_trace(state, "planner_output",
+                    source="timeout_mode",
+                    action_type=str(fallback_action.get("action", "")),
+                    tool_name=str(fallback_action.get("tool_name", "")),
+                    mission_id=int(fallback_action.get("__mission_id", 0) or 0),
                 )
                 state["pending_action"] = fallback_action
                 self.checkpoint_store.save(
@@ -687,6 +734,12 @@ class LangGraphOrchestrator:
                 action=action,
                 queue_remaining=len(state.get("pending_action_queue", [])),
             )
+            self._emit_trace(state, "planner_output",
+                source="provider",
+                action_type=str(action.get("action", "")),
+                tool_name=str(action.get("tool_name", "")),
+                mission_id=int(action.get("__mission_id", 0) or 0),
+            )
             state["pending_action"] = action
             self._reset_finish_rejection_tracking(state)
             self.checkpoint_store.save(
@@ -780,6 +833,7 @@ class LangGraphOrchestrator:
             error_text = str(exc)
             invalid_count = int(state["retry_counts"].get("invalid_json", 0)) + 1
             state["retry_counts"]["invalid_json"] = invalid_count
+            self._emit_trace(state, "planner_retry", reason="invalid_json", retry_count=invalid_count)
             self.logger.warning(
                 "PLAN INVALID step=%s invalid_count=%s error=%s",
                 state["step"],
@@ -1038,17 +1092,19 @@ class LangGraphOrchestrator:
         )
         return state
 
-    def _generate_with_hard_timeout(self, messages: list[dict[str, str]]) -> str:
+    def _generate_with_hard_timeout(
+        self, messages: list[dict[str, str]], complexity: TaskComplexity = "planning"
+    ) -> str:
         """Protect planner generate() call with a hard wall-clock timeout."""
         timeout_seconds = self.plan_call_timeout_seconds
         if timeout_seconds <= 0:
-            return self.provider.generate(messages)
+            return self._router.route(complexity).generate(messages)
 
         outbox: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
 
         def _run() -> None:
             try:
-                outbox.put(("ok", self.provider.generate(messages)))
+                outbox.put(("ok", self._router.route(complexity).generate(messages)))
             except Exception as exc:  # noqa: BLE001
                 outbox.put(("err", exc))
 
@@ -1099,6 +1155,11 @@ class LangGraphOrchestrator:
         mission_id = action.get("__mission_id")
         if not isinstance(mission_id, int) or mission_id <= 0:
             mission_id = int(state.get("active_mission_id", 0))
+        self._emit_trace(state, "specialist_route",
+            specialist=specialist,
+            tool_name=tool_name,
+            mission_id=int(mission_id or 0),
+        )
         task_id = f"{state['run_id']}:{state['step']}:{len(state['handoff_queue']) + 1}"
         config = directives.DIRECTIVE_BY_SPECIALIST.get(specialist)  # type: ignore[arg-type]
         tool_scope = sorted(config.allowed_tools) if config else []
@@ -1130,15 +1191,78 @@ class LangGraphOrchestrator:
             )
         )
 
-        pre_calls = len(state.get("tool_history", []))
-        state = self._execute_action(state)
-        post_calls = len(state.get("tool_history", []))
-        status = "success" if post_calls > pre_calls else "error"
-        output: dict[str, Any] = {"tool_name": tool_name}
-        if post_calls > pre_calls:
-            output["tool_result"] = state["tool_history"][-1].get("result", {})
+        if specialist == "executor":
+            exec_state = {
+                "task_id": task_id,
+                "specialist": "executor",
+                "mission_id": max(0, mission_id),
+                "tool_scope": tool_scope,
+                "input_context": {
+                    "tool_name": tool_name,
+                    "args": dict(action.get("args", {})),
+                    "step": state["step"],
+                },
+                "token_budget": int(state.get("token_budget_remaining", 4096)),
+                "exec_tool_history": [],
+                "exec_seen_signatures": list(state.get("seen_tool_signatures", [])),
+                "result": {},
+                "tokens_used": 0,
+                "status": "success",
+            }
+            result_state = self._executor_subgraph.invoke(exec_state)
+            for i, entry in enumerate(result_state.get("exec_tool_history", [])):
+                tagged: dict[str, Any] = dict(entry)
+                tagged["via_subgraph"] = True
+                tagged["call"] = len(state["tool_history"]) + i + 1
+                state["tool_history"].append(tagged)
+            status = result_state.get("status", "error")
+            output: dict[str, Any] = {
+                "tool_name": tool_name,
+                "tool_result": result_state.get("result", {}),
+                "status": status,
+            }
+
+        elif specialist == "evaluator":
+            # Evaluator is only invoked at finalize; route evaluator-scoped tools via executor
+            exec_state = {
+                "task_id": task_id,
+                "specialist": "executor",
+                "mission_id": max(0, mission_id),
+                "tool_scope": tool_scope,
+                "input_context": {
+                    "tool_name": tool_name,
+                    "args": dict(action.get("args", {})),
+                    "step": state["step"],
+                },
+                "token_budget": int(state.get("token_budget_remaining", 4096)),
+                "exec_tool_history": [],
+                "exec_seen_signatures": list(state.get("seen_tool_signatures", [])),
+                "result": {},
+                "tokens_used": 0,
+                "status": "success",
+            }
+            result_state = self._executor_subgraph.invoke(exec_state)
+            for i, entry in enumerate(result_state.get("exec_tool_history", [])):
+                tagged = dict(entry)
+                tagged["via_subgraph"] = True
+                tagged["call"] = len(state["tool_history"]) + i + 1
+                state["tool_history"].append(tagged)
+            status = result_state.get("status", "error")
+            output = {
+                "tool_name": tool_name,
+                "tool_result": result_state.get("result", {}),
+                "status": status,
+            }
+
         else:
-            output["message"] = str(state["messages"][-1].get("content", "")) if state["messages"] else ""
+            # Unknown specialist — fall back to direct execution
+            pre_calls = len(state.get("tool_history", []))
+            state = self._execute_action(state)
+            post_calls = len(state.get("tool_history", []))
+            status = "success" if post_calls > pre_calls else "error"
+            output = {"tool_name": tool_name}
+            if post_calls > pre_calls:
+                output["tool_result"] = state["tool_history"][-1].get("result", {})
 
         state["handoff_results"].append(
             create_handoff_result(
@@ -1149,20 +1273,13 @@ class LangGraphOrchestrator:
                 tokens_used=0,
             )
         )
-        output_preview = json.dumps(output, sort_keys=True, default=str)
-        if len(output_preview) > 220:
-            output_preview = output_preview[:217] + "..."
         self.logger.info(
-            (
-                "SPECIALIST OUTPUT step=%s run_id=%s task_id=%s specialist=%s "
-                "status=%s output=%s"
-            ),
+            "SPECIALIST OUTPUT step=%s run_id=%s task_id=%s specialist=%s status=%s via_subgraph=True",
             state["step"],
             state["run_id"],
             task_id,
             specialist,
             status,
-            output_preview,
         )
         return state
 
@@ -1414,6 +1531,11 @@ class LangGraphOrchestrator:
                 retry_count,
                 validation_error,
             )
+            self._emit_trace(state, "validator_fail",
+                tool=tool_name,
+                reason=validation_error[:120],
+                retry_count=retry_count,
+            )
         state["tool_call_counts"][tool_name] = int(state["tool_call_counts"].get(tool_name, 0)) + 1
         call_number = len(state["tool_history"]) + 1
         state["tool_history"].append(
@@ -1424,6 +1546,10 @@ class LangGraphOrchestrator:
                 "result": tool_result,
             }
         )
+        _pre_statuses = {
+            int(r.get("mission_id", i + 1)): str(r.get("status", ""))
+            for i, r in enumerate(state.get("mission_reports", []))
+        }
         self._record_mission_tool_event(
             state,
             tool_name,
@@ -1431,6 +1557,34 @@ class LangGraphOrchestrator:
             mission_index=mission_index if mission_index >= 0 else None,
             tool_args=tool_args,
         )
+        self._emit_trace(state, "tool_exec",
+            tool=tool_name,
+            mission_id=int(state.get("active_mission_id", 0)),
+            result_keys=list(tool_result.keys()),
+            has_error="error" in tool_result,
+        )
+        if not validation_error:
+            _check = "none"
+            if tool_name == "write_file":
+                _rpts = state.get("mission_reports", [])
+                _idx = mission_index if mission_index >= 0 else int(state.get("active_mission_index", -1))
+                if 0 <= _idx < len(_rpts):
+                    _rpt = _rpts[_idx]
+                    _cc = {str(c).strip().lower() for c in _rpt.get("contract_checks", [])}
+                    _mt = str(_rpt.get("mission", "")).lower()
+                    _fc = _rpt.get("expected_fibonacci_count")
+                    if (isinstance(_fc, int) and _fc > 0) or "fibonacci" in _mt:
+                        _check = "fibonacci"
+                    elif "pattern_report_consistency" in _cc:
+                        _check = "pattern_report"
+            self._emit_trace(state, "validator_pass", tool=tool_name, check=_check)
+        for _i, _r in enumerate(state.get("mission_reports", [])):
+            _mid = int(_r.get("mission_id", _i + 1))
+            if str(_r.get("status", "")) == "completed" and _pre_statuses.get(_mid) != "completed":
+                self._emit_trace(state, "mission_complete",
+                    mission_id=_mid,
+                    mission_preview=str(_r.get("mission", ""))[:60],
+                )
         progress_hint = (
             self._progress_hint_message(state)
             or "Continue with the next task or finish when all tasks are complete."
