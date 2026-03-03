@@ -7,9 +7,11 @@ from typing import Any
 from agentic_workflows.orchestration.langgraph.memo_store import SQLiteMemoStore
 from agentic_workflows.tools.base import Tool
 from agentic_workflows.tools.data_analysis import DataAnalysisTool
+from agentic_workflows.tools.describe_db_schema import DescribeDbSchemaTool
 from agentic_workflows.tools.echo import EchoTool
 from agentic_workflows.tools.json_parser import JsonParserTool
 from agentic_workflows.tools.math_stats import MathStatsTool
+from agentic_workflows.tools.parse_code_structure import ParseCodeStructureTool
 from agentic_workflows.tools.regex_matcher import RegexMatcherTool
 from agentic_workflows.tools.sort_array import SortArrayTool
 from agentic_workflows.tools.string_ops import StringOpsTool
@@ -107,4 +109,6 @@ def build_tool_registry(store: SQLiteMemoStore) -> dict[str, Tool]:
         "data_analysis": DataAnalysisTool(),
         "json_parser": JsonParserTool(),
         "regex_matcher": RegexMatcherTool(),
+        "parse_code_structure": ParseCodeStructureTool(),
+        "describe_db_schema": DescribeDbSchemaTool(),
     }

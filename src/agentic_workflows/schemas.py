@@ -18,3 +18,12 @@ class FinishAction(BaseModel):
 
     action: Literal["finish"]
     answer: str
+
+
+class ClarifyAction(BaseModel):
+    model_config = ConfigDict(extra="allow")  # allow sub_task_id etc.
+
+    action: Literal["clarify"]
+    question: str
+    missing: list[str] = []
+    sub_task_id: str = ""

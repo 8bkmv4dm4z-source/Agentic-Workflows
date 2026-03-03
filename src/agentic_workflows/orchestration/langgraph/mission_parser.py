@@ -127,6 +127,15 @@ _TOOL_KEYWORD_MAP: dict[str, list[str]] = {
     "pattern": ["regex_matcher"],
     "match": ["regex_matcher"],
     "find_all": ["regex_matcher"],
+    "functions": ["parse_code_structure"],
+    "classes": ["parse_code_structure"],
+    "imports": ["parse_code_structure"],
+    "code": ["parse_code_structure"],
+    "schema": ["describe_db_schema"],
+    "database": ["describe_db_schema"],
+    "sqlite": ["describe_db_schema"],
+    "csv": ["describe_db_schema"],
+    "db": ["describe_db_schema"],
 }
 
 

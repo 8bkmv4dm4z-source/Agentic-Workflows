@@ -334,11 +334,13 @@ class LangGraphOrchestrator:
             )
         else:
             # Standard path: plan → execute → policy → plan loop.
+            builder.add_node("clarify", self._clarify_node)
             builder.add_conditional_edges(
                 "plan",
                 self._route_after_plan,
-                {"plan": "plan", "execute": "execute", "finish": "finalize"},
+                {"plan": "plan", "execute": "execute", "finish": "finalize", "clarify": "clarify"},
             )
+            builder.add_edge("clarify", "finalize")
             builder.add_edge("execute", "policy")
             builder.add_edge("policy", "plan")
 
@@ -416,7 +418,36 @@ class LangGraphOrchestrator:
             return "plan"
         if action.get("action") == "finish":
             return "finish"
+        if action.get("action") == "clarify":
+            return "clarify"
         return "execute"
+
+    def _clarify_node(self, state: RunState) -> RunState:
+        """Handle clarify action: surface the question as the final answer."""
+        action = state.get("pending_action") or {}
+        question = str(action.get("question", "I need more information to proceed."))
+        state["final_answer"] = f"__CLARIFY__: {question}"
+        state["pending_action"] = {"action": "finish", "answer": state["final_answer"]}
+        self.logger.info("CLARIFY_NODE question=%s", question[:100])
+        return state
+
+    def _diagnose_incomplete_missions(self, state: RunState) -> str:
+        """Produce a specific diagnosis of which missions are incomplete and why."""
+        lines = []
+        for report in state.get("mission_reports", []):
+            if not isinstance(report, dict):
+                continue
+            if report.get("status") != "completed":
+                mid = report.get("mission_id", "?")
+                desc = str(report.get("mission", ""))[:80]
+                used = report.get("used_tools", [])
+                status = report.get("status", "pending")
+                lines.append(
+                    f"Mission {mid} [{status}]: {desc!r} used_tools={used}"
+                )
+        if not lines:
+            return ""
+        return "Incomplete missions: " + "; ".join(lines) + ". "
 
     def _log_queue_mission_spacing(
         self, *, state: RunState, mission_id: int, source: str
@@ -1054,7 +1085,8 @@ class LangGraphOrchestrator:
                     "role": "system",
                     "content": (
                         "Finish rejected: missions remain incomplete. "
-                        f"Next task: {next_mission or 'unknown'}. "
+                        + self._diagnose_incomplete_missions(state)
+                        + f" Next task: {next_mission or 'unknown'}. "
                         "Orchestrator selected a deterministic recovery action."
                     ),
                 }
@@ -1079,7 +1111,8 @@ class LangGraphOrchestrator:
                 "role": "system",
                 "content": (
                     "Finish rejected: missions remain incomplete. "
-                    f"Next task: {next_mission or 'unknown'}"
+                    + self._diagnose_incomplete_missions(state)
+                    + f" Next task: {next_mission or 'unknown'}"
                 ),
             }
         )

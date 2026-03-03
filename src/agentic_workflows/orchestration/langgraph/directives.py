@@ -38,17 +38,9 @@ EXECUTOR_TOOLS = frozenset(
         "data_analysis",
         "json_parser",
         "regex_matcher",
-        # Phase 2 additions
-        "read_file",
-        "update_file_section",
-        "recognize_pattern",
-        "query_db",
-        "http_request",
-        "datetime_ops",
-        "extract_table",
-        "fill_template",
-        "hash_content",
-        "run_bash",
+        # Phase 4.7 additions
+        "parse_code_structure",
+        "describe_db_schema",
     }
 )
 
