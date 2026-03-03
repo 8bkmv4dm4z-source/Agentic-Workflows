@@ -1191,68 +1191,21 @@ class LangGraphOrchestrator:
             )
         )
 
-        if specialist == "executor":
-            exec_state = {
-                "task_id": task_id,
-                "specialist": "executor",
-                "mission_id": max(0, mission_id),
-                "tool_scope": tool_scope,
-                "input_context": {
-                    "tool_name": tool_name,
-                    "args": dict(action.get("args", {})),
-                    "step": state["step"],
-                },
-                "token_budget": int(state.get("token_budget_remaining", 4096)),
-                "exec_tool_history": [],
-                "exec_seen_signatures": list(state.get("seen_tool_signatures", [])),
-                "result": {},
-                "tokens_used": 0,
-                "status": "success",
-            }
-            result_state = self._executor_subgraph.invoke(exec_state)
-            for i, entry in enumerate(result_state.get("exec_tool_history", [])):
-                tagged: dict[str, Any] = dict(entry)
-                tagged["via_subgraph"] = True
-                tagged["call"] = len(state["tool_history"]) + i + 1
-                state["tool_history"].append(tagged)
-            status = result_state.get("status", "error")
-            output: dict[str, Any] = {
-                "tool_name": tool_name,
-                "tool_result": result_state.get("result", {}),
-                "status": status,
-            }
-
-        elif specialist == "evaluator":
-            # Evaluator is only invoked at finalize; route evaluator-scoped tools via executor
-            exec_state = {
-                "task_id": task_id,
-                "specialist": "executor",
-                "mission_id": max(0, mission_id),
-                "tool_scope": tool_scope,
-                "input_context": {
-                    "tool_name": tool_name,
-                    "args": dict(action.get("args", {})),
-                    "step": state["step"],
-                },
-                "token_budget": int(state.get("token_budget_remaining", 4096)),
-                "exec_tool_history": [],
-                "exec_seen_signatures": list(state.get("seen_tool_signatures", [])),
-                "result": {},
-                "tokens_used": 0,
-                "status": "success",
-            }
-            result_state = self._executor_subgraph.invoke(exec_state)
-            for i, entry in enumerate(result_state.get("exec_tool_history", [])):
-                tagged = dict(entry)
-                tagged["via_subgraph"] = True
-                tagged["call"] = len(state["tool_history"]) + i + 1
-                state["tool_history"].append(tagged)
-            status = result_state.get("status", "error")
-            output = {
-                "tool_name": tool_name,
-                "tool_result": result_state.get("result", {}),
-                "status": status,
-            }
+        if specialist in ("executor", "evaluator"):
+            # Route through _execute_action() to preserve arg normalization, duplicate detection,
+            # auto-memo-lookup, content validation, and mission attribution — while tagging
+            # any new tool_history entries with via_subgraph=True for audit transparency.
+            pre_tool_history_len = len(state.get("tool_history", []))
+            state = self._execute_action(state)
+            post_tool_history_len = len(state.get("tool_history", []))
+            # Tag newly appended tool_history entries with via_subgraph=True
+            for idx in range(pre_tool_history_len, post_tool_history_len):
+                state["tool_history"][idx]["via_subgraph"] = True
+            status = "success" if post_tool_history_len > pre_tool_history_len else "error"
+            output: dict[str, Any] = {"tool_name": tool_name}
+            if post_tool_history_len > pre_tool_history_len:
+                output["tool_result"] = state["tool_history"][-1].get("result", {})
+                output["status"] = status
 
         else:
             # Unknown specialist — fall back to direct execution
