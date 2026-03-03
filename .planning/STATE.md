@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-03-02T22:20:51.098Z"
+last_updated: "2026-03-03T00:39:55.652Z"
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 8
-  completed_plans: 5
+  completed_plans: 7
 ---
 
 # Project State
@@ -18,16 +18,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-02)
 
 **Core value:** A specialist-routing multi-agent system that reliably executes multi-mission workloads end-to-end — with the architecture understood deeply enough to stress test, evolve, and deploy with confidence.
-**Current focus:** Phase 2 — LangGraph Upgrade and Single-Agent Hardening
+**Current focus:** Phase 3 — Specialist Subgraph Architecture
 
 ## Current Position
 
-Phase: 2 of 7 (LangGraph Upgrade and Single-Agent Hardening)
-Plan: 5 of TBD in current phase (02-01 through 02-05 complete, including 02-03 backfill)
-Status: In progress
-Last activity: 2026-03-03 — Plan 02-03 complete: ToolNode + tools_condition wired for Anthropic path, 279 tests green
+Phase: 3 of 7 (Specialist Subgraph Architecture)
+Plan: 1 of N in current phase (03-01 DONE)
+Status: In progress — 03-01 complete; executor subgraph created and tested
+Last activity: 2026-03-03 — 03-01 complete; ExecutorState + build_executor_subgraph() ready; 307 tests passing
 
-Progress: [███░░░░░░░] 15% (Phase 1 complete, Phase 2 plans 01-05 done)
+Progress: [████░░░░░░] 22% (Phase 1 complete, Phase 2 complete, Phase 3 plan 01 done)
 
 ## Performance Metrics
 
@@ -41,12 +41,14 @@ Progress: [███░░░░░░░] 15% (Phase 1 complete, Phase 2 plans 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 02-langgraph-upgrade | 5 | 20 min | 4 min |
+| 03-specialist-subgraph | 1 | 2 min | 2 min |
 
 **Recent Trend:**
-- Last 5 plans: 02-01 (3 min), 02-02 (7 min), 02-03 (5 min), 02-04 (N/A), 02-05 (3 min)
+- Last 6 plans: 02-01 (3 min), 02-02 (7 min), 02-03 (5 min), 02-04 (N/A), 02-05 (3 min), 03-01 (2 min)
 - Trend: Stable
 
 *Updated after each plan completion*
+| Phase 03 P02 | 2 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -69,6 +71,12 @@ Recent decisions affecting current work:
 - [02-05]: branches: ["**"] on push catches all feature branches; no pip cache (deferred to Phase 7)
 - [Phase 02]: ToolNode added as 'tools' node in graph.py when P1_PROVIDER=anthropic; wired without replacing existing plan/execute/policy/finalize routing — satisfies LGUP-02 while preserving all non-Anthropic paths unchanged
 - [Phase 02]: _build_lc_tools() bridges internal Tool base class to LangChain StructuredTool using closure pattern; _dedup_then_tool_node() preserves seen_tool_signatures dedup before ToolNode.invoke()
+- [03-01]: ExecutorState uses standalone TypedDict with no RunState inheritance; exec_-prefixed list fields guarantee zero key overlap; tool_scope filtering at subgraph compile time
+- [03-01]: Single-node START->execute->END topology for Phase 3; multi-node refinement deferred to Phase 4
+- [03-01]: run_bash added to EXECUTOR_TOOLS in directives.py (pre-existing sync bug with tools_registry.py)
+- [Phase 03-02]: eval_ prefix on all RunState-colliding fields guarantees zero overlap without TypedDict inheritance
+- [Phase 03-02]: build_evaluator_subgraph() takes no parameters — tool scope not relevant for evaluator; audit_run() accepts input via state fields
+- [Phase 03-02]: evaluate_node catches all exceptions from audit_run() and returns status=error (fail-closed, not crash)
 
 ### Pending Todos
 
@@ -80,9 +88,10 @@ None yet.
 - [Phase 2]: ~~Verify ToolNode.afunc behavior with langgraph-prebuilt 1.0.8~~ RESOLVED — ToolNode.afunc not called in the wiring; graph compiles and tests pass with langgraph-prebuilt 1.0.8
 - [Phase 2]: ~~@observe() not yet wired on run/provider path~~ RESOLVED — @observe(name="run") on main() in run.py (02-04 complete)
 - [Phase 3]: ~~RunState reducer annotations must be complete before any Send()-based parallel execution is attempted~~ RESOLVED — Annotated reducers added in 02-02 with _sequential_node() wrapper for safe sequential operation
+- [Phase 2 ACTIVE BLOCKER — LGUP-02]: ToolNode routing not wired — `builder.add_node("tools", dedup_node)` exists but no `add_conditional_edges` routes to it; `tools_condition` is imported but never passed to the graph builder; `_parse_all_actions_json()` still runs unconditionally on all paths including Anthropic; fix requires: wire tools_condition edge from plan/agent node → tools, add return edge tools → plan, gate XML/JSON parser on non-Anthropic path only
 
 ## Session Continuity
 
 Last session: 2026-03-03
-Stopped at: Plan 02-03 complete — ToolNode + tools_condition wired for Anthropic path, 279 tests green
+Stopped at: Plan 03-01 complete — ExecutorState + build_executor_subgraph() created, 307 tests green
 Resume file: None
