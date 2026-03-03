@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-03-03T02:02:19.352Z"
+last_updated: "2026-03-03T02:14:17.044Z"
 progress:
   total_phases: 3
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 11
-  completed_plans: 10
+  completed_plans: 11
 ---
 
 # Project State
@@ -23,9 +23,9 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 ## Current Position
 
 Phase: 4 of 7 (Multi-Agent Integration and Model Routing)
-Plan: 1 of 3 in current phase (04-01 DONE)
-Status: Phase 4 IN PROGRESS — subgraph wiring + WALKTHROUGH Phase 4 section complete; 240+ unit tests passing
-Last activity: 2026-03-03 — 04-01 complete; _route_to_specialist() now invokes executor subgraph; via_subgraph tag on tool_history entries; LRNG-01 satisfied for Phase 4
+Plan: 2 of 3 in current phase (04-01 DONE, 04-02 DONE)
+Status: Phase 4 IN PROGRESS — subgraph wiring complete; integration tests proving via_subgraph preservation complete; 259 tests green
+Last activity: 2026-03-03 — 04-02 complete; 3 integration tests for multi-mission subgraph result preservation; MAGT-06 satisfied
 
 Progress: [█████░░░░░] 30% (Phase 1 complete, Phase 2 complete, Phase 3 complete)
 
@@ -51,6 +51,7 @@ Progress: [█████░░░░░] 30% (Phase 1 complete, Phase 2 comple
 *Updated after each plan completion*
 | Phase 04-multi-agent-integration-and-model-routing P03 | 5 | 3 tasks | 3 files |
 | Phase 04-multi-agent-integration-and-model-routing P01 | 6 | 3 tasks | 3 files |
+| Phase 04-multi-agent-integration-and-model-routing P02 | 8 | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -85,6 +86,8 @@ Recent decisions affecting current work:
 - [Phase 04-01]: Subgraphs cached in __init__() after build_tool_registry() to prevent per-call recompilation (N compile cycles avoided)
 - [Phase 04-01]: Evaluator subgraph NOT invoked mid-run: evaluator-scoped tool actions route through executor subgraph; evaluator reserved for _finalize() time per RESEARCH.md Pitfall 4
 - [Phase 04-01]: eval_audit_report -> RunState.audit_report merge deferred to Phase 5 — mid-run evaluator produces partial audit data overwritten by _finalize()
+- [Phase 04-multi-agent-integration-and-model-routing]: Tests target via_subgraph=True tag presence and audit_report['failed']==0 rather than mission_reports.used_tools attribution — the latter is a pre-existing bug deferred to deferred-items.md
+- [Phase 04-multi-agent-integration-and-model-routing]: Checkpoint test uses 2-mission run to match must_haves.truths (not 1-mission as task action section implied)
 
 ### Pending Todos
 
@@ -101,5 +104,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-03-03
-Stopped at: Plan 04-01 complete — subgraph wiring in _route_to_specialist(), via_subgraph tag tests, WALKTHROUGH Phase 4 section (LRNG-01); 240+ tests green
+Stopped at: Plan 04-02 complete — 3 integration tests for multi-mission subgraph result preservation (via_subgraph tag, 3-mission tool_history, checkpoint replay); 259 tests green; MAGT-06 satisfied
 Resume file: None

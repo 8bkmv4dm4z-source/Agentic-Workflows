@@ -19,7 +19,7 @@
 - [x] **MAGT-03**: `EvaluatorState` TypedDict exists as an isolated state schema for the evaluator specialist
 - [x] **MAGT-04**: `specialist_evaluator.py` contains a real, independently-compiled `StateGraph` for the evaluator role that can be invoked and tested in isolation
 - [x] **MAGT-05**: `_route_to_specialist()` in `graph.py` invokes the compiled specialist subgraph via `TaskHandoff` input and merges the `HandoffResult` output back into `RunState` — not stubs
-- [ ] **MAGT-06**: Multi-mission workloads complete without dropping results — all mission reports and tool history entries are preserved across a multi-mission run
+- [x] **MAGT-06**: Multi-mission workloads complete without dropping results — all mission reports and tool history entries are preserved across a multi-mission run
 
 ### Observability
 
@@ -94,7 +94,7 @@
 | MAGT-04 | Phase 3 | Complete |
 | LRNG-01 | Phase 3 | Complete |
 | MAGT-05 | Phase 4 | Complete |
-| MAGT-06 | Phase 4 | Pending |
+| MAGT-06 | Phase 4 | Complete |
 | OBSV-03 | Phase 4 | Complete |
 | OBSV-01 | Phase 5 | Pending |
 | LRNG-03 | Phase 5 | Pending |
