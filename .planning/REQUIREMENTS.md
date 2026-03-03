@@ -16,8 +16,8 @@
 
 - [x] **MAGT-01**: `ExecutorState` TypedDict exists as an isolated state schema for the executor specialist (does not share keys with `RunState`)
 - [x] **MAGT-02**: `specialist_executor.py` contains a real, independently-compiled `StateGraph` for the executor role that can be invoked and tested in isolation
-- [ ] **MAGT-03**: `EvaluatorState` TypedDict exists as an isolated state schema for the evaluator specialist
-- [ ] **MAGT-04**: `specialist_evaluator.py` contains a real, independently-compiled `StateGraph` for the evaluator role that can be invoked and tested in isolation
+- [x] **MAGT-03**: `EvaluatorState` TypedDict exists as an isolated state schema for the evaluator specialist
+- [x] **MAGT-04**: `specialist_evaluator.py` contains a real, independently-compiled `StateGraph` for the evaluator role that can be invoked and tested in isolation
 - [ ] **MAGT-05**: `_route_to_specialist()` in `graph.py` invokes the compiled specialist subgraph via `TaskHandoff` input and merges the `HandoffResult` output back into `RunState` — not stubs
 - [ ] **MAGT-06**: Multi-mission workloads complete without dropping results — all mission reports and tool history entries are preserved across a multi-mission run
 
@@ -90,8 +90,8 @@
 | LRNG-02 | Phase 2 | Complete |
 | MAGT-01 | Phase 3 | Complete |
 | MAGT-02 | Phase 3 | Complete |
-| MAGT-03 | Phase 3 | Pending |
-| MAGT-04 | Phase 3 | Pending |
+| MAGT-03 | Phase 3 | Complete |
+| MAGT-04 | Phase 3 | Complete |
 | LRNG-01 | Phase 3 | Pending |
 | MAGT-05 | Phase 4 | Pending |
 | MAGT-06 | Phase 4 | Pending |
