@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-03-03T02:00:53.958Z"
+last_updated: "2026-03-03T02:02:19.352Z"
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 11
-  completed_plans: 9
+  completed_plans: 10
 ---
 
 # Project State
@@ -18,14 +18,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-02)
 
 **Core value:** A specialist-routing multi-agent system that reliably executes multi-mission workloads end-to-end — with the architecture understood deeply enough to stress test, evolve, and deploy with confidence.
-**Current focus:** Phase 3 — Specialist Subgraph Architecture
+**Current focus:** Phase 4 — Multi-Agent Integration and Model Routing
 
 ## Current Position
 
-Phase: 3 of 7 (Specialist Subgraph Architecture)
-Plan: 3 of 3 in current phase (03-01 DONE, 03-02 DONE, 03-03 DONE)
-Status: Phase 3 COMPLETE — isolation acceptance gate + WALKTHROUGH_PHASE3.md created; 355 tests passing
-Last activity: 2026-03-03 — 03-03 complete; LRNG-01 satisfied; Phase 3 fully done; ready for Phase 4
+Phase: 4 of 7 (Multi-Agent Integration and Model Routing)
+Plan: 1 of 3 in current phase (04-01 DONE)
+Status: Phase 4 IN PROGRESS — subgraph wiring + WALKTHROUGH Phase 4 section complete; 240+ unit tests passing
+Last activity: 2026-03-03 — 04-01 complete; _route_to_specialist() now invokes executor subgraph; via_subgraph tag on tool_history entries; LRNG-01 satisfied for Phase 4
 
 Progress: [█████░░░░░] 30% (Phase 1 complete, Phase 2 complete, Phase 3 complete)
 
@@ -42,6 +42,7 @@ Progress: [█████░░░░░] 30% (Phase 1 complete, Phase 2 comple
 |-------|-------|-------|----------|
 | 02-langgraph-upgrade | 5 | 20 min | 4 min |
 | 03-specialist-subgraph | 3 | 7 min | 2 min |
+| 04-multi-agent-integration | 1 | 6 min | 6 min |
 
 **Recent Trend:**
 - Last 7 plans: 02-03 (5 min), 02-04 (N/A), 02-05 (3 min), 03-01 (2 min), 03-02 (2 min), 03-03 (3 min)
@@ -49,6 +50,7 @@ Progress: [█████░░░░░] 30% (Phase 1 complete, Phase 2 comple
 
 *Updated after each plan completion*
 | Phase 04-multi-agent-integration-and-model-routing P03 | 5 | 3 tasks | 3 files |
+| Phase 04-multi-agent-integration-and-model-routing P01 | 6 | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -80,6 +82,9 @@ Recent decisions affecting current work:
 - [Phase 03]: Use __annotations__ not get_type_hints() for TypedDict isolation assertion — avoids resolving forward references
 - [Phase 03]: WALKTHROUGH_PHASE3.md is standalone file at docs/ root per LRNG-01 requirement
 - [Phase 04-03]: fast_provider=None defaults to strong_provider via ModelRouter fallback — zero behavior change for single-provider configs; complexity='planning' default maintains backward compat for _generate_with_hard_timeout() callers
+- [Phase 04-01]: Subgraphs cached in __init__() after build_tool_registry() to prevent per-call recompilation (N compile cycles avoided)
+- [Phase 04-01]: Evaluator subgraph NOT invoked mid-run: evaluator-scoped tool actions route through executor subgraph; evaluator reserved for _finalize() time per RESEARCH.md Pitfall 4
+- [Phase 04-01]: eval_audit_report -> RunState.audit_report merge deferred to Phase 5 — mid-run evaluator produces partial audit data overwritten by _finalize()
 
 ### Pending Todos
 
@@ -96,5 +101,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-03-03
-Stopped at: Plan 04-03 complete — ModelRouter wired in graph.py, 5 unit + 2 integration tests; OBSV-03 satisfied
+Stopped at: Plan 04-01 complete — subgraph wiring in _route_to_specialist(), via_subgraph tag tests, WALKTHROUGH Phase 4 section (LRNG-01); 240+ tests green
 Resume file: None

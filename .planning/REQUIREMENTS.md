@@ -18,14 +18,14 @@
 - [x] **MAGT-02**: `specialist_executor.py` contains a real, independently-compiled `StateGraph` for the executor role that can be invoked and tested in isolation
 - [x] **MAGT-03**: `EvaluatorState` TypedDict exists as an isolated state schema for the evaluator specialist
 - [x] **MAGT-04**: `specialist_evaluator.py` contains a real, independently-compiled `StateGraph` for the evaluator role that can be invoked and tested in isolation
-- [ ] **MAGT-05**: `_route_to_specialist()` in `graph.py` invokes the compiled specialist subgraph via `TaskHandoff` input and merges the `HandoffResult` output back into `RunState` — not stubs
+- [x] **MAGT-05**: `_route_to_specialist()` in `graph.py` invokes the compiled specialist subgraph via `TaskHandoff` input and merges the `HandoffResult` output back into `RunState` — not stubs
 - [ ] **MAGT-06**: Multi-mission workloads complete without dropping results — all mission reports and tool history entries are preserved across a multi-mission run
 
 ### Observability
 
 - [ ] **OBSV-01**: Langfuse `CallbackHandler` is wired in the graph invocation `config` so all graph node transitions are traced automatically (free Langfuse tier or self-hosted)
 - [x] **OBSV-02**: `@observe()` decorator is wired on the `run()` entrypoint and provider `generate()` path (open Phase 1 item — closes it)
-- [ ] **OBSV-03**: Model-strength routing makes real routing decisions based on task complexity signals (not the existing stub returning a hardcoded path)
+- [x] **OBSV-03**: Model-strength routing makes real routing decisions based on task complexity signals (not the existing stub returning a hardcoded path)
 
 ### Production Infrastructure
 
@@ -93,9 +93,9 @@
 | MAGT-03 | Phase 3 | Complete |
 | MAGT-04 | Phase 3 | Complete |
 | LRNG-01 | Phase 3 | Complete |
-| MAGT-05 | Phase 4 | Pending |
+| MAGT-05 | Phase 4 | Complete |
 | MAGT-06 | Phase 4 | Pending |
-| OBSV-03 | Phase 4 | Pending |
+| OBSV-03 | Phase 4 | Complete |
 | OBSV-01 | Phase 5 | Pending |
 | LRNG-03 | Phase 5 | Pending |
 | PROD-01 | Phase 6 | Pending |
