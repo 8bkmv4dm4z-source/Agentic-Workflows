@@ -235,7 +235,10 @@ class LangGraphFlowTests(unittest.TestCase):
             )
 
             tool_names = [item["tool"] for item in result["tools_used"]]
-            self.assertEqual(tool_names.count("repeat_message"), 0)
+            # repeat_message must be called exactly once (no duplicate loop)
+            self.assertEqual(tool_names.count("repeat_message"), 1)
+            # write_file must appear before repeat_message (write-first ordering)
+            self.assertLess(tool_names.index("write_file"), tool_names.index("repeat_message"))
             self.assertEqual(result["state"]["retry_counts"]["duplicate_tool"], 0)
             self.assertIn("All tasks completed.", result["answer"])
             self.assertEqual(result["mission_report"][0]["status"], "completed")

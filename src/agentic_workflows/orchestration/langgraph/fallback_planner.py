@@ -27,6 +27,7 @@ from agentic_workflows.orchestration.langgraph.text_extractor import (
 
 def deterministic_fallback_action(state: dict[str, Any]) -> dict[str, Any] | None:
     """Build a safe tool/finish action from local state when provider times out."""
+
     def _action_signature(action: dict[str, Any]) -> str:
         tool_name = str(action.get("tool_name", ""))
         args = dict(action.get("args", {}))
@@ -49,9 +50,7 @@ def deterministic_fallback_action(state: dict[str, Any]) -> dict[str, Any] | Non
     if policy_flags.get("memo_required"):
         key = str(policy_flags.get("memo_required_key", "")).strip()
         if key:
-            source_tool = (
-                str(policy_flags.get("last_tool_name", "memoize")).strip() or "memoize"
-            )
+            source_tool = str(policy_flags.get("last_tool_name", "memoize")).strip() or "memoize"
             last_result = dict(policy_flags.get("last_tool_result", {}))
             value: Any = last_result if last_result else {"status": "memoized_by_fallback"}
             return {
@@ -80,7 +79,7 @@ def deterministic_fallback_action(state: dict[str, Any]) -> dict[str, Any] | Non
     active_report = reports[mission_index] if 0 <= mission_index < len(reports) else {}
 
     repeat_text = extract_quoted_text(mission)
-    if "repeat_message" in missing_tools and repeat_text:
+    if "repeat_message" in missing_tools and repeat_text and "write_file" not in missing_tools:
         action = {
             "action": "tool",
             "tool_name": "repeat_message",
@@ -134,8 +133,10 @@ def deterministic_fallback_action(state: dict[str, Any]) -> dict[str, Any] | Non
     should_try_fib_write = "write_file" in missing_tools or any(
         "fib" in missing.lower() for missing in missing_files
     )
-    if should_try_fib_write and "fibonacci" in mission_lower and (
-        "write" in mission_lower or "write_file" in mission_lower
+    if (
+        should_try_fib_write
+        and "fibonacci" in mission_lower
+        and ("write" in mission_lower or "write_file" in mission_lower)
     ):
         path = (
             extract_write_path_from_mission(mission)
