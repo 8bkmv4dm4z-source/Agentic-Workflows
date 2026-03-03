@@ -38,7 +38,14 @@ class TestDirectiveConfigs(unittest.TestCase):
 
     def test_executor_scope_matches_tool_registry(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            registry = build_tool_registry(SQLiteMemoStore(f"{tmp}/memo.db"))
+            from agentic_workflows.orchestration.langgraph.checkpoint_store import (
+                SQLiteCheckpointStore,
+            )
+
+            registry = build_tool_registry(
+                SQLiteMemoStore(f"{tmp}/memo.db"),
+                checkpoint_store=SQLiteCheckpointStore(f"{tmp}/cp.db"),
+            )
             self.assertEqual(set(registry.keys()), set(directives.EXECUTOR_TOOLS))
 
 

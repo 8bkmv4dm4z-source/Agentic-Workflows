@@ -93,3 +93,33 @@ class SQLiteCheckpointStore:
                 (run_id,),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def list_runs(self, limit: int = 10) -> list[dict[str, Any]]:
+        """Query distinct run_ids ordered by most recent checkpoint."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT run_id, MAX(step) AS step_count, node_name, MAX(created_at) AS timestamp
+                FROM graph_checkpoints
+                GROUP BY run_id
+                ORDER BY MAX(id) DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def load_latest_run(self) -> RunState | None:
+        """Load the final state of the most recent run (any run_id)."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT state_json
+                FROM graph_checkpoints
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+            ).fetchone()
+        if row is None:
+            return None
+        return json.loads(row["state_json"])

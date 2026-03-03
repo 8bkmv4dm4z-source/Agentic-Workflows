@@ -206,4 +206,36 @@ def normalize_tool_args(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
     elif tool_name == "regex_matcher":
         if "pattern" not in normalized and isinstance(normalized.get("regex"), str):
             normalized["pattern"] = normalized.pop("regex")
+    elif tool_name == "parse_code_structure":
+        if "path" not in normalized and isinstance(normalized.get("file_path"), str):
+            normalized["path"] = normalized.pop("file_path")
+    elif tool_name in ("list_directory", "search_content", "search_files"):
+        if "path" not in normalized and isinstance(normalized.get("directory"), str):
+            normalized["path"] = normalized.pop("directory")
+        if "pattern" not in normalized and isinstance(normalized.get("glob"), str):
+            normalized["pattern"] = normalized.pop("glob")
+        if "pattern" not in normalized and isinstance(normalized.get("query"), str):
+            normalized["pattern"] = normalized.pop("query")
+    elif tool_name == "compare_texts":
+        if "text1" not in normalized and isinstance(normalized.get("left"), str):
+            normalized["text1"] = normalized.pop("left")
+        if "text2" not in normalized and isinstance(normalized.get("right"), str):
+            normalized["text2"] = normalized.pop("right")
+    elif tool_name == "file_manager":
+        if "source" not in normalized and isinstance(normalized.get("src"), str):
+            normalized["source"] = normalized.pop("src")
+        if "destination" not in normalized and isinstance(normalized.get("dst"), str):
+            normalized["destination"] = normalized.pop("dst")
+        if "destination" not in normalized and isinstance(normalized.get("dest"), str):
+            normalized["destination"] = normalized.pop("dest")
+        if "operation" not in normalized and isinstance(normalized.get("op"), str):
+            normalized["operation"] = normalized.pop("op")
+    elif tool_name == "format_converter":
+        if "from_format" not in normalized and isinstance(normalized.get("input_format"), str):
+            normalized["from_format"] = normalized.pop("input_format")
+        if "to_format" not in normalized and isinstance(normalized.get("output_format"), str):
+            normalized["to_format"] = normalized.pop("output_format")
+    elif tool_name in ("encode_decode", "classify_intent", "validate_data", "retrieve_run_context"):
+        if "operation" not in normalized and isinstance(normalized.get("op"), str):
+            normalized["operation"] = normalized.pop("op")
     return normalized

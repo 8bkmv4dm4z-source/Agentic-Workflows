@@ -16,7 +16,6 @@ else:
     LANGGRAPH_AVAILABLE = True
     from agentic_workflows.orchestration.langgraph.graph import (
         LangGraphOrchestrator,
-        MemoizationPolicyViolation,
     )
 
 
@@ -205,10 +204,12 @@ class LangGraphFlowTests(unittest.TestCase):
                 f"Task 1: Use write_file tool to write the fibonacci sequence until the 100th number to {output_path}"
             )
             self.assertIn("All tasks completed.", result["answer"])
+            # auto-memoize fires internally after write_file; memoize is not in tool_history
             self.assertEqual(
                 [item["tool"] for item in result["tools_used"]],
-                ["retrieve_memo", "retrieve_memo", "write_file", "memoize"],
+                ["retrieve_memo", "retrieve_memo", "write_file"],
             )
+            self.assertGreaterEqual(result["derived_snapshot"]["memo_entry_count"], 1)
             self.assertEqual(result["state"]["retry_counts"]["provider_timeout"], 1)
 
     def test_timeout_fallback_satisfies_write_then_repeat_without_duplicate_loop(self) -> None:
@@ -328,11 +329,15 @@ class LangGraphFlowTests(unittest.TestCase):
             result = orchestrator.run("run test")
 
             executed_tools = [item["tool"] for item in result["tools_used"]]
+            # auto-memoize means sort_array is no longer blocked by memo_required;
+            # the scripted memoize still executes after sort_array.
             self.assertEqual(
-                executed_tools, ["retrieve_memo", "retrieve_memo", "write_file", "memoize"]
+                executed_tools,
+                ["retrieve_memo", "retrieve_memo", "write_file", "sort_array", "memoize"],
             )
             self.assertEqual(result["answer"], "done")
-            self.assertEqual(result["derived_snapshot"]["memo_entry_count"], 1)
+            # auto-memoize + scripted memoize both write to the store (≥1 entry)
+            self.assertGreaterEqual(result["derived_snapshot"]["memo_entry_count"], 1)
             self.assertIn("write_file", result["mission_report"][0]["used_tools"])
             self.assertIn("memoize", result["mission_report"][0]["used_tools"])
             lookup = memo_store.get(
@@ -343,7 +348,9 @@ class LangGraphFlowTests(unittest.TestCase):
             self.assertTrue(lookup.found)
             self.assertGreater(len(result["checkpoints"]), 0)
 
-    def test_policy_violation_after_retries(self) -> None:
+    def test_auto_memoize_after_write_file_prevents_policy_block(self) -> None:
+        # Auto-memoize means write_file is memoized internally after execution.
+        # The model can proceed with other tools without calling memoize explicitly.
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = f"{temp_dir}/fib.txt"
             provider = ScriptedProvider(
@@ -366,6 +373,7 @@ class LangGraphFlowTests(unittest.TestCase):
                         "tool_name": "sort_array",
                         "args": {"items": [9, 8], "order": "asc"},
                     },
+                    {"action": "finish", "answer": "done"},
                 ]
             )
             orchestrator = LangGraphOrchestrator(
@@ -375,8 +383,10 @@ class LangGraphFlowTests(unittest.TestCase):
                 policy=MemoizationPolicy(max_policy_retries=1),
                 max_steps=20,
             )
-            with self.assertRaises(MemoizationPolicyViolation):
-                orchestrator.run("run test")
+            result = orchestrator.run("run test")
+            # No policy violation — auto-memoize handled it transparently
+            self.assertEqual(result["state"]["retry_counts"].get("memo_policy", 0), 0)
+            self.assertGreaterEqual(result["derived_snapshot"]["memo_entry_count"], 1)
 
     def test_duplicate_tool_call_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

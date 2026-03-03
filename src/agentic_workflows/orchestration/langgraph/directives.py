@@ -41,6 +41,30 @@ EXECUTOR_TOOLS = frozenset(
         # Phase 4.7 additions
         "parse_code_structure",
         "describe_db_schema",
+        # Phase 5 additions
+        "read_file",
+        "run_bash",
+        "http_request",
+        "datetime_ops",
+        "extract_table",
+        "fill_template",
+        "hash_content",
+        "query_db",
+        "recognize_pattern",
+        "clear_context",
+        "update_file_section",
+        # Phase 6 additions
+        "list_directory",
+        "search_files",
+        "search_content",
+        "summarize_text",
+        "compare_texts",
+        "classify_intent",
+        "format_converter",
+        "file_manager",
+        "encode_decode",
+        "validate_data",
+        "retrieve_run_context",
     }
 )
 
@@ -51,6 +75,13 @@ EVALUATOR_TOOLS = frozenset(
         "data_analysis",
         "json_parser",
         "regex_matcher",
+        # Phase 6 additions (read-only tools)
+        "summarize_text",
+        "compare_texts",
+        "classify_intent",
+        "encode_decode",
+        "validate_data",
+        "retrieve_run_context",
     }
 )
 

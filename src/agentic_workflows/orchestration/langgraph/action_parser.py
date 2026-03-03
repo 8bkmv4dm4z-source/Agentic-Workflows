@@ -51,6 +51,11 @@ def validate_action(
             return parsed_finish.model_dump()
         except ValidationError as exc:
             raise ValueError(f"finish schema error: {str(exc)}") from exc
+    if action == "clarify":
+        return {
+            "action": "clarify",
+            "question": str(data.get("question", "I need more information to proceed.")),
+        }
     raise ValueError("action must be 'tool' or 'finish'")
 
 

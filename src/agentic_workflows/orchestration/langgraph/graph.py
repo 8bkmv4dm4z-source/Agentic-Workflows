@@ -7,6 +7,7 @@ executes deterministic tools, enforces memoization policy, and produces
 run/mission reports using only local state for final snapshots.
 """
 
+import contextlib
 import json
 import os
 import queue
@@ -125,6 +126,7 @@ class LangGraphOrchestrator:
         max_content_validation_retries: int = 2,
         max_duplicate_tool_retries: int = 6,
         max_finish_rejections: int = 6,
+        on_specialist_route: Any = None,
     ) -> None:
         self.provider = provider or build_provider()
         self._router = ModelRouter(
@@ -146,8 +148,11 @@ class LangGraphOrchestrator:
         self.max_content_validation_retries = max_content_validation_retries
         self.max_duplicate_tool_retries = max_duplicate_tool_retries
         self.max_finish_rejections = max_finish_rejections
+        self._on_specialist_route = on_specialist_route
         self.strict_single_action_mode = self._env_bool("P1_STRICT_SINGLE_ACTION", False)
-        self.tools: dict[str, Tool] = build_tool_registry(self.memo_store)
+        self.tools: dict[str, Tool] = build_tool_registry(
+            self.memo_store, checkpoint_store=self.checkpoint_store
+        )
         self._executor_subgraph = build_executor_subgraph(memo_store=self.memo_store)
         self._evaluator_subgraph = build_evaluator_subgraph()
         self._invalidate_known_poisoned_cache_entries()
@@ -164,7 +169,8 @@ class LangGraphOrchestrator:
             f"Allowed tool_name values: {tool_list}\n\n"
             "Schema:\n"
             '{"action":"tool","tool_name":"<tool>","args":{...}}\n'
-            '{"action":"finish","answer":"<summary>"}\n\n'
+            '{"action":"finish","answer":"<summary>"}\n'
+            '{"action":"clarify","question":"<question for user>"}\n\n'
             "Tool arg reference (use exact names):\n"
             '- repeat_message: {"message":"<string>"}\n'
             '- sort_array: {"items":[...], "order":"asc|desc"}\n'
@@ -177,7 +183,20 @@ class LangGraphOrchestrator:
             '- text_analysis: {"text":"<string>", "operation":"word_count|sentence_count|char_count|key_terms|complexity_score|paragraph_count|avg_word_length|unique_words|full_report"}\n'
             '- data_analysis: {"numbers":[...], "operation":"summary_stats|outliers|percentiles|distribution|correlation|normalize|z_scores"}\n'
             '- json_parser: {"text":"<json_string>", "operation":"parse|validate|extract_keys|flatten|get_path|pretty_print|count_elements"}\n'
-            '- regex_matcher: {"text":"<string>", "pattern":"<regex>", "operation":"find_all|find_first|split|replace|match|count_matches|extract_groups"}\n\n'
+            '- regex_matcher: {"text":"<string>", "pattern":"<regex>", "operation":"find_all|find_first|split|replace|match|count_matches|extract_groups"}\n'
+            '- read_file: {"path":"<filepath>", "start_line":<int optional>, "end_line":<int optional>}\n'
+            '- parse_code_structure: {"file_path":"<filepath>", "language":"python|javascript|..."}\n'
+            '- describe_db_schema: {"path":"<sqlite_db_path>"}\n'
+            '- run_bash: {"command":"<shell command>", "timeout":<int optional, max 120>}\n'
+            '- http_request: {"url":"<url>", "method":"GET|POST|PUT|PATCH|DELETE", "headers":{...optional}, "body":{...optional}}\n'
+            '- datetime_ops: {"operation":"now|parse|format|add|subtract|diff|weekday|to_timestamp|from_timestamp", "value":"<datetime string optional>", ...}\n'
+            '- extract_table: {"text":"<csv/tsv/delimited text>", "delimiter":"<char optional>", "operation":"parse|filter|column|count|sum|sort"}\n'
+            '- fill_template: {"template":"<string with {placeholders}>", "variables":{"key":"value",...}}\n'
+            '- hash_content: {"content":"<string>", "algorithm":"sha256|md5|sha1|sha512|sha3_256"}\n'
+            '- query_db: {"operation":"insert|query|list|delete|count", "key":"<str optional>", "value":"<str optional>", "search":"<str optional>"}\n'
+            '- recognize_pattern: {"text":"<string>", "pattern_type":"email|url|date|phone|ip_address|hex_color|fibonacci_sequence|arithmetic_sequence|geometric_sequence"}\n'
+            '- clear_context: {"scope":"missions|full"}\n'
+            '- update_file_section: {"path":"<filepath>", "marker":"<## Section heading>", "content":"<new section content>"}\n\n'
             "Memoization policy:\n"
             "- For heavy deterministic writes, memoize result before continuing.\n"
             '- Use tool "memoize" with args: key, value, run_id, optional namespace.\n'
@@ -353,9 +372,14 @@ class LangGraphOrchestrator:
         run_id: str | None = None,
         *,
         rerun_context: dict[str, Any] | None = None,
+        prior_context: list[AgentMessage] | None = None,
     ) -> dict[str, Any]:
         """Execute one end-to-end run and return audit-friendly artifacts."""
         state = new_run_state(self.system_prompt, user_input, run_id=run_id)
+        if prior_context:
+            system_msgs = [m for m in state["messages"] if m.get("role") == "system"]
+            user_msgs = [m for m in state["messages"] if m.get("role") != "system"]
+            state["messages"] = system_msgs + list(prior_context) + user_msgs
         state = ensure_state_defaults(state, system_prompt=self.system_prompt)
         state["rerun_context"] = dict(rerun_context or {})
         structured_plan = parse_missions(user_input)
@@ -381,7 +405,7 @@ class LangGraphOrchestrator:
             node_name="init",
             state=state,
         )
-        final_state = self._compiled.invoke(state, config={"recursion_limit": self.max_steps * 3})
+        final_state = self._compiled.invoke(state, config={"recursion_limit": self.max_steps * 9})
         final_state = ensure_state_defaults(final_state, system_prompt=self.system_prompt)
         memo_entries = self.memo_store.list_entries(run_id=final_state["run_id"])
         derived_snapshot = self._build_derived_snapshot(final_state, memo_entries)
@@ -1188,6 +1212,13 @@ class LangGraphOrchestrator:
         mission_id = action.get("__mission_id")
         if not isinstance(mission_id, int) or mission_id <= 0:
             mission_id = int(state.get("active_mission_id", 0))
+        if self._on_specialist_route is not None:
+            with contextlib.suppress(Exception):
+                self._on_specialist_route(
+                    specialist=specialist,
+                    tool=tool_name,
+                    mission_id=int(mission_id or 0),
+                )
         self._emit_trace(state, "specialist_route",
             specialist=specialist,
             tool_name=tool_name,
@@ -1660,6 +1691,38 @@ class LangGraphOrchestrator:
         state["policy_flags"]["last_tool_args"] = tool_args
         state["policy_flags"]["last_tool_result"] = tool_result
         state["pending_action"] = None
+
+        # Auto-memoize write_file results that require it, so the model never needs to.
+        # Without this, the model ignores the "call memoize" system message and loops.
+        if tool_name == "write_file" and self.policy.requires_memoization(
+            tool_name=tool_name, args=tool_args, result=tool_result
+        ):
+            _auto_key = self.policy.suggested_memo_key(
+                tool_name=tool_name, args=tool_args, result=tool_result
+            )
+            _auto_result = self.tools["memoize"].execute({
+                "key": _auto_key,
+                "value": tool_result,
+                "run_id": state["run_id"],
+                "step": state["step"],
+                "source_tool": "write_file",
+            })
+            if "value_hash" in _auto_result:
+                state["memo_events"].append(
+                    MemoEvent(
+                        key=str(_auto_result.get("key", _auto_key)),
+                        namespace=str(_auto_result.get("namespace", "run")),
+                        source_tool="write_file",
+                        step=state["step"],
+                        value_hash=str(_auto_result["value_hash"]),
+                        created_at=utc_now_iso(),
+                    )
+                )
+                state["policy_flags"]["last_tool_name"] = "memoize"
+                self.logger.info(
+                    "AUTO MEMOIZE step=%s tool=write_file key=%s", state["step"], _auto_key
+                )
+
         self.checkpoint_store.save(
             run_id=state["run_id"],
             step=state["step"],
