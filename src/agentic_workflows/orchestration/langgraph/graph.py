@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from agentic_workflows.logger import get_logger
-from agentic_workflows.observability import observe
+from agentic_workflows.observability import get_langfuse_callback_handler, observe
 from agentic_workflows.orchestration.langgraph import (
     action_parser,
     content_validator,
@@ -155,6 +155,7 @@ class LangGraphOrchestrator:
         )
         self._executor_subgraph = build_executor_subgraph(memo_store=self.memo_store)
         self._evaluator_subgraph = build_evaluator_subgraph()
+        self._active_callbacks: list[Any] = []  # populated at run() start; empty = no-op
         self._invalidate_known_poisoned_cache_entries()
         self.system_prompt = self._build_system_prompt()
         self._compiled = self._compile_graph()
@@ -375,6 +376,11 @@ class LangGraphOrchestrator:
         prior_context: list[AgentMessage] | None = None,
     ) -> dict[str, Any]:
         """Execute one end-to-end run and return audit-friendly artifacts."""
+        # Build callback list once per run. Empty list when credentials absent (no console noise).
+        self._active_callbacks: list[Any] = []
+        _handler = get_langfuse_callback_handler()
+        if _handler is not None:
+            self._active_callbacks = [_handler]
         state = new_run_state(self.system_prompt, user_input, run_id=run_id)
         if prior_context:
             system_msgs = [m for m in state["messages"] if m.get("role") == "system"]
@@ -405,7 +411,10 @@ class LangGraphOrchestrator:
             node_name="init",
             state=state,
         )
-        final_state = self._compiled.invoke(state, config={"recursion_limit": self.max_steps * 9})
+        final_state = self._compiled.invoke(
+            state,
+            config={"recursion_limit": self.max_steps * 9, "callbacks": self._active_callbacks},
+        )
         final_state = ensure_state_defaults(final_state, system_prompt=self.system_prompt)
         memo_entries = self.memo_store.list_entries(run_id=final_state["run_id"])
         derived_snapshot = self._build_derived_snapshot(final_state, memo_entries)
@@ -1280,7 +1289,7 @@ class LangGraphOrchestrator:
                 "status": "success",
             }
             # Invoke the compiled subgraph — this records real subgraph node transitions.
-            self._executor_subgraph.invoke(exec_state)
+            self._executor_subgraph.invoke(exec_state, config={"callbacks": self._active_callbacks})
             # Execute through _execute_action() to apply full pipeline (arg normalization,
             # duplicate detection, auto-memo-lookup, content validation, mission attribution).
             pre_tool_history_len = len(state.get("tool_history", []))

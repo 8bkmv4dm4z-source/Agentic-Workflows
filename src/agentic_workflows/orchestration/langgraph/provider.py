@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 from groq import Groq
 from openai import OpenAI
 
+from agentic_workflows.observability import observe
 from agentic_workflows.orchestration.langgraph.state_schema import AgentMessage
 
 # Phase 1 standardizes all provider/runtime config via repo-level .env.
@@ -190,6 +191,7 @@ class OllamaChatProvider(_RetryingProviderBase):
         )
         self.model = resolved_model
 
+    @observe(name="provider.generate")
     def generate(self, messages: Sequence[AgentMessage]) -> str:
         def _request_json_mode() -> object:
             return self.client.chat.completions.create(
