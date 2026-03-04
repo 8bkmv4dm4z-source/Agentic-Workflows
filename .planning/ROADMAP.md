@@ -91,7 +91,10 @@ Plans:
   1. Running a mission with LANGFUSE_PUBLIC_KEY set produces a trace in Langfuse (self-hosted or free cloud) with one span per graph node transition — no manual instrumentation of individual nodes required
   2. @observe() decorator is present on run() entrypoint and provider generate() path — spans appear in Langfuse under the parent run trace
   3. A docs/architecture/ directory contains a Phase 1-4 Before/After snapshot showing RunState schema evolution, graph topology changes, and specialist boundary introduction — readable as a standalone progression document
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 05-01-PLAN.md — Fix observability.py import, add get_langfuse_callback_handler(), wire callbacks into graph.py invoke calls, add @observe to OllamaChatProvider (OBSV-01)
+- [ ] 05-02-PLAN.md — Create docs/architecture/PHASE_PROGRESSION.md with Mermaid phase topology diagrams (LRNG-03)
 
 ### Phase 6: Production Service Layer
 **Goal**: The orchestration platform is accessible over HTTP — POST /run submits missions, GET /run/{id} retrieves results, GET /run/{id}/stream delivers step-transition events as Server-Sent Events; graph is compiled once at startup
@@ -126,6 +129,6 @@ Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7
 | 2. LangGraph Upgrade and Single-Agent Hardening | 4/5 | In Progress|  |
 | 3. Specialist Subgraph Architecture | 3/3 | Complete   | 2026-03-03 |
 | 4. Multi-Agent Integration and Model Routing | 6/6 | Complete   | 2026-03-03 |
-| 5. Observability Layer and Architecture Snapshot | 0/TBD | Not started | - |
+| 5. Observability Layer and Architecture Snapshot | 0/2 | Not started | - |
 | 6. Production Service Layer | 0/TBD | Not started | - |
 | 7. Production Persistence and CI | 0/TBD | Not started | - |
