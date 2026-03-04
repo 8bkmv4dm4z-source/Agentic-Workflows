@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: unknown
-last_updated: "2026-03-03T12:00:48.870Z"
+status: in_progress
+last_updated: "2026-03-04T05:15:00.000Z"
 progress:
-  total_phases: 3
-  completed_phases: 3
-  total_plans: 14
-  completed_plans: 14
+  total_phases: 7
+  completed_phases: 4
+  total_plans: 16
+  completed_plans: 16
 ---
 
 # Project State
@@ -18,23 +18,29 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-02)
 
 **Core value:** A specialist-routing multi-agent system that reliably executes multi-mission workloads end-to-end — with the architecture understood deeply enough to stress test, evolve, and deploy with confidence.
-**Current focus:** Phase 4 — Multi-Agent Integration and Model Routing
+**Current focus:** Phase 5 — Observability Layer and Architecture Snapshot (in-progress on branch `p5-p6-implementing`)
 
 ## Current Position
 
-Phase: 4 of 7 (Multi-Agent Integration and Model Routing)
-Plan: 6 of 6 in current phase (04-01 DONE, 04-02 DONE, 04-03 DONE, 04-04 DONE, 04-05 DONE, 04-06 DONE)
-Status: Phase 4 COMPLETE — all 6 plans executed; write_file-first ordering guard in fallback_planner.py; all 41 integration tests pass for the first time; MAGT-05, MAGT-06 satisfied
-Last activity: 2026-03-03 — 04-06 complete; fallback_planner.py guard for write-before-repeat ordering; all 41 integration tests pass
+Phase: 5 of 7 (Observability Layer and Architecture Snapshot)
+Plan: 2 of 2 in current phase (05-01 DONE, 05-02 DONE + hardening pass)
+Status: Phase 5 hardening applied — RunResult TypedDict, tool security guardrails (env-var gated), user_run quick fixes. All regression fixes committed.
+Last activity: 2026-03-04 — hardening pass: RunResult TypedDict, _security.py guardrails (sandbox/bash/HTTP/size), user_run log.exception + dead code removal + clarify constant extraction
 
-Progress: [█████░░░░░] 30% (Phase 1 complete, Phase 2 complete, Phase 3 complete)
+Progress: [████████░░] 57% (Phases 1-4 complete, Phase 5 in-progress)
+
+## Test Status
+
+- **429 tests pass** on `p5-p6-implementing` (up from 420 on `stable/after-phase4-7`)
+- ruff check: clean
+- Branch: `p5-p6-implementing` (7 commits ahead of `stable/after-phase4-7` + uncommitted fixes)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 5
+- Total plans completed: 16 (across Phases 2-5)
 - Average duration: 4 min
-- Total execution time: ~0.20 hours
+- Total execution time: ~1 hour
 
 **By Phase:**
 
@@ -42,17 +48,8 @@ Progress: [█████░░░░░] 30% (Phase 1 complete, Phase 2 comple
 |-------|-------|-------|----------|
 | 02-langgraph-upgrade | 5 | 20 min | 4 min |
 | 03-specialist-subgraph | 3 | 7 min | 2 min |
-| 04-multi-agent-integration | 1 | 6 min | 6 min |
-
-**Recent Trend:**
-- Last 7 plans: 02-03 (5 min), 02-04 (N/A), 02-05 (3 min), 03-01 (2 min), 03-02 (2 min), 03-03 (3 min)
-- Trend: Stable
-
-*Updated after each plan completion*
-| Phase 04-multi-agent-integration-and-model-routing P03 | 5 | 3 tasks | 3 files |
-| Phase 04-multi-agent-integration-and-model-routing P01 | 6 | 3 tasks | 3 files |
-| Phase 04-multi-agent-integration-and-model-routing P02 | 8 | 1 tasks | 1 files |
-| Phase 04-multi-agent-integration-and-model-routing P06 | 8 | 1 tasks | 2 files |
+| 04-multi-agent-integration | 6 | 30 min | 5 min |
+| 05-observability | 2 | ~10 min | 5 min |
 
 ## Accumulated Context
 
@@ -61,52 +58,29 @@ Progress: [█████░░░░░] 30% (Phase 1 complete, Phase 2 comple
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
-- [Foundation]: langgraph<1.0 pin was safe when set; now blocks Phase 2 — flagged for revisit
-- [Foundation]: TypedDict for RunState (not Pydantic BaseModel) — LangGraph native; repair via ensure_state_defaults()
-- [Foundation]: tool_history is source of truth for args; tool_results in mission_reports intentionally excludes args
-- [Roadmap]: LRNG-01 (WALKTHROUGH requirement) mapped to Phase 3 — first major refactor phase; process carries forward to all subsequent phases
-- [02-01]: langgraph-prebuilt pin changed from <1.0.2 to >=1.0.6,<1.1.0 — plan's <1.0.2 was pip-unresolvable with langgraph>=1.0.6; codebase doesn't use ToolNode.afunc yet so safe
-- [02-01]: Installed langgraph 1.0.10, langgraph-prebuilt 1.0.8, langchain-anthropic 1.3.4; test suite confirmed at 267 (grew from 208 during Phase 1)
-- [02-02]: Annotated[list[T], operator.add] reducers added to 4 RunState list fields; _sequential_node() wrapper needed in graph.py because operator.add doubles lists when nodes return full state — LangGraph 1.0 applies reducer to returned dict even for full-state returns; wrapper zeroes Annotated fields in return dict (operator.add(post_mutation_list, []) = no-op)
-- [02-02]: Message compaction added to ensure_state_defaults() — sliding window at P1_MESSAGE_COMPACTION_THRESHOLD (default 40), system messages always preserved
-- [02-04]: @observe(name="run") applied to main() in run.py — main() is the CLI entrypoint; graph.py orchestrator.run() already had @observe separately; closes OBSV-02
-- [02-04]: docs/ADR/ established with 4 ADRs (Status/Context/Decision/Consequences format) for Phase 2 key decisions — LRNG-02 closed
-- [02-05]: CI workflow uses P1_PROVIDER=scripted in env block — ScriptedProvider handles all LLM interaction, zero live API keys in CI
-- [02-05]: branches: ["**"] on push catches all feature branches; no pip cache (deferred to Phase 7)
-- [Phase 02]: ToolNode added as 'tools' node in graph.py when P1_PROVIDER=anthropic; wired without replacing existing plan/execute/policy/finalize routing — satisfies LGUP-02 while preserving all non-Anthropic paths unchanged
-- [Phase 02]: _build_lc_tools() bridges internal Tool base class to LangChain StructuredTool using closure pattern; _dedup_then_tool_node() preserves seen_tool_signatures dedup before ToolNode.invoke()
-- [03-01]: ExecutorState uses standalone TypedDict with no RunState inheritance; exec_-prefixed list fields guarantee zero key overlap; tool_scope filtering at subgraph compile time
-- [03-01]: Single-node START->execute->END topology for Phase 3; multi-node refinement deferred to Phase 4
-- [03-01]: run_bash added to EXECUTOR_TOOLS in directives.py (pre-existing sync bug with tools_registry.py)
-- [Phase 03-02]: eval_ prefix on all RunState-colliding fields guarantees zero overlap without TypedDict inheritance
-- [Phase 03-02]: build_evaluator_subgraph() takes no parameters — tool scope not relevant for evaluator; audit_run() accepts input via state fields
-- [Phase 03-02]: evaluate_node catches all exceptions from audit_run() and returns status=error (fail-closed, not crash)
-- [Phase 03]: Use __annotations__ not get_type_hints() for TypedDict isolation assertion — avoids resolving forward references
-- [Phase 03]: WALKTHROUGH_PHASE3.md is standalone file at docs/ root per LRNG-01 requirement
-- [Phase 04-03]: fast_provider=None defaults to strong_provider via ModelRouter fallback — zero behavior change for single-provider configs; complexity='planning' default maintains backward compat for _generate_with_hard_timeout() callers
-- [Phase 04-01]: Subgraphs cached in __init__() after build_tool_registry() to prevent per-call recompilation (N compile cycles avoided)
-- [Phase 04-01]: Evaluator subgraph NOT invoked mid-run: evaluator-scoped tool actions route through executor subgraph; evaluator reserved for _finalize() time per RESEARCH.md Pitfall 4
-- [Phase 04-01]: eval_audit_report -> RunState.audit_report merge deferred to Phase 5 — mid-run evaluator produces partial audit data overwritten by _finalize()
-- [Phase 04-multi-agent-integration-and-model-routing]: Tests target via_subgraph=True tag presence and audit_report['failed']==0 rather than mission_reports.used_tools attribution — the latter is a pre-existing bug deferred to deferred-items.md
-- [Phase 04-multi-agent-integration-and-model-routing]: Checkpoint test uses 2-mission run to match must_haves.truths (not 1-mission as task action section implied)
-- [Phase 04-05]: Parallel-invoke pattern: self._executor_subgraph.invoke(exec_state) called for subgraph node transition logging; self._execute_action(state) called for real tool execution with full pipeline; exec_state result discarded to prevent double-execution — satisfies MAGT-05 (subgraph IS invoked) and ROADMAP Phase 4 SC#1
-- [Phase 04-multi-agent-integration-and-model-routing]: write_file-first guard: 'write_file not in missing_tools' condition added to repeat_message early dispatch in deterministic_fallback_action() — preserves write-before-repeat ordering when both tools are contract requirements
-- [Phase 04-multi-agent-integration-and-model-routing]: Test assertion correction: count==0 with status==completed are mutually exclusive when repeat_message is a contract requirement; corrected to count==1 with assertLess(write_file_index, repeat_message_index) to capture ordering invariant
+- [Phase 05]: Langfuse 3.x get_langfuse_callback_handler() wired into graph.py run() — callbacks passed to _active_callbacks list
+- [Phase 05]: user_run.py interactive session loop with prior_context, reviewer integration, and turn-based conversation
+- [Phase 05-fix]: Prior-context system messages merged into main system prompt (not inserted as consecutive system messages) — prevents Ollama JSON mode breakage
+- [Phase 05-fix]: Retry/escalation hints changed from role="system" to role="user" with [Orchestrator] prefix — avoids consecutive system messages
+- [Phase 05-fix]: Empty-output fallback always uses "clarify" action, never "I cannot answer" finish — user-interactive sessions should never refuse engagement
+- [Phase 05-fix]: infer_requirements_from_text() expanded with tightened patterns for parse_code_structure, read_file, run_bash, search_files, http_request, hash_content, datetime_ops
+- [Phase 04-03]: fast_provider=None defaults to strong_provider via ModelRouter fallback
+- [Phase 04-01]: Subgraphs cached in __init__() after build_tool_registry()
+- [Phase 04-05]: Parallel-invoke pattern for subgraph invocation
 
 ### Pending Todos
 
-None yet.
+- Validate run.py and user_run.py work end-to-end with live provider
+- Update ROADMAP.md Phase 2 checkbox status (plans 02-03 through 02-05 are done but unchecked)
 
 ### Blockers/Concerns
 
-- [Phase 2 entry]: ~~langgraph<1.0 pin must be removed~~ RESOLVED — langgraph 1.0.10 installed (02-01 complete)
-- [Phase 2]: ~~Verify ToolNode.afunc behavior with langgraph-prebuilt 1.0.8~~ RESOLVED — ToolNode.afunc not called in the wiring; graph compiles and tests pass with langgraph-prebuilt 1.0.8
-- [Phase 2]: ~~@observe() not yet wired on run/provider path~~ RESOLVED — @observe(name="run") on main() in run.py (02-04 complete)
-- [Phase 3]: ~~RunState reducer annotations must be complete before any Send()-based parallel execution is attempted~~ RESOLVED — Annotated reducers added in 02-02 with _sequential_node() wrapper for safe sequential operation
-- [Phase 2 ACTIVE BLOCKER — LGUP-02]: ToolNode routing not wired — `builder.add_node("tools", dedup_node)` exists but no `add_conditional_edges` routes to it; `tools_condition` is imported but never passed to the graph builder; `_parse_all_actions_json()` still runs unconditionally on all paths including Anthropic; fix requires: wire tools_condition edge from plan/agent node → tools, add return edge tools → plan, gate XML/JSON parser on non-Anthropic path only
+- [Phase 2 LGUP-02]: ~~ToolNode routing not wired~~ — wired via add_conditional_edges at graph.py:361 for Anthropic path (RESOLVED)
+- [Phase 5 ACTIVE]: run.py and user_run.py need live provider (ollama/groq/openai) to test interactively — ScriptedProvider only used in tests
+- [Phase 5 ACTIVE]: Prior-context consecutive system messages broke Ollama JSON mode — fix applied but uncommitted
 
 ## Session Continuity
 
-Last session: 2026-03-03
-Stopped at: Plan 04-06 complete — fallback_planner.py write_file-first ordering guard; all 41 integration tests pass; Phase 4 complete
+Last session: 2026-03-04
+Stopped at: 4 regression fixes applied (uncommitted) — prior_context merging, hint roles, clarify fallback, keyword expansion. Diagnostic agents running to assess run.py and user_run.py behavior.
 Resume file: None

@@ -1,6 +1,7 @@
 import subprocess
 from typing import Any
 
+from agentic_workflows.tools._security import check_bash_command, validate_path_within_sandbox
 from agentic_workflows.tools.base import Tool
 
 _DEFAULT_TIMEOUT = 30
@@ -24,6 +25,17 @@ class RunBashTool(Tool):
 
         if not command or not command.strip():
             return {"error": "command is required"}
+
+        # Security: command denylist/allowlist filtering
+        cmd_err = check_bash_command(command)
+        if cmd_err is not None:
+            return cmd_err
+
+        # Security: sandbox check on cwd when set
+        if cwd is not None:
+            sandbox_err = validate_path_within_sandbox(cwd)
+            if sandbox_err is not None:
+                return sandbox_err
 
         try:
             result = subprocess.run(

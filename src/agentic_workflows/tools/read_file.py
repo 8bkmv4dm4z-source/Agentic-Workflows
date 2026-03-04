@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from ._security import check_content_size, validate_path_within_sandbox
 from .base import Tool
 
 
@@ -20,6 +21,12 @@ class ReadFileTool(Tool):
         path_str = str(args.get("path", "")).strip()
         if not path_str:
             return {"error": "path is required"}
+
+        # Security: sandbox path check
+        sandbox_err = validate_path_within_sandbox(path_str)
+        if sandbox_err is not None:
+            return sandbox_err
+
         path = Path(path_str)
         if not path.exists():
             return {"error": f"file not found: {path_str}", "path": path_str, "exists": False}
@@ -35,6 +42,12 @@ class ReadFileTool(Tool):
                 e = int(end) if end is not None else len(lines)
                 lines = lines[s:e]
             content = "".join(lines)
+            # Security: truncate output when cap is set
+            size_err = check_content_size(content, "P1_READ_FILE_MAX_BYTES", 0)
+            if size_err is not None:
+                import os as _os
+                max_bytes = int(_os.getenv("P1_READ_FILE_MAX_BYTES", "0") or "0")
+                content = content[:max_bytes]
             return {
                 "path": path_str,
                 "content": content,

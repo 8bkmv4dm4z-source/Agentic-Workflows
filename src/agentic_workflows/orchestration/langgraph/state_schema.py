@@ -53,6 +53,21 @@ class MissionReport(TypedDict):
     subtask_statuses: list[dict[str, Any]]
 
 
+class RunResult(TypedDict):
+    """Typed return contract for LangGraphOrchestrator.run()."""
+
+    answer: str
+    tools_used: list[ToolRecord]
+    mission_report: list[MissionReport]
+    run_id: str | None
+    memo_events: list[MemoEvent]
+    memo_store_entries: list[dict[str, Any]]
+    derived_snapshot: dict[str, Any]
+    checkpoints: list[dict[str, Any]]
+    audit_report: dict[str, Any] | None
+    state: dict[str, Any]
+
+
 class RunState(TypedDict):
     # Run identity and step position.
     run_id: str
@@ -122,6 +137,7 @@ def new_run_state(system_prompt: str, user_input: str, run_id: str | None = None
             "provider_timeout": 0,
             "content_validation": 0,
             "finish_rejected": 0,
+            "consecutive_empty": 0,
         },
         "policy_flags": {
             "memo_required": False,
@@ -225,6 +241,7 @@ def ensure_state_defaults(state: RunState | dict[str, Any], *, system_prompt: st
     retry_counts.setdefault("duplicate_tool", 0)
     retry_counts.setdefault("content_validation", 0)
     retry_counts.setdefault("finish_rejected", 0)
+    retry_counts.setdefault("consecutive_empty", 0)
 
     policy_flags = state_dict["policy_flags"]
     policy_flags.setdefault("memo_required", False)

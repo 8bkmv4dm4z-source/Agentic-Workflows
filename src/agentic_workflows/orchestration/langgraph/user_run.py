@@ -9,10 +9,11 @@ The session maintains rolling conversation history across runs, compresses
 context after each run, and resets fully when the agent calls clear_context.
 """
 
+import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 # Allow running directly or via -m
 if __package__ in {None, ""}:
@@ -22,6 +23,7 @@ if __package__ in {None, ""}:
         if p not in sys.path:
             sys.path.insert(0, p)
 
+from agentic_workflows.logger import get_logger
 from agentic_workflows.orchestration.langgraph.langgraph_orchestrator import LangGraphOrchestrator
 from agentic_workflows.orchestration.langgraph.run_ui import (
     collect_retry_counts,
@@ -31,9 +33,11 @@ from agentic_workflows.orchestration.langgraph.run_ui import (
     render_specialist_routing,
     render_stuck_indicator,
 )
-from agentic_workflows.orchestration.langgraph.state_schema import AgentMessage
+from agentic_workflows.orchestration.langgraph.state_schema import AgentMessage, RunResult
 
+_LOG = get_logger("langgraph.user_run")
 _MAX_TOOL_HISTORY_RETAINED = 20
+_CLARIFY_PREFIX = "__CLARIFY__:"
 
 
 @dataclass
@@ -45,6 +49,7 @@ class UserSession:
     _orchestrator: LangGraphOrchestrator | None = field(default=None, init=False)
     _conversation_history: list[AgentMessage] = field(default_factory=list, init=False)
     _completed_summaries: list[dict[str, Any]] = field(default_factory=list, init=False)
+    _last_run_failures: list[str] = field(default_factory=list, init=False)
 
     def __post_init__(self) -> None:
         self._orchestrator = LangGraphOrchestrator(
@@ -61,18 +66,19 @@ class UserSession:
             status="executing",
         )
 
-    @staticmethod
-    def _print_live_phase(mission_n: int, mission_total: int, desc: str, budget_remaining: int) -> None:
-        kb = budget_remaining // 1000
-        print(f"\033[36m\u2192 Planning  [{mission_n}/{mission_total}] \"{desc[:40]}\"  budget {kb}k left\033[0m")
-
     def _format_user_input(self, text: str) -> str:
         """Pass user text to the orchestrator unchanged.
 
         The mission_parser handles free-form text naturally.  JSON contract
         enforcement is handled by the system prompt directives; embedding
         JSON schema templates in the user message confuses JSON-mode models.
+
+        When ``P1_USER_INPUT_MAX_LENGTH`` is set to a positive integer, the
+        input is silently truncated to that many characters.
         """
+        max_len = int(os.getenv("P1_USER_INPUT_MAX_LENGTH", "0") or "0")
+        if max_len > 0 and len(text) > max_len:
+            text = text[:max_len]
         return text
 
     def _minimize_context(self, *, full_clear: bool = False) -> None:
@@ -110,6 +116,9 @@ class UserSession:
                 "Format: JSON only. Schema: tool|finish|clarify.",
                 "Prior completed missions (most recent first):",
             ]
+            if self._last_run_failures:
+                failure_str = "; ".join(self._last_run_failures[:5])
+                summary_lines.append(f"[Prior run failed] Last tool errors: {failure_str}")
             for entry in reversed(recent):
                 mid = entry.get("mission_id", "?")
                 status = entry.get("status", "unknown")
@@ -157,7 +166,7 @@ class UserSession:
             self._completed_summaries.append(summary)
 
     @staticmethod
-    def _validate_result(result: dict[str, Any]) -> dict[str, Any]:
+    def _validate_result(result: dict[str, Any]) -> RunResult:
         """Return result with guaranteed keys; coerce bad types to safe defaults."""
         validated: dict[str, Any] = {
             "answer": "",
@@ -173,7 +182,7 @@ class UserSession:
             validated["mission_report"] = []
         if not isinstance(validated["state"], dict):
             validated["state"] = {}
-        return validated
+        return cast(RunResult, validated)
 
     def run_once(
         self,
@@ -181,7 +190,7 @@ class UserSession:
         _original_input: str | None = None,
         *,
         clarify_depth: int = 0,
-    ) -> dict[str, Any]:
+    ) -> RunResult:
         """Execute one mission string and update session state."""
         assert self._orchestrator is not None  # set by __post_init__
         prior_context = self._build_prior_context()
@@ -191,9 +200,10 @@ class UserSession:
         try:
             result = self._orchestrator.run(formatted_input, prior_context=prior_context)
         except Exception as exc:  # noqa: BLE001
+            _LOG.exception("Orchestrator execution failed")
             error_msg = f"Orchestrator error: {exc}"
             self._conversation_history.append(AgentMessage(role="assistant", content=error_msg))
-            return {"answer": error_msg, "tools_used": [], "mission_report": [], "run_id": None, "state": {}}
+            return cast(RunResult, {"answer": error_msg, "tools_used": [], "mission_report": [], "run_id": None, "state": {}})
         result = self._validate_result(result)
 
         # Append the agent's answer to rolling history
@@ -209,6 +219,19 @@ class UserSession:
         # Check if clear_context tool was fired
         state_raw = result.get("state", {})
         state = state_raw if isinstance(state_raw, dict) else {}
+
+        # Extract failed tool calls for next-turn prior context (Bug 7)
+        self._last_run_failures = []
+        tool_history = state.get("tool_history", [])
+        if isinstance(tool_history, list):
+            for entry in tool_history:
+                if not isinstance(entry, dict):
+                    continue
+                res = entry.get("result")
+                if isinstance(res, dict) and res.get("returncode", 0) != 0:
+                    tool_name = entry.get("tool", "unknown")
+                    stderr = str(res.get("stderr", ""))[:120]
+                    self._last_run_failures.append(f"{tool_name} → {stderr or 'returncode!=0'}")
         context_clear = bool(state.get("context_clear_requested", False))
 
         self._minimize_context(full_clear=context_clear)
@@ -232,14 +255,14 @@ class UserSession:
             print(render_stuck_indicator(retry_counts["finish_rejected"], 6))
 
         # Clarify: re-prompt the user (with recursion depth guard)
-        if answer.startswith("__CLARIFY__:"):
+        if answer.startswith(_CLARIFY_PREFIX):
             if clarify_depth > 2:
                 raise RuntimeError(
                     f"Clarification loop depth exceeded (depth={clarify_depth}). "
                     "The agent repeatedly requested clarification without resolving. "
                     "Aborting to prevent infinite recursion."
                 )
-            question = answer[len("__CLARIFY__:"):].strip()
+            question = answer[len(_CLARIFY_PREFIX):].strip()
             # Replace the __CLARIFY__: signal in history with the clean question so
             # prior_context on the next run is readable by the planner.
             if self._conversation_history and self._conversation_history[-1].get("content") == answer:

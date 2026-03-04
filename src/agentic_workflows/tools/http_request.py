@@ -1,10 +1,12 @@
 import json
+import os
 import socket
 import urllib.error
 import urllib.request
 from typing import Any
 from urllib.parse import urlparse
 
+from agentic_workflows.tools._security import check_http_domain
 from agentic_workflows.tools.base import Tool
 
 _PRIVATE_PREFIXES = (
@@ -45,6 +47,12 @@ class HttpRequestTool(Tool):
         except socket.gaierror as exc:
             return {"error": f"DNS resolution failed: {str(exc)}", "status_code": None}
 
+        # Security: domain allowlist check
+        domain_err = check_http_domain(url)
+        if domain_err is not None:
+            domain_err["status_code"] = None
+            return domain_err
+
         # Build request body
         data: bytes | None = None
         req_headers = dict(headers)
@@ -57,8 +65,10 @@ class HttpRequestTool(Tool):
 
         req = urllib.request.Request(url, data=data, headers=req_headers, method=method)
         try:
+            max_response = int(os.getenv("P1_HTTP_MAX_RESPONSE_BYTES", "0") or "0")
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                raw = resp.read().decode("utf-8", errors="replace")
+                raw_bytes = resp.read(max_response) if max_response > 0 else resp.read()
+                raw = raw_bytes.decode("utf-8", errors="replace")
                 resp_headers = dict(resp.headers)
                 status_code: int = resp.status
                 if response_format == "json":

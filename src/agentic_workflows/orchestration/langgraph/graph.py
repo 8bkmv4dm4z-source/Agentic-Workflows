@@ -43,6 +43,7 @@ from agentic_workflows.orchestration.langgraph.specialist_executor import build_
 from agentic_workflows.orchestration.langgraph.state_schema import (
     AgentMessage,
     MemoEvent,
+    RunResult,
     RunState,
     ensure_state_defaults,
     new_run_state,
@@ -163,8 +164,12 @@ class LangGraphOrchestrator:
     def _build_system_prompt(self) -> str:
         """Construct strict planner prompt and tool/memo policy contract."""
         tool_list = ", ".join(self.tools.keys())
+        cwd = os.getcwd()
         return (
             "You are a deterministic tool-using agent.\n"
+            f"Working directory: {cwd}\n"
+            "When a user refers to a file by partial name, FIRST call search_files to locate "
+            "the full path before using run_bash or read_file.\n"
             "Return exactly one JSON object per response.\n"
             "Never output XML tags (for example <invoke>), markdown, or prose outside JSON.\n"
             f"Allowed tool_name values: {tool_list}\n\n"
@@ -172,6 +177,7 @@ class LangGraphOrchestrator:
             '{"action":"tool","tool_name":"<tool>","args":{...}}\n'
             '{"action":"finish","answer":"<summary>"}\n'
             '{"action":"clarify","question":"<question for user>"}\n\n'
+            "If the user's request does not require any tool, respond with finish or clarify.\n\n"
             "Tool arg reference (use exact names):\n"
             '- repeat_message: {"message":"<string>"}\n'
             '- sort_array: {"items":[...], "order":"asc|desc"}\n'
@@ -197,7 +203,8 @@ class LangGraphOrchestrator:
             '- query_db: {"operation":"insert|query|list|delete|count", "key":"<str optional>", "value":"<str optional>", "search":"<str optional>"}\n'
             '- recognize_pattern: {"text":"<string>", "pattern_type":"email|url|date|phone|ip_address|hex_color|fibonacci_sequence|arithmetic_sequence|geometric_sequence"}\n'
             '- clear_context: {"scope":"missions|full"}\n'
-            '- update_file_section: {"path":"<filepath>", "marker":"<## Section heading>", "content":"<new section content>"}\n\n'
+            '- update_file_section: {"path":"<filepath>", "marker":"<## Section heading>", "content":"<new section content>"}\n'
+            f'- search_files: {{"pattern":"<glob e.g. *.py>", "path":"{cwd}(default)", "max_results":<int optional>}}\n\n'
             "Memoization policy:\n"
             "- For heavy deterministic writes, memoize result before continuing.\n"
             '- Use tool "memoize" with args: key, value, run_id, optional namespace.\n'
@@ -205,7 +212,9 @@ class LangGraphOrchestrator:
             "- For write_file tasks, the orchestrator auto-checks memo keys before writing.\n"
             "- For recurring write tasks, the orchestrator may auto-reuse cached write inputs from prior runs.\n"
             "- Do not emit extra planning subtasks; output the next concrete tool call only.\n"
-            "Always obey system feedback messages."
+            "Always obey system feedback messages.\n"
+            'If all recent tool calls failed and you cannot recover, emit: {"action":"finish","answer":"FAILED: <reason>"}\n'
+            "Never claim success if tool results show errors."
         )
 
     def _invalidate_known_poisoned_cache_entries(self) -> None:
@@ -374,7 +383,7 @@ class LangGraphOrchestrator:
         *,
         rerun_context: dict[str, Any] | None = None,
         prior_context: list[AgentMessage] | None = None,
-    ) -> dict[str, Any]:
+    ) -> RunResult:
         """Execute one end-to-end run and return audit-friendly artifacts."""
         # Build callback list once per run. Empty list when credentials absent (no console noise).
         self._active_callbacks: list[Any] = []
@@ -383,9 +392,19 @@ class LangGraphOrchestrator:
             self._active_callbacks = [_handler]
         state = new_run_state(self.system_prompt, user_input, run_id=run_id)
         if prior_context:
-            system_msgs = [m for m in state["messages"] if m.get("role") == "system"]
-            user_msgs = [m for m in state["messages"] if m.get("role") != "system"]
-            state["messages"] = system_msgs + list(prior_context) + user_msgs
+            # Merge prior-context system content into the main system prompt
+            # to avoid consecutive system messages (breaks Ollama JSON mode).
+            prior_system_parts = [m["content"] for m in prior_context if m.get("role") == "system"]
+            prior_conversation = [m for m in prior_context if m.get("role") != "system"]
+            if prior_system_parts:
+                for msg in state["messages"]:
+                    if msg.get("role") == "system":
+                        msg["content"] += "\n\n" + "\n".join(prior_system_parts)
+                        break
+            if prior_conversation:
+                system_msgs = [m for m in state["messages"] if m.get("role") == "system"]
+                user_msgs = [m for m in state["messages"] if m.get("role") != "system"]
+                state["messages"] = system_msgs + prior_conversation + user_msgs
         state = ensure_state_defaults(state, system_prompt=self.system_prompt)
         state["rerun_context"] = dict(rerun_context or {})
         structured_plan = parse_missions(user_input)
@@ -636,11 +655,18 @@ class LangGraphOrchestrator:
                     mission_id=int(validated.get("__mission_id", 0) or 0),
                 )
                 if validated.get("action") == "finish" and not self._all_missions_completed(state):
-                    return self._reject_finish_and_recover(
-                        state=state,
-                        rejected_action=validated,
-                        source="queue",
+                    _rpts = state.get("mission_reports", [])
+                    _conversational = (
+                        len(_rpts) == 1
+                        and not _rpts[0].get("required_tools")
+                        and not _rpts[0].get("required_files")
                     )
+                    if not _conversational:
+                        return self._reject_finish_and_recover(
+                            state=state,
+                            rejected_action=validated,
+                            source="queue",
+                        )
                 state["pending_action"] = validated
                 self._reset_finish_rejection_tracking(state)
                 state["retry_counts"]["provider_timeout"] = 0
@@ -695,7 +721,7 @@ class LangGraphOrchestrator:
                 return state
         progress_message = self._progress_hint_message(state)
         if progress_message:
-            state["messages"].append({"role": "system", "content": progress_message})
+            state["messages"].append({"role": "user", "content": f"[Orchestrator] {progress_message}"})
 
         # --- Token budget gate: switch to deterministic fallback when exhausted ---
         budget_remaining = state.get("token_budget_remaining", 100_000)
@@ -715,7 +741,73 @@ class LangGraphOrchestrator:
             )
             model_output = self._generate_with_hard_timeout(state["messages"]).strip()
             self.logger.info("MODEL OUTPUT step=%s output=%s", state["step"], model_output[:500])
-            state["messages"].append({"role": "assistant", "content": model_output})
+
+            # --- Empty-output escalation ---
+            if not model_output:
+                empty_count = int(state["retry_counts"].get("consecutive_empty", 0)) + 1
+                state["retry_counts"]["consecutive_empty"] = empty_count
+                self.logger.warning(
+                    "PLAN EMPTY OUTPUT step=%s consecutive_empty=%s",
+                    state["step"],
+                    empty_count,
+                )
+                empty_threshold = max(self.max_invalid_plan_retries // 2, 1)
+                if empty_count >= empty_threshold:
+                    # Deterministic fallback — always clarify, never refuse
+                    fallback = {
+                        "action": "clarify",
+                        "question": (
+                            "I had difficulty processing your request. "
+                            "Could you rephrase or provide more details about what you'd like me to do?"
+                        ),
+                    }
+                    self.logger.warning(
+                        "PLAN EMPTY FALLBACK step=%s action=%s",
+                        state["step"],
+                        fallback["action"],
+                    )
+                    state["messages"].append({"role": "assistant", "content": json.dumps(fallback)})
+                    state["pending_action"] = fallback
+                    self.checkpoint_store.save(
+                        run_id=state["run_id"],
+                        step=state["step"],
+                        node_name="plan_empty_fallback",
+                        state=state,
+                    )
+                    return state
+                # Escalating hint
+                if empty_count <= 2:
+                    hint = (
+                        "Your response was empty. You MUST return exactly one JSON object. "
+                        'If no tool is needed, use: {"action":"finish","answer":"<your answer>"} '
+                        'or {"action":"clarify","question":"<your question>"}'
+                    )
+                else:
+                    user_text = ""
+                    for m in state["messages"]:
+                        if m.get("role") == "user":
+                            user_text = m.get("content", "")
+                            break
+                    hint = (
+                        "Your response was empty. The user asked: "
+                        f'"{user_text[:200]}". '
+                        "Respond with exactly this format (fill in the blank): "
+                        '{"action":"finish","answer":"___"}'
+                    )
+                state["messages"].append({"role": "user", "content": f"[Orchestrator] {hint}"})
+                state["pending_action"] = None
+                self.checkpoint_store.save(
+                    run_id=state["run_id"],
+                    step=state["step"],
+                    node_name="plan_empty_retry",
+                    state=state,
+                )
+                return state
+            # Reset consecutive_empty on non-empty output
+            state["retry_counts"]["consecutive_empty"] = 0
+
+            if model_output:
+                state["messages"].append({"role": "assistant", "content": model_output})
             state["policy_flags"]["planner_timeout_mode"] = False
             # --- Token budget tracking (rough estimate: 1 token ≈ 4 chars) ---
             estimated_tokens = len(model_output) // 4 + sum(
@@ -780,11 +872,18 @@ class LangGraphOrchestrator:
                     )
                 state["retry_counts"]["provider_timeout"] = 0
             if action.get("action") == "finish" and not self._all_missions_completed(state):
-                return self._reject_finish_and_recover(
-                    state=state,
-                    rejected_action=action,
-                    source="provider",
+                _rpts = state.get("mission_reports", [])
+                _conversational = (
+                    len(_rpts) == 1
+                    and not _rpts[0].get("required_tools")
+                    and not _rpts[0].get("required_files")
                 )
+                if not _conversational:
+                    return self._reject_finish_and_recover(
+                        state=state,
+                        rejected_action=action,
+                        source="provider",
+                    )
             self.logger.info("PLANNED ACTION step=%s action=%s", state["step"], action)
             planned_mission_id = int(action.get("__mission_id", 0))
             self._log_queue_mission_spacing(
@@ -879,9 +978,9 @@ class LangGraphOrchestrator:
 
             state["messages"].append(
                 {
-                    "role": "system",
+                    "role": "user",
                     "content": (
-                        "Provider timeout while planning. Retry and return exactly one valid JSON object."
+                        "[Orchestrator] Provider timeout while planning. Retry and return exactly one valid JSON object."
                     ),
                 }
             )
@@ -935,14 +1034,33 @@ class LangGraphOrchestrator:
                 )
                 return state
 
+            if invalid_count <= 2:
+                retry_hint = (
+                    f"Invalid action ({error_text}). Return exactly one valid JSON object. "
+                    "Do not output prose."
+                )
+            elif invalid_count <= 4:
+                retry_hint = (
+                    f"Invalid action ({error_text}). You MUST return one of these JSON formats:\n"
+                    '{"action":"tool","tool_name":"<tool>","args":{...}}\n'
+                    '{"action":"finish","answer":"<summary>"}\n'
+                    '{"action":"clarify","question":"<question>"}\n'
+                    "If no tool is needed, use finish."
+                )
+            else:
+                user_text = ""
+                for m in state["messages"]:
+                    if m.get("role") == "user":
+                        user_text = m.get("content", "")
+                        break
+                retry_hint = (
+                    f"Invalid action ({error_text}). The user asked: "
+                    f'"{user_text[:200]}". '
+                    "Respond with exactly: "
+                    '{"action":"finish","answer":"___"} (fill in the blank)'
+                )
             state["messages"].append(
-                {
-                    "role": "system",
-                    "content": (
-                        f"Invalid action ({error_text}). Return exactly one valid JSON object. "
-                        "Do not output prose."
-                    ),
-                }
+                {"role": "user", "content": f"[Orchestrator] {retry_hint}"}
             )
             state["pending_action"] = None
             self.checkpoint_store.save(

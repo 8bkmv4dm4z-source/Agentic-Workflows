@@ -87,6 +87,31 @@ Wire Langfuse `CallbackHandler` into the graph invocation config for automatic n
 
 </deferred>
 
+## Phase 5 Hardening (Code Review Fixes)
+
+Applied after review of `graph.py` and `user_run.py`:
+
+### RunResult TypedDict
+- Added `RunResult` TypedDict in `state_schema.py` — typed return contract for `LangGraphOrchestrator.run()`
+- Annotated `graph.py::run()` → `RunResult`, `user_run.py::_validate_result()` → `RunResult`, `run_once()` → `RunResult`
+
+### Security Guardrails (`_security.py`)
+All env-var gated, off by default. Active when Phase 6 HTTP service sets them.
+
+| Function | Env Var | Tool(s) |
+|----------|---------|---------|
+| `validate_path_within_sandbox()` | `P1_TOOL_SANDBOX_ROOT` | write_file, read_file, run_bash (cwd) |
+| `check_bash_command()` | `P1_BASH_DENIED_PATTERNS`, `P1_BASH_ALLOWED_COMMANDS` | run_bash |
+| `check_http_domain()` | `P1_HTTP_ALLOWED_DOMAINS` | http_request |
+| `check_content_size()` | Per-caller: `P1_WRITE_FILE_MAX_BYTES`, `P1_READ_FILE_MAX_BYTES` | write_file, read_file |
+
+Additional: `P1_HTTP_MAX_RESPONSE_BYTES` (response cap), `P1_USER_INPUT_MAX_LENGTH` (user_run input cap).
+
+### Quick Fixes (user_run.py)
+- Added `log.exception()` before error message in `run_once()` except block
+- Removed dead `_print_live_phase` static method
+- Extracted `__CLARIFY__:` → `_CLARIFY_PREFIX` module constant
+
 ---
 
 *Phase: 05-observability-layer-and-architecture-snapshot*

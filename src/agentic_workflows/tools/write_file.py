@@ -1,6 +1,7 @@
 import os
 from typing import Any
 
+from agentic_workflows.tools._security import check_content_size, validate_path_within_sandbox
 from agentic_workflows.tools.base import Tool
 
 
@@ -16,6 +17,16 @@ class WriteFileTool(Tool):
             return {"error": "path is required"}
         if not content:
             return {"error": "content is required"}
+
+        # Security: content size cap
+        size_err = check_content_size(content, "P1_WRITE_FILE_MAX_BYTES", 0)
+        if size_err is not None:
+            return size_err
+
+        # Security: sandbox path check
+        sandbox_err = validate_path_within_sandbox(path)
+        if sandbox_err is not None:
+            return sandbox_err
 
         target_path = path
         artifact_dir = str(os.getenv("P1_RUN_ARTIFACT_DIR", "")).strip()
