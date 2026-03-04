@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: in_progress
-last_updated: "2026-03-04T05:15:00.000Z"
+last_updated: "2026-03-04T23:25:00.000Z"
 progress:
   total_phases: 7
-  completed_phases: 4
-  total_plans: 16
-  completed_plans: 16
+  completed_phases: 5
+  total_plans: 19
+  completed_plans: 17
 ---
 
 # Project State
@@ -18,29 +18,29 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-02)
 
 **Core value:** A specialist-routing multi-agent system that reliably executes multi-mission workloads end-to-end — with the architecture understood deeply enough to stress test, evolve, and deploy with confidence.
-**Current focus:** Phase 5 — Observability Layer and Architecture Snapshot (in-progress on branch `p5-p6-implementing`)
+**Current focus:** Phase 6 — Production Service Layer (in-progress on branch `p5-p6-implementing`)
 
 ## Current Position
 
-Phase: 5 of 7 (Observability Layer and Architecture Snapshot)
-Plan: 2 of 2 in current phase (05-01 DONE, 05-02 DONE + hardening pass)
-Status: Phase 5 hardening applied — RunResult TypedDict, tool security guardrails (env-var gated), user_run quick fixes. All regression fixes committed.
-Last activity: 2026-03-04 — hardening pass: RunResult TypedDict, _security.py guardrails (sandbox/bash/HTTP/size), user_run log.exception + dead code removal + clarify constant extraction
+Phase: 6 of 7 (Production Service Layer)
+Plan: 1 of 3 in current phase (06-01 DONE)
+Status: Phase 6 plan 01 complete — FastAPI app skeleton with lifespan singleton, Pydantic models, SSE builders, RunStore protocol + SQLiteRunStore.
+Last activity: 2026-03-04 — 06-01: FastAPI deps, models, SSE, RunStore, app skeleton, /health + /tools routes, 17 new tests
 
-Progress: [████████░░] 57% (Phases 1-4 complete, Phase 5 in-progress)
+Progress: [█████████░] 68% (Phases 1-5 complete, Phase 6 in-progress)
 
 ## Test Status
 
-- **429 tests pass** on `p5-p6-implementing` (up from 420 on `stable/after-phase4-7`)
+- **525 tests pass** on `p5-p6-implementing` (17 new from 06-01)
 - ruff check: clean
-- Branch: `p5-p6-implementing` (7 commits ahead of `stable/after-phase4-7` + uncommitted fixes)
+- Branch: `p5-p6-implementing`
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 16 (across Phases 2-5)
+- Total plans completed: 17 (across Phases 2-6)
 - Average duration: 4 min
-- Total execution time: ~1 hour
+- Total execution time: ~1 hour 3 min
 
 **By Phase:**
 
@@ -50,6 +50,7 @@ Progress: [████████░░] 57% (Phases 1-4 complete, Phase 5 in-
 | 03-specialist-subgraph | 3 | 7 min | 2 min |
 | 04-multi-agent-integration | 6 | 30 min | 5 min |
 | 05-observability | 2 | ~10 min | 5 min |
+| 06-fastapi-service-layer | 1/3 | 3 min | 3 min |
 
 ## Accumulated Context
 
@@ -67,6 +68,9 @@ Recent decisions affecting current work:
 - [Phase 04-03]: fast_provider=None defaults to strong_provider via ModelRouter fallback
 - [Phase 04-01]: Subgraphs cached in __init__() after build_tool_registry()
 - [Phase 04-05]: Parallel-invoke pattern for subgraph invocation
+- [Phase 06-01]: RunStore uses typing.Protocol (not ABC) for structural subtyping with future Postgres backend
+- [Phase 06-01]: SQLite sync calls wrapped in anyio.to_thread.run_sync for event-loop safety
+- [Phase 06-01]: pytest asyncio_mode=auto configured globally
 
 ### Pending Todos
 
@@ -82,5 +86,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-03-04
-Stopped at: 4 regression fixes applied (uncommitted) — prior_context merging, hint roles, clarify fallback, keyword expansion. Diagnostic agents running to assess run.py and user_run.py behavior.
+Stopped at: Completed 06-01-PLAN.md (FastAPI foundation)
 Resume file: None

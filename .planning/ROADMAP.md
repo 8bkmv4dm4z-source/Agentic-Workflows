@@ -107,7 +107,7 @@ Plans:
   4. Concurrent POST /run requests execute without SQLite "database is locked" errors (tested with 3 concurrent requests)
 **Plans**: 3 plans
 Plans:
-- [ ] 06-01-PLAN.md — Foundation: Pydantic models, RunStore abstraction, FastAPI app skeleton with lifespan (PROD-01)
+- [x] 06-01-PLAN.md — Foundation: Pydantic models, RunStore abstraction, FastAPI app skeleton with lifespan (PROD-01)
 - [ ] 06-02-PLAN.md — Route handlers: POST /run (SSE), GET /run/{id}, GET /run/{id}/stream + HTTP contract tests (PROD-01, PROD-02)
 - [ ] 06-03-PLAN.md — Convert user_run.py to API client, eval harness, end-to-end verification (PROD-01, PROD-02)
 
@@ -133,6 +133,6 @@ Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7
 | 2. LangGraph Upgrade and Single-Agent Hardening | 5/5 | Complete | 2026-03-03 |
 | 3. Specialist Subgraph Architecture | 3/3 | Complete | 2026-03-03 |
 | 4. Multi-Agent Integration and Model Routing | 6/6 | Complete | 2026-03-03 |
-| 5. Observability Layer and Architecture Snapshot | 2/2 | In Progress | - |
-| 6. Production Service Layer | 0/3 | Not started | - |
+| 5. Observability Layer and Architecture Snapshot | 2/2 | Complete | 2026-03-04 |
+| 6. Production Service Layer | 1/3 | In Progress | - |
 | 7. Production Persistence and CI | 0/TBD | Not started | - |
