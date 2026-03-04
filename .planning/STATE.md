@@ -8,7 +8,7 @@ progress:
   total_phases: 7
   completed_phases: 5
   total_plans: 19
-  completed_plans: 17
+  completed_plans: 18
 ---
 
 # Project State
@@ -23,15 +23,15 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 ## Current Position
 
 Phase: 6 of 7 (Production Service Layer)
-Plan: 1 of 3 in current phase (06-01 DONE)
-Status: Phase 6 plan 01 complete — FastAPI app skeleton with lifespan singleton, Pydantic models, SSE builders, RunStore protocol + SQLiteRunStore.
-Last activity: 2026-03-04 — 06-01: FastAPI deps, models, SSE, RunStore, app skeleton, /health + /tools routes, 17 new tests
+Plan: 2 of 3 in current phase (06-02 DONE)
+Status: Phase 6 plan 02 complete — POST /run SSE streaming, GET /run/{id}, GET /run/{id}/stream, 8 HTTP contract tests.
+Last activity: 2026-03-04 — 06-02: Route handlers with SSE streaming, status retrieval, reconnection, 8 integration tests
 
-Progress: [█████████░] 68% (Phases 1-5 complete, Phase 6 in-progress)
+Progress: [█████████░] 73% (Phases 1-5 complete, Phase 6 plan 02/03 done)
 
 ## Test Status
 
-- **525 tests pass** on `p5-p6-implementing` (17 new from 06-01)
+- **533 tests pass** on `p5-p6-implementing` (8 new from 06-02)
 - ruff check: clean
 - Branch: `p5-p6-implementing`
 
@@ -50,7 +50,7 @@ Progress: [█████████░] 68% (Phases 1-5 complete, Phase 6 in-
 | 03-specialist-subgraph | 3 | 7 min | 2 min |
 | 04-multi-agent-integration | 6 | 30 min | 5 min |
 | 05-observability | 2 | ~10 min | 5 min |
-| 06-fastapi-service-layer | 1/3 | 3 min | 3 min |
+| 06-fastapi-service-layer | 2/3 | 8 min | 4 min |
 
 ## Accumulated Context
 
@@ -71,6 +71,9 @@ Recent decisions affecting current work:
 - [Phase 06-01]: RunStore uses typing.Protocol (not ABC) for structural subtyping with future Postgres backend
 - [Phase 06-01]: SQLite sync calls wrapped in anyio.to_thread.run_sync for event-loop safety
 - [Phase 06-01]: pytest asyncio_mode=auto configured globally
+- [Phase 06-02]: Used _compiled.stream(stream_mode="updates") directly for real-time SSE (not wrapping run())
+- [Phase 06-02]: anyio memory object stream bridges sync graph thread to async SSE via anyio.from_thread.run
+- [Phase 06-02]: Test apps bypass lifespan (httpx ASGITransport does not trigger ASGI lifespan events)
 
 ### Pending Todos
 
@@ -86,5 +89,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-03-04
-Stopped at: Completed 06-01-PLAN.md (FastAPI foundation)
+Stopped at: Completed 06-02-PLAN.md (Route handlers + SSE streaming)
 Resume file: None

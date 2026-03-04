@@ -29,8 +29,8 @@
 
 ### Production Infrastructure
 
-- [ ] **PROD-01**: FastAPI service exposes `POST /run` (submit a mission) and `GET /run/{id}` (retrieve results) with request/response validation
-- [ ] **PROD-02**: FastAPI service exposes `GET /run/{id}/stream` as a Server-Sent Events endpoint that streams step-transition events during execution
+- [x] **PROD-01**: FastAPI service exposes `POST /run` (submit a mission) and `GET /run/{id}` (retrieve results) with request/response validation
+- [x] **PROD-02**: FastAPI service exposes `GET /run/{id}/stream` as a Server-Sent Events endpoint that streams step-transition events during execution
 - [ ] **PROD-03**: `AsyncPostgresSaver` replaces the SQLite checkpointer for production use (SQLite retained for dev/test only)
 - [ ] **PROD-04**: `Dockerfile` and `docker-compose.yml` allow the full system (API + Postgres) to be started with a single `docker-compose up`
 - [ ] **PROD-05**: GitHub Actions CI pipeline runs `ruff check`, `mypy`, and `pytest` on every push, using `ScriptedProvider` (no live LLM calls in CI)
@@ -98,8 +98,8 @@
 | OBSV-03 | Phase 4 | Complete |
 | OBSV-01 | Phase 5 | Pending |
 | LRNG-03 | Phase 5 | Pending |
-| PROD-01 | Phase 6 | Pending |
-| PROD-02 | Phase 6 | Pending |
+| PROD-01 | Phase 6 | Complete |
+| PROD-02 | Phase 6 | Complete |
 | PROD-03 | Phase 7 | Pending |
 | PROD-04 | Phase 7 | Pending |
 | PROD-05 | Phase 7 | Pending |
