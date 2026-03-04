@@ -9,6 +9,7 @@ The session maintains rolling conversation history across runs, compresses
 context after each run, and resets fully when the agent calls clear_context.
 """
 
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -35,6 +36,14 @@ from agentic_workflows.orchestration.langgraph.state_schema import AgentMessage
 
 _MAX_TOOL_HISTORY_RETAINED = 20
 
+_BEHAVIOR_PREFIX: str = (
+    "Return exactly one JSON object per turn.\n"
+    "No XML tags, no markdown, and no prose outside JSON.\n"
+    "Use only these action schemas:\n"
+    '{"action":"tool","tool_name":"...","args":{...}}\n'
+    '{"action":"finish","answer":"..."}\n\n'
+)
+
 
 @dataclass
 class UserSession:
@@ -45,6 +54,7 @@ class UserSession:
     _orchestrator: LangGraphOrchestrator | None = field(default=None, init=False)
     _conversation_history: list[AgentMessage] = field(default_factory=list, init=False)
     _completed_summaries: list[dict[str, Any]] = field(default_factory=list, init=False)
+    _is_first_turn: bool = field(default=True, init=False)
 
     def __post_init__(self) -> None:
         self._orchestrator = LangGraphOrchestrator(
@@ -66,16 +76,34 @@ class UserSession:
         kb = budget_remaining // 1000
         print(f"\033[36m\u2192 Planning  [{mission_n}/{mission_total}] \"{desc[:40]}\"  budget {kb}k left\033[0m")
 
+    def _format_user_input(self, text: str) -> str:
+        """Prepare user text for the orchestrator.
+
+        On the first turn (or after full clear), prepends _BEHAVIOR_PREFIX to
+        enforce the JSON output contract.  Detects structured input (contains a
+        'Task N:' pattern) and preserves it; wraps free-form text in a minimal
+        'Task 1:' frame so mission_parser creates a named mission step instead
+        of falling back to 'Primary mission'.
+        """
+        is_structured = bool(
+            re.search(r"(?i)^(task\s*\d+\s*:|[\d]+[\)\.:\-]\s)", text, re.MULTILINE)
+        )
+        formatted = text if is_structured else f"Task 1: {text}"
+        if self._is_first_turn:
+            self._is_first_turn = False
+            return _BEHAVIOR_PREFIX + formatted
+        return formatted
+
     def _minimize_context(self, *, full_clear: bool = False) -> None:
         """Compress accumulated context to keep token usage manageable."""
         if full_clear:
             self._conversation_history = []
+            self._is_first_turn = True  # reset so next turn gets the prefix again
         # Keep only the most recent tool history entries (already in summaries)
         # _completed_summaries persist across clears for reference
         # Trim conversation history to a sliding window
-        max_history = 20
-        if len(self._conversation_history) > max_history:
-            self._conversation_history = self._conversation_history[-max_history:]
+        if len(self._conversation_history) > _MAX_TOOL_HISTORY_RETAINED:
+            self._conversation_history = self._conversation_history[-_MAX_TOOL_HISTORY_RETAINED:]
 
     def _build_prior_context(self) -> list[AgentMessage] | None:
         """Build a compact prior-context block to inject into the next run.
@@ -98,7 +126,10 @@ class UserSession:
         if has_summaries:
             # Build a short summary of completed missions (capped at last 5).
             recent = self._completed_summaries[-5:]
-            summary_lines = ["Prior completed missions (most recent first):"]
+            summary_lines = [
+                "Format: JSON only. Schema: tool|finish|clarify.",
+                "Prior completed missions (most recent first):",
+            ]
             for entry in reversed(recent):
                 mid = entry.get("mission_id", "?")
                 status = entry.get("status", "unknown")
@@ -145,6 +176,25 @@ class UserSession:
             }
             self._completed_summaries.append(summary)
 
+    @staticmethod
+    def _validate_result(result: dict[str, Any]) -> dict[str, Any]:
+        """Return result with guaranteed keys; coerce bad types to safe defaults."""
+        validated: dict[str, Any] = {
+            "answer": "",
+            "tools_used": [],
+            "mission_report": [],
+            "run_id": None,
+            "state": {},
+        }
+        validated.update(result)
+        if not isinstance(validated["tools_used"], list):
+            validated["tools_used"] = []
+        if not isinstance(validated["mission_report"], list):
+            validated["mission_report"] = []
+        if not isinstance(validated["state"], dict):
+            validated["state"] = {}
+        return validated
+
     def run_once(
         self,
         user_input: str,
@@ -155,9 +205,16 @@ class UserSession:
         """Execute one mission string and update session state."""
         assert self._orchestrator is not None  # set by __post_init__
         prior_context = self._build_prior_context()
-        # Store user message before running so it's available as context on next turn.
-        self._conversation_history.append(AgentMessage(role="user", content=user_input))
-        result = self._orchestrator.run(user_input, prior_context=prior_context)
+        formatted_input = self._format_user_input(user_input)
+        # Store formatted input in history so prior_context on next turn is consistent.
+        self._conversation_history.append(AgentMessage(role="user", content=formatted_input))
+        try:
+            result = self._orchestrator.run(formatted_input, prior_context=prior_context)
+        except Exception as exc:  # noqa: BLE001
+            error_msg = f"Orchestrator error: {exc}"
+            self._conversation_history.append(AgentMessage(role="assistant", content=error_msg))
+            return {"answer": error_msg, "tools_used": [], "mission_report": [], "run_id": None, "state": {}}
+        result = self._validate_result(result)
 
         # Append the agent's answer to rolling history
         answer = str(result.get("answer", ""))
@@ -226,9 +283,13 @@ class UserSession:
 
     def run_loop(self) -> None:
         """Main conversation loop — reads from stdin, runs missions, prints answers."""
-        print("UserRun session started.")
-        print("Type your mission or 'quit' to exit.")
-        print("(Tip: ask the agent to 'use clear_context' to reset conversation history.)")
+        _SEP = "=" * 60
+        print(_SEP)
+        print("  LangGraph Agent Session")
+        print(_SEP)
+        print("  Commands: quit/q  exit   clear  reset context")
+        print(f"  Token budget: {self.token_budget // 1000}k")
+        print(_SEP)
         print()
         while True:
             try:
@@ -241,6 +302,10 @@ class UserSession:
             if user_input.lower() in {"quit", "exit", "q"}:
                 print("Session ended.")
                 break
+            if user_input.lower() == "clear":
+                self._minimize_context(full_clear=True)
+                print("Context cleared.")
+                continue
             print()
             result = self.run_once(user_input)
             answer = result.get("answer", "")

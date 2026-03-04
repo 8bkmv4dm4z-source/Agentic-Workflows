@@ -226,7 +226,7 @@ def _check_tool_presence(
     """
     lower = mission_text.lower()
     # Genuinely ambiguous keywords — always skip.
-    always_noisy = {"order", "stats"}
+    always_noisy = {"order", "stats", "count"}
     # Context-aware keywords: only skip when no explicit tool name appears.
     context_keywords = {"analysis", "analyze"}
 

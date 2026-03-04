@@ -183,6 +183,23 @@ _TOOL_KEYWORD_MAP: dict[str, list[str]] = {
     "previous": ["retrieve_run_context"],
     "context": ["retrieve_run_context"],
     "history": ["retrieve_run_context"],
+    # Natural language creation verbs
+    "create": ["write_file"],
+    "make": ["write_file"],
+    "generate": ["write_file"],
+    "produce": ["write_file"],
+    # Counting / measurement aliases
+    "count": ["math_stats"],
+    "tally": ["math_stats"],
+    "measure": ["math_stats"],
+    # Summarization alias
+    "brief": ["summarize_text"],
+    # Comparison alias
+    "contrast": ["compare_texts"],
+    # Classification alias
+    "label": ["classify_intent"],
+    # Extraction targets both regex and JSON
+    "extract": ["regex_matcher", "json_parser"],
 }
 
 
