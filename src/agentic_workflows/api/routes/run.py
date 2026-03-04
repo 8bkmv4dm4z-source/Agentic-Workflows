@@ -137,28 +137,30 @@ async def post_run(request: Request) -> EventSourceResponse:
                     "callbacks": orchestrator._active_callbacks,
                 }
 
-                last_state = dict(state)
+                # Stream graph execution, emitting SSE events for each node.
+                # NOTE: stream_mode="updates" yields dicts where annotated list
+                # fields (tool_history, mission_reports, etc.) are zeroed by
+                # _sequential_node to prevent operator.add doubling.  We only
+                # use the stream for SSE events, not state accumulation.
                 for update_dict in orchestrator._compiled.stream(
                     state, config=config, stream_mode="updates"
                 ):
                     # stream_mode="updates" yields {node_name: state_updates}
                     if not isinstance(update_dict, dict):
                         continue
-                    for node_name, chunk in update_dict.items():
-                        # Emit node SSE events (async send from sync thread)
+                    for node_name, _chunk in update_dict.items():
                         start_evt = make_node_start(node_name, run_id)
                         anyio.from_thread.run(send_stream.send, start_evt)
 
                         end_evt = make_node_end(node_name, run_id)
                         anyio.from_thread.run(send_stream.send, end_evt)
 
-                        # Track latest state from chunks
-                        if isinstance(chunk, dict):
-                            last_state.update(chunk)
-
-                # Finalize
-                last_state = ensure_state_defaults(last_state, system_prompt=orchestrator.system_prompt)
-                final_state = orchestrator._finalize(last_state)
+                # Retrieve the complete final state from the checkpoint saved
+                # by _finalize (which ran as a graph node during streaming).
+                # This avoids the annotated-list-field zeroing issue entirely.
+                saved = orchestrator.checkpoint_store.load_latest(run_id)
+                final_state = saved if saved is not None else state
+                final_state = ensure_state_defaults(final_state, system_prompt=orchestrator.system_prompt)
 
                 memo_entries = orchestrator.memo_store.list_entries(run_id=final_state["run_id"])
                 return {
