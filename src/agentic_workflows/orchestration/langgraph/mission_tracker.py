@@ -607,10 +607,22 @@ def next_incomplete_mission_requirements(state: dict[str, Any]) -> dict[str, Any
 
 
 def all_missions_completed(state: dict[str, Any]) -> bool:
-    """Whether every mission report status is completed."""
+    """Whether every mission report status is completed.
+
+    For conversational inputs that require no tools and no output files,
+    the agent may legitimately finish without producing any tool-call reports.
+    In that case we consider missions complete so the finish action is accepted.
+    """
     reports = state.get("mission_reports", [])
     if not reports:
-        return False
+        contracts = state.get("mission_contracts", [])
+        return bool(
+            contracts
+            and all(
+                not c.get("required_tools") and not c.get("required_files")
+                for c in contracts
+            )
+        )
     return all(str(report.get("status", "pending")) == "completed" for report in reports)
 
 

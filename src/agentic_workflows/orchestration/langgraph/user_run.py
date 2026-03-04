@@ -9,7 +9,6 @@ The session maintains rolling conversation history across runs, compresses
 context after each run, and resets fully when the agent calls clear_context.
 """
 
-import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -36,14 +35,6 @@ from agentic_workflows.orchestration.langgraph.state_schema import AgentMessage
 
 _MAX_TOOL_HISTORY_RETAINED = 20
 
-_BEHAVIOR_PREFIX: str = (
-    "Return exactly one JSON object per turn.\n"
-    "No XML tags, no markdown, and no prose outside JSON.\n"
-    "Use only these action schemas:\n"
-    '{"action":"tool","tool_name":"...","args":{...}}\n'
-    '{"action":"finish","answer":"..."}\n\n'
-)
-
 
 @dataclass
 class UserSession:
@@ -54,7 +45,6 @@ class UserSession:
     _orchestrator: LangGraphOrchestrator | None = field(default=None, init=False)
     _conversation_history: list[AgentMessage] = field(default_factory=list, init=False)
     _completed_summaries: list[dict[str, Any]] = field(default_factory=list, init=False)
-    _is_first_turn: bool = field(default=True, init=False)
 
     def __post_init__(self) -> None:
         self._orchestrator = LangGraphOrchestrator(
@@ -77,28 +67,18 @@ class UserSession:
         print(f"\033[36m\u2192 Planning  [{mission_n}/{mission_total}] \"{desc[:40]}\"  budget {kb}k left\033[0m")
 
     def _format_user_input(self, text: str) -> str:
-        """Prepare user text for the orchestrator.
+        """Pass user text to the orchestrator unchanged.
 
-        On the first turn (or after full clear), prepends _BEHAVIOR_PREFIX to
-        enforce the JSON output contract.  Detects structured input (contains a
-        'Task N:' pattern) and preserves it; wraps free-form text in a minimal
-        'Task 1:' frame so mission_parser creates a named mission step instead
-        of falling back to 'Primary mission'.
+        The mission_parser handles free-form text naturally.  JSON contract
+        enforcement is handled by the system prompt directives; embedding
+        JSON schema templates in the user message confuses JSON-mode models.
         """
-        is_structured = bool(
-            re.search(r"(?i)^(task\s*\d+\s*:|[\d]+[\)\.:\-]\s)", text, re.MULTILINE)
-        )
-        formatted = text if is_structured else f"Task 1: {text}"
-        if self._is_first_turn:
-            self._is_first_turn = False
-            return _BEHAVIOR_PREFIX + formatted
-        return formatted
+        return text
 
     def _minimize_context(self, *, full_clear: bool = False) -> None:
         """Compress accumulated context to keep token usage manageable."""
         if full_clear:
             self._conversation_history = []
-            self._is_first_turn = True  # reset so next turn gets the prefix again
         # Keep only the most recent tool history entries (already in summaries)
         # _completed_summaries persist across clears for reference
         # Trim conversation history to a sliding window
