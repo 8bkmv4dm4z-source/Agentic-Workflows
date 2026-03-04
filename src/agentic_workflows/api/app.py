@@ -15,7 +15,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from agentic_workflows.api.models import ErrorResponse
-from agentic_workflows.api.routes import health, tools
+from agentic_workflows.api.routes import health, run, tools
 from agentic_workflows.orchestration.langgraph.graph import LangGraphOrchestrator
 from agentic_workflows.storage.sqlite import SQLiteRunStore
 
@@ -49,6 +49,7 @@ app = FastAPI(title="Agentic Workflows", lifespan=lifespan)
 # ----- Routes -----
 app.include_router(health.router)
 app.include_router(tools.router)
+app.include_router(run.router)
 
 
 # ----- Error handlers -----
