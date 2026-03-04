@@ -12,10 +12,10 @@ Starting from a working single-agent LangGraph foundation (208 tests green, 4-no
 - Phase 1 (Foundation): Already complete — roadmap begins at Phase 2
 
 - [x] **Phase 1: Foundation** - LangGraph orchestration, multi-provider support, tool registry, RunState, 208 tests (COMPLETE)
-- [ ] **Phase 2: LangGraph Upgrade and Single-Agent Hardening** - Remove <1.0 pin, adopt ToolNode/tools_condition, add RunState reducers, wire observability and CI
+- [x] **Phase 2: LangGraph Upgrade and Single-Agent Hardening** - Remove <1.0 pin, adopt ToolNode/tools_condition, add RunState reducers, wire observability and CI (completed 2026-03-03)
 - [x] **Phase 3: Specialist Subgraph Architecture** - Build isolated ExecutorState/EvaluatorState TypedDicts and independently-compiled specialist StateGraphs (completed 2026-03-03)
 - [x] **Phase 4: Multi-Agent Integration and Model Routing** - Wire _route_to_specialist() to real compiled subgraphs, stabilize multi-mission result preservation, implement real model routing (completed 2026-03-03)
-- [ ] **Phase 5: Observability Layer and Architecture Snapshot** - Wire Langfuse CallbackHandler for automatic graph tracing, produce phase progression documentation
+- [ ] **Phase 5: Observability Layer and Architecture Snapshot** - Wire Langfuse CallbackHandler for automatic graph tracing, produce phase progression documentation (in-progress on p5-p6-implementing)
 - [ ] **Phase 6: Production Service Layer** - FastAPI HTTP service with POST /run, GET /run/{id}, and SSE streaming endpoint
 - [ ] **Phase 7: Production Persistence and CI** - AsyncPostgresSaver replacing SQLite, Dockerfile + docker-compose, GitHub Actions CI pipeline
 
@@ -47,9 +47,9 @@ Starting from a working single-agent LangGraph foundation (208 tests green, 4-no
 Plans:
 - [x] 02-01-PLAN.md — Upgrade langgraph version pin and verify 208 tests pass (LGUP-01)
 - [x] 02-02-PLAN.md — Add Annotated reducers to RunState list fields and message compaction (LGUP-03, LGUP-04)
-- [ ] 02-03-PLAN.md — Wire ToolNode + tools_condition for Anthropic provider path (LGUP-02)
-- [ ] 02-04-PLAN.md — Wire @observe() on run() and establish docs/ADR/ log (OBSV-02, LRNG-02)
-- [ ] 02-05-PLAN.md — Create GitHub Actions CI pipeline (success criterion #5)
+- [x] 02-03-PLAN.md — Wire ToolNode + tools_condition for Anthropic provider path (LGUP-02)
+- [x] 02-04-PLAN.md — Wire @observe() on run() and establish docs/ADR/ log (OBSV-02, LRNG-02)
+- [x] 02-05-PLAN.md — Create GitHub Actions CI pipeline (success criterion #5)
 
 ### Phase 3: Specialist Subgraph Architecture
 **Goal**: Executor and evaluator specialists exist as independently-compiled LangGraph StateGraphs with isolated state schemas — testable and invokable in isolation, before any routing is wired
@@ -64,8 +64,8 @@ Plans:
 **Plans**: 3 plans
 Plans:
 - [x] 03-01-PLAN.md — ExecutorState TypedDict + build_executor_subgraph() + unit tests (MAGT-01, MAGT-02)
-- [ ] 03-02-PLAN.md — EvaluatorState TypedDict + build_evaluator_subgraph() + unit tests (MAGT-03, MAGT-04)
-- [ ] 03-03-PLAN.md — State key isolation acceptance tests + WALKTHROUGH_PHASE3.md (LRNG-01)
+- [x] 03-02-PLAN.md — EvaluatorState TypedDict + build_evaluator_subgraph() + unit tests (MAGT-03, MAGT-04)
+- [x] 03-03-PLAN.md — State key isolation acceptance tests + WALKTHROUGH_PHASE3.md (LRNG-01)
 
 ### Phase 4: Multi-Agent Integration and Model Routing
 **Goal**: _route_to_specialist() in graph.py invokes real compiled specialist subgraphs via TaskHandoff and merges HandoffResult back into RunState; multi-mission runs preserve all results; model router makes real routing decisions
@@ -78,10 +78,10 @@ Plans:
   4. Subgraphs are compiled without checkpointer argument so parent graph propagates checkpointing — checkpoint replay after a two-mission run restores all mission reports correctly
 **Plans**: 4 plans
 Plans:
-- [ ] 04-01-PLAN.md — Cache compiled subgraphs in __init__ and wire _route_to_specialist() with exec_tool_history copy-back (MAGT-05)
-- [ ] 04-02-PLAN.md — Multi-mission integration tests: tool_history preservation + MissionAuditor chain_integrity + checkpoint replay (MAGT-06)
-- [ ] 04-03-PLAN.md — Wire ModelRouter in LangGraphOrchestrator __init__ and _generate_with_hard_timeout() (OBSV-03)
-- [ ] 04-04-PLAN.md — Gap closure: add _record_mission_tool_event() after exec_tool_history copy-back in _route_to_specialist(); fix 26 integration regressions (MAGT-05, MAGT-06)
+- [x] 04-01-PLAN.md — Cache compiled subgraphs in __init__ and wire _route_to_specialist() with exec_tool_history copy-back (MAGT-05)
+- [x] 04-02-PLAN.md — Multi-mission integration tests: tool_history preservation + MissionAuditor chain_integrity + checkpoint replay (MAGT-06)
+- [x] 04-03-PLAN.md — Wire ModelRouter in LangGraphOrchestrator __init__ and _generate_with_hard_timeout() (OBSV-03)
+- [x] 04-04-PLAN.md — Gap closure: add _record_mission_tool_event() after exec_tool_history copy-back in _route_to_specialist(); fix 26 integration regressions (MAGT-05, MAGT-06)
 
 ### Phase 5: Observability Layer and Architecture Snapshot
 **Goal**: Langfuse CallbackHandler is wired in graph invocation config for automatic node-level tracing; @observe() closes the open Phase 1 item on the provider path; a Before/After architecture snapshot documents the Phase 1 to Phase 4 progression
@@ -93,8 +93,8 @@ Plans:
   3. A docs/architecture/ directory contains a Phase 1-4 Before/After snapshot showing RunState schema evolution, graph topology changes, and specialist boundary introduction — readable as a standalone progression document
 **Plans**: 2 plans
 Plans:
-- [ ] 05-01-PLAN.md — Fix observability.py import, add get_langfuse_callback_handler(), wire callbacks into graph.py invoke calls, add @observe to OllamaChatProvider (OBSV-01)
-- [ ] 05-02-PLAN.md — Create docs/architecture/PHASE_PROGRESSION.md with Mermaid phase topology diagrams (LRNG-03)
+- [x] 05-01-PLAN.md — Fix observability.py import, add get_langfuse_callback_handler(), wire callbacks into graph.py invoke calls, add @observe to OllamaChatProvider (OBSV-01)
+- [x] 05-02-PLAN.md — Create docs/architecture/PHASE_PROGRESSION.md with Mermaid phase topology diagrams (LRNG-03)
 
 ### Phase 6: Production Service Layer
 **Goal**: The orchestration platform is accessible over HTTP — POST /run submits missions, GET /run/{id} retrieves results, GET /run/{id}/stream delivers step-transition events as Server-Sent Events; graph is compiled once at startup
@@ -105,7 +105,11 @@ Plans:
   2. GET /run/{run_id}/stream returns a text/event-stream response that emits one event per graph node transition while the run is in progress — a curl test confirms events arrive before the run completes
   3. The graph is compiled once during FastAPI lifespan startup (not per-request) — verified by a log line at startup and absence of compile calls in request handlers
   4. Concurrent POST /run requests execute without SQLite "database is locked" errors (tested with 3 concurrent requests)
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+- [ ] 06-01-PLAN.md — Foundation: Pydantic models, RunStore abstraction, FastAPI app skeleton with lifespan (PROD-01)
+- [ ] 06-02-PLAN.md — Route handlers: POST /run (SSE), GET /run/{id}, GET /run/{id}/stream + HTTP contract tests (PROD-01, PROD-02)
+- [ ] 06-03-PLAN.md — Convert user_run.py to API client, eval harness, end-to-end verification (PROD-01, PROD-02)
 
 ### Phase 7: Production Persistence and CI
 **Goal**: SQLite checkpointer is replaced by AsyncPostgresSaver for production; the full system (API + Postgres) starts with docker-compose up; GitHub Actions runs the complete quality gate on every push
@@ -126,9 +130,9 @@ Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation | Complete | Complete | 2026-03-02 |
-| 2. LangGraph Upgrade and Single-Agent Hardening | 4/5 | In Progress|  |
-| 3. Specialist Subgraph Architecture | 3/3 | Complete   | 2026-03-03 |
-| 4. Multi-Agent Integration and Model Routing | 6/6 | Complete   | 2026-03-03 |
-| 5. Observability Layer and Architecture Snapshot | 0/2 | Not started | - |
-| 6. Production Service Layer | 0/TBD | Not started | - |
+| 2. LangGraph Upgrade and Single-Agent Hardening | 5/5 | Complete | 2026-03-03 |
+| 3. Specialist Subgraph Architecture | 3/3 | Complete | 2026-03-03 |
+| 4. Multi-Agent Integration and Model Routing | 6/6 | Complete | 2026-03-03 |
+| 5. Observability Layer and Architecture Snapshot | 2/2 | In Progress | - |
+| 6. Production Service Layer | 0/3 | Not started | - |
 | 7. Production Persistence and CI | 0/TBD | Not started | - |
