@@ -1,13 +1,25 @@
 from __future__ import annotations
 
-"""Persistent conversational session entrypoint for LangGraph orchestration.
+"""DEPRECATED: Use ``python -m agentic_workflows.cli.user_run`` instead.
 
-Usage:
-    python -m agentic_workflows.orchestration.langgraph.user_run
+This module is retained for backward compatibility. The new CLI entrypoint
+connects to the FastAPI service via HTTP rather than calling the orchestrator
+directly.
 
+Original description:
+Persistent conversational session entrypoint for LangGraph orchestration.
 The session maintains rolling conversation history across runs, compresses
 context after each run, and resets fully when the agent calls clear_context.
 """
+
+import warnings
+
+warnings.warn(
+    "agentic_workflows.orchestration.langgraph.user_run has moved to "
+    "agentic_workflows.cli.user_run — use the new API client instead",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 import os
 import sys
@@ -23,7 +35,7 @@ if __package__ in {None, ""}:
         if p not in sys.path:
             sys.path.insert(0, p)
 
-from agentic_workflows.logger import get_logger
+from agentic_workflows.logger import get_logger, setup_dual_logging
 from agentic_workflows.orchestration.langgraph.langgraph_orchestrator import LangGraphOrchestrator
 from agentic_workflows.orchestration.langgraph.run_ui import (
     collect_retry_counts,
@@ -44,7 +56,7 @@ _CLARIFY_PREFIX = "__CLARIFY__:"
 class UserSession:
     """Stateful conversational session around LangGraphOrchestrator."""
 
-    max_steps: int = 80
+    max_steps: int = 20
     token_budget: int = 200_000
     _orchestrator: LangGraphOrchestrator | None = field(default=None, init=False)
     _conversation_history: list[AgentMessage] = field(default_factory=list, init=False)
@@ -286,6 +298,7 @@ class UserSession:
 
     def run_loop(self) -> None:
         """Main conversation loop — reads from stdin, runs missions, prints answers."""
+        setup_dual_logging()
         _SEP = "=" * 60
         print(_SEP)
         print("  LangGraph Agent Session")
