@@ -8,7 +8,7 @@ progress:
   total_phases: 7
   completed_phases: 5
   total_plans: 19
-  completed_plans: 18
+  completed_plans: 19
 ---
 
 # Project State
@@ -23,24 +23,24 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 ## Current Position
 
 Phase: 6 of 7 (Production Service Layer)
-Plan: 2 of 3 in current phase (06-02 DONE)
-Status: Phase 6 plan 02 complete — POST /run SSE streaming, GET /run/{id}, GET /run/{id}/stream, 8 HTTP contract tests.
-Last activity: 2026-03-04 — 06-02: Route handlers with SSE streaming, status retrieval, reconnection, 8 integration tests
+Plan: 3 of 3 in current phase (06-03 DONE, awaiting human-verify checkpoint)
+Status: Phase 6 plan 03 complete — CLI user_run as API client, eval harness with 3 scenarios, streaming bug fix.
+Last activity: 2026-03-05 — 06-03: API client user_run, eval harness, streaming state accumulation fix
 
-Progress: [█████████░] 73% (Phases 1-5 complete, Phase 6 plan 02/03 done)
+Progress: [██████████] 100% (Phases 1-6 complete, Phase 6 plan 03/03 done)
 
 ## Test Status
 
-- **533 tests pass** on `p5-p6-implementing` (8 new from 06-02)
+- **536 tests pass** on `p5-p6-implementing` (3 new eval from 06-03)
 - ruff check: clean
 - Branch: `p5-p6-implementing`
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 17 (across Phases 2-6)
+- Total plans completed: 18 (across Phases 2-6)
 - Average duration: 4 min
-- Total execution time: ~1 hour 3 min
+- Total execution time: ~1 hour 11 min
 
 **By Phase:**
 
@@ -50,7 +50,7 @@ Progress: [█████████░] 73% (Phases 1-5 complete, Phase 6 pla
 | 03-specialist-subgraph | 3 | 7 min | 2 min |
 | 04-multi-agent-integration | 6 | 30 min | 5 min |
 | 05-observability | 2 | ~10 min | 5 min |
-| 06-fastapi-service-layer | 2/3 | 8 min | 4 min |
+| 06-fastapi-service-layer | 3/3 | 16 min | 5 min |
 
 ## Accumulated Context
 
@@ -74,6 +74,9 @@ Recent decisions affecting current work:
 - [Phase 06-02]: Used _compiled.stream(stream_mode="updates") directly for real-time SSE (not wrapping run())
 - [Phase 06-02]: anyio memory object stream bridges sync graph thread to async SSE via anyio.from_thread.run
 - [Phase 06-02]: Test apps bypass lifespan (httpx ASGITransport does not trigger ASGI lifespan events)
+- [Phase 06-03]: CLI user_run talks to FastAPI via httpx, not orchestrator directly -- single source of truth
+- [Phase 06-03]: Final state retrieved from checkpoint_store.load_latest() instead of stream chunk accumulation -- avoids _sequential_node annotated list zeroing
+- [Phase 06-03]: Old user_run.py kept with deprecation warning for backward compatibility
 
 ### Pending Todos
 
@@ -88,6 +91,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-03-04
-Stopped at: Completed 06-02-PLAN.md (Route handlers + SSE streaming)
+Last session: 2026-03-05
+Stopped at: Completed 06-03-PLAN.md (API client + eval harness, awaiting human-verify checkpoint)
 Resume file: None
