@@ -5,83 +5,82 @@
 ## Languages
 
 **Primary:**
-- Python 3.12+ - All executable application, API, CLI, orchestration, storage, and test code in `pyproject.toml`, `src/agentic_workflows/`, and `tests/`.
+- Python 3.12+ - All application/runtime code lives under `src/agentic_workflows/`, with tests in `tests/` and the package contract in `pyproject.toml`.
 
 **Secondary:**
-- Markdown (version not applicable) - Directive and operational docs in `README.md`, `src/agentic_workflows/README.md`, `src/agentic_workflows/orchestration/langgraph/README.md`, and `src/agentic_workflows/directives/planner.md`.
-- YAML (version not applicable) - Automation/config files in `.github/workflows/ci.yml`, `.github/workflows/claude.yml`, and `.pre-commit-config.yaml`.
+- YAML (not versioned) - CI and automation config live in `.github/workflows/ci.yml`, `.github/workflows/claude.yml`, and `.pre-commit-config.yaml`.
+- Markdown (not versioned) - Operator docs and directives live in `README.md`, `src/agentic_workflows/README.md`, and `src/agentic_workflows/directives/*.md`.
 
 ## Runtime
 
 **Environment:**
-- CPython 3.12+ - Declared in `pyproject.toml` (`requires-python = ">=3.12"`) and pinned to Python 3.12 in `.github/workflows/ci.yml`.
-- ASGI server runtime via `uvicorn>=0.34` - API service entrypoint is `src/agentic_workflows/api/app.py`.
-- CLI runtime via `python -m ...` entrypoints - documented in `AGENTS.md` and `README.md`.
-- Browser/frontend runtime: Not detected.
+- CPython 3.12+ - Declared by `requires-python = ">=3.12"` in `pyproject.toml`.
+- ASGI + CLI runtime - `src/agentic_workflows/api/app.py` serves the HTTP API via `uvicorn`, while `src/agentic_workflows/orchestration/langgraph/run.py` and `src/agentic_workflows/cli/user_run.py` provide CLI entrypoints.
+- Optional local model runtime - `src/agentic_workflows/orchestration/langgraph/provider.py` supports local Ollama through `OLLAMA_BASE_URL` / `OLLAMA_HOST`, with `.env.example` defaulting to `http://localhost:11434/v1`.
 
 **Package Manager:**
-- `pip` with editable installs (version not pinned in repo) - used by `pip install -e ".[dev]"` in `AGENTS.md` and `.github/workflows/ci.yml`.
-- Build backend: `setuptools>=75.0` via `build-system` in `pyproject.toml`.
-- Lockfile: Not detected (`poetry.lock`, `uv.lock`, `Pipfile.lock`, `requirements*.txt` not present).
+- `pip` with `setuptools.build_meta` - Install flow is `pip install -e ".[dev]"` in `AGENTS.md`, and the build backend is declared in `pyproject.toml`.
+- Lockfile: Not detected (`uv.lock`, `poetry.lock`, `requirements*.txt`, and `package-lock.json` are absent).
 
 ## Frameworks
 
 **Core:**
-- `langgraph>=1.0.6,<2.0` - State-machine orchestration runtime in `pyproject.toml` and `src/agentic_workflows/orchestration/langgraph/graph.py`.
-- `langgraph-prebuilt>=1.0.6,<1.1.0` - `ToolNode` / `tools_condition` support in `pyproject.toml` and `src/agentic_workflows/orchestration/langgraph/graph.py`.
-- `fastapi>=0.115` - HTTP API layer in `pyproject.toml`, `src/agentic_workflows/api/app.py`, `src/agentic_workflows/api/routes/run.py`, `src/agentic_workflows/api/routes/health.py`, and `src/agentic_workflows/api/routes/tools.py`.
-- `pydantic>=2.12,<3.0` - Request/response/schema models in `pyproject.toml`, `src/agentic_workflows/api/models.py`, and `src/agentic_workflows/schemas.py`.
+- LangGraph 1.x - State-machine orchestration in `src/agentic_workflows/orchestration/langgraph/graph.py`, `src/agentic_workflows/orchestration/langgraph/specialist_executor.py`, and `src/agentic_workflows/orchestration/langgraph/specialist_evaluator.py`.
+- FastAPI 0.115+ - HTTP service layer in `src/agentic_workflows/api/app.py` and `src/agentic_workflows/api/routes/`.
+- Pydantic 2.12+ - Typed schemas and validation in `src/agentic_workflows/schemas.py` and `src/agentic_workflows/api/models.py`.
 
 **Testing:**
-- `pytest>=8.0` - Main test runner in `pyproject.toml` and `tests/`.
-- `pytest-asyncio>=0.24` - Async test support in `pyproject.toml`, `tests/integration/test_api_service.py`, and `tests/eval/test_eval_harness.py`.
-- `httpx-sse>=0.4` - SSE test/dev dependency declared in `pyproject.toml`; `httpx`-based streaming is exercised in `tests/integration/test_api_service.py` and `tests/eval/test_eval_harness.py`.
+- pytest 8+ - Main test runner configured in `pyproject.toml` and used across `tests/unit/`, `tests/integration/`, and `tests/eval/`.
+- pytest-asyncio 0.24+ - Async test support enabled by `asyncio_mode = "auto"` in `pyproject.toml`.
+- httpx ASGI transport - Integration/eval API tests exercise the FastAPI app in `tests/integration/test_api_service.py` and `tests/eval/conftest.py`.
 
 **Build/Dev:**
-- `ruff>=0.11` - Lint/format tool in `pyproject.toml`, `AGENTS.md`, and `.github/workflows/ci.yml`.
-- `mypy>=1.10` - Type checking in `pyproject.toml`, `AGENTS.md`, and `.github/workflows/ci.yml`.
-- `pre-commit>=4.0` - Local hook runner in `pyproject.toml` and `.pre-commit-config.yaml`.
+- setuptools 75+ - Packaging backend declared in `pyproject.toml`.
+- Ruff 0.11+ - Lint/format tooling configured in `pyproject.toml`, `.pre-commit-config.yaml`, and `.github/workflows/ci.yml`.
+- mypy 1.10+ - Static type checking configured in `pyproject.toml` and run in `.github/workflows/ci.yml`.
+- Uvicorn 0.34+ - ASGI server dependency used by `src/agentic_workflows/api/app.py`.
 
 ## Key Dependencies
 
 **Critical:**
-- `langgraph>=1.0.6,<2.0` - Core orchestration graph runtime in `src/agentic_workflows/orchestration/langgraph/graph.py`.
-- `fastapi>=0.115` - Production service layer in `src/agentic_workflows/api/app.py`.
-- `openai>=2.0` - Used for direct OpenAI calls and as the OpenAI-compatible client for Ollama in `src/agentic_workflows/orchestration/langgraph/provider.py` and `src/agentic_workflows/core/llm_provider.py`.
-- `groq>=1.0` - Alternate hosted LLM backend in `src/agentic_workflows/orchestration/langgraph/provider.py` and `src/agentic_workflows/core/llm_provider.py`.
-- `langchain-anthropic>=0.3.0` - Dependency is present in `pyproject.toml` for the Anthropic/ToolNode path, but no Anthropic provider adapter exists in `src/agentic_workflows/orchestration/langgraph/provider.py`.
+- `langgraph>=1.0.6,<2.0` - Core orchestration engine for the `plan -> execute -> policy -> finalize` graph in `src/agentic_workflows/orchestration/langgraph/graph.py`.
+- `langgraph-prebuilt>=1.0.6,<1.1.0` - Supplies `ToolNode` / `tools_condition` for the guarded Anthropic branch in `src/agentic_workflows/orchestration/langgraph/graph.py`.
+- `pydantic>=2.12,<3.0` - Schema validation for actions, API models, and typed state contracts in `src/agentic_workflows/schemas.py` and `src/agentic_workflows/api/models.py`.
+- `fastapi>=0.115` - HTTP API framework for `src/agentic_workflows/api/app.py`.
+- `openai>=2.0` - OpenAI provider client and Ollama OpenAI-compatible client in `src/agentic_workflows/orchestration/langgraph/provider.py`.
+- `groq>=1.0` - Groq provider client in `src/agentic_workflows/orchestration/langgraph/provider.py`.
+- `sse-starlette>=3.3` - Server-sent events for `/run` and `/run/{run_id}/stream` in `src/agentic_workflows/api/routes/run.py`.
+- `anyio>=4.0` - Thread offloading and in-memory stream bridging in `src/agentic_workflows/api/routes/run.py` and `src/agentic_workflows/storage/sqlite.py`.
 
 **Infrastructure:**
-- `anyio>=4.0` - Thread offloading and memory streams for API/SSE flow in `src/agentic_workflows/api/routes/run.py` and `src/agentic_workflows/storage/sqlite.py`.
-- `sse-starlette>=3.3` - SSE transport for `POST /run` in `src/agentic_workflows/api/routes/run.py`.
-- `httpx>=0.28` - API client and integration-test transport in `src/agentic_workflows/cli/user_run.py`, `tests/integration/test_api_service.py`, and `tests/eval/conftest.py`.
-- `structlog>=25.0` - Structured logging in `src/agentic_workflows/api/app.py` and `src/agentic_workflows/logger.py`.
-- `langfuse>=3.0` (optional extra) - Observability/tracing in `pyproject.toml` and `src/agentic_workflows/observability.py`.
+- `httpx>=0.28` - API client in `src/agentic_workflows/cli/user_run.py` and transport for API tests in `tests/integration/test_api_service.py`.
+- `structlog>=25.0` - Structured API logging in `src/agentic_workflows/api/app.py`.
+- `python-dotenv>=1.0` - Loads repo-root `.env` in `src/agentic_workflows/orchestration/langgraph/provider.py`.
+- `langfuse>=3.0` (optional extra) - Observability/tracing integration in `src/agentic_workflows/observability.py`.
 
 ## Configuration
 
 **Environment:**
-- Repo-level `.env` is loaded via `python-dotenv` in `src/agentic_workflows/orchestration/langgraph/provider.py` and `src/agentic_workflows/core/llm_provider.py`; example values live in `.env.example`.
-- Key runtime config is env-var driven: `P1_PROVIDER`, `P1_PROVIDER_CHAIN`, `OPENAI_API_KEY`, `GROQ_API_KEY`, `OLLAMA_BASE_URL`, `OPENAI_MODEL`, `GROQ_MODEL`, `OLLAMA_MODEL`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_HOST`, `API_HOST`, `API_PORT`, and `RUN_STORE_DB` in `.env.example`.
-- Security guardrails are also env-gated in `.env.example` and `src/agentic_workflows/tools/_security.py` (`P1_TOOL_SANDBOX_ROOT`, `P1_BASH_DENIED_PATTERNS`, `P1_BASH_ALLOWED_COMMANDS`, `P1_HTTP_ALLOWED_DOMAINS`, and size caps).
+- Repo-root `.env` is loaded by `load_dotenv()` in `src/agentic_workflows/orchestration/langgraph/provider.py`; the sample file is `.env.example`, and `.env` is gitignored in `.gitignore`.
+- Key runtime variables come from `.env.example` and code paths in `src/agentic_workflows/api/app.py`, `src/agentic_workflows/api/middleware/api_key.py`, and `src/agentic_workflows/tools/_security.py`: `P1_PROVIDER`, `P1_PROVIDER_CHAIN`, `OPENAI_API_KEY`, `GROQ_API_KEY`, `OLLAMA_BASE_URL`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_PUBLIC_KEY`, `API_HOST`, `API_PORT`, `RUN_STORE_DB`, `API_KEY`, `CORS_ORIGINS`, `P1_TOOL_SANDBOX_ROOT`, `P1_HTTP_ALLOWED_DOMAINS`, and `SSE_MAX_DURATION_SECONDS`.
 
 **Build:**
-- `pyproject.toml` - Package metadata, dependencies, build backend, Ruff, pytest, and mypy configuration.
-- `.github/workflows/ci.yml` - Quality gate for install, lint, typecheck, and tests.
-- `.pre-commit-config.yaml` - Local pre-commit hooks.
-- Container/deployment manifests: Not detected.
+- `pyproject.toml` - Package metadata, dependencies, Ruff, pytest, and mypy config.
+- `.pre-commit-config.yaml` - Local Ruff hooks.
+- `.github/workflows/ci.yml` - CI install/lint/typecheck/test pipeline.
+- `.github/workflows/claude.yml` - Comment-triggered Claude Code automation.
 
 ## Platform Requirements
 
 **Development:**
-- Any platform with Python 3.12+ and `pip`; no OS-specific code or container dependency is declared in `pyproject.toml`, `AGENTS.md`, or `README.md`.
-- Writable local filesystem is required for SQLite/runtime artifacts in `src/agentic_workflows/storage/sqlite.py`, `src/agentic_workflows/orchestration/langgraph/checkpoint_store.py`, `src/agentic_workflows/orchestration/langgraph/memo_store.py`, and `src/agentic_workflows/cli/user_run.py`.
-- Optional local Ollama server at `http://localhost:11434/v1` for local-model development, per `.env.example` and `src/agentic_workflows/orchestration/langgraph/provider.py`.
+- Any platform with Python 3.12+ and stdlib SQLite support; CI runs on `ubuntu-latest` in `.github/workflows/ci.yml`.
+- Optional local Ollama server at `http://localhost:11434/v1` when using `P1_PROVIDER=ollama` or `P1_PROVIDER=ollama_thinking`.
+- Container tooling: Not detected.
 
 **Production:**
-- Deployment target: self-hosted Python ASGI service via `uvicorn` in `src/agentic_workflows/api/app.py`; no cloud-vendor or container deployment config is checked in.
-- Persistence expectation: local SQLite files (`.tmp/run_store.db`, `.tmp/langgraph_checkpoints.db`, `.tmp/memo_store.db`) unless the code is extended with another backend.
-- Version requirements: Python 3.12+; no separate runtime manager file (`.python-version`, `runtime.txt`) is detected.
+- ASGI deployment via `uvicorn` serving `src/agentic_workflows/api/app.py`.
+- Default persistence is local SQLite files: `RUN_STORE_DB` (`.tmp/run_store.db`), `src/agentic_workflows/orchestration/langgraph/checkpoint_store.py` (`.tmp/langgraph_checkpoints.db`), and `src/agentic_workflows/orchestration/langgraph/memo_store.py` (`.tmp/memo_store.db`).
+- Managed hosting target, container image, or IaC stack: Not detected.
 
 ---
 

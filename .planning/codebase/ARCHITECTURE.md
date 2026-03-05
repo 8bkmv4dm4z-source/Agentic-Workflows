@@ -4,188 +4,248 @@
 
 ## Pattern Overview
 
-**Overall:** Layered Python application with a stateful LangGraph orchestration core, exposed through CLI and FastAPI service entry points.
+**Overall:** Layered Python monolith with a FastAPI service shell around a
+LangGraph orchestration core and a deterministic tool layer.
 
 **Key Characteristics:**
-- Active runtime is a typed state-graph orchestrator in `src/agentic_workflows/orchestration/langgraph/graph.py`.
-- Deterministic tool execution is isolated under `src/agentic_workflows/tools/`, with no LLM calls in that layer.
-- Runtime state and artifacts are persisted locally through SQLite-backed stores in `src/agentic_workflows/orchestration/langgraph/checkpoint_store.py`, `src/agentic_workflows/orchestration/langgraph/memo_store.py`, and `src/agentic_workflows/storage/sqlite.py`.
-- The repo still carries a legacy pre-LangGraph compatibility path in `src/agentic_workflows/core/`.
-- Planning and specialist behavior are documented as markdown directives in `src/agentic_workflows/directives/`, but prompt assembly currently happens in code.
+- Current production path is the FastAPI app in `src/agentic_workflows/api/app.py`
+  backed by `LangGraphOrchestrator` in
+  `src/agentic_workflows/orchestration/langgraph/graph.py`.
+- Tool execution is isolated in `src/agentic_workflows/tools/` and remains
+  deterministic by design; LLM calls are routed through
+  `src/agentic_workflows/orchestration/langgraph/provider.py`.
+- Runtime state is explicit and typed through `RunState` in
+  `src/agentic_workflows/orchestration/langgraph/state_schema.py`, then
+  persisted into SQLite-backed stores.
+- The same orchestration core is exposed through multiple interfaces:
+  FastAPI/SSE in `src/agentic_workflows/api/`, API-backed CLI in
+  `src/agentic_workflows/cli/user_run.py`, and direct demo/audit CLIs in
+  `src/agentic_workflows/orchestration/langgraph/run.py` and
+  `src/agentic_workflows/orchestration/langgraph/run_audit.py`.
+- `src/agentic_workflows/core/` still exists as a Phase 0 baseline and
+  comparison path, but `src/agentic_workflows/README.md` marks the
+  LangGraph runtime as the active production path.
 
 ## Layers
 
 **Interface Layer:**
-- Purpose: Accept user input, start runs, stream progress, and render results.
-- Contains: FastAPI app and routes in `src/agentic_workflows/api/app.py` and `src/agentic_workflows/api/routes/*.py`, API client in `src/agentic_workflows/cli/user_run.py`, direct demo CLIs in `src/agentic_workflows/orchestration/langgraph/run.py`, `src/agentic_workflows/orchestration/langgraph/run_audit.py`, and `src/agentic_workflows/core/main.py`.
-- Depends on: Orchestration layer, API models, storage layer.
-- Used by: HTTP clients, terminal users, and local demo scripts.
+- Purpose: Accept user input, validate requests, stream progress, and expose
+  operational entry points.
+- Contains: FastAPI app, HTTP routes, Pydantic API models, middleware, SSE
+  event builders, and CLI frontends in `src/agentic_workflows/api/` and
+  `src/agentic_workflows/cli/`.
+- Depends on: Orchestration and persistence layers.
+- Used by: Human operators, API clients, and terminal sessions.
 
 **Orchestration Layer:**
-- Purpose: Convert natural-language input into mission plans, tool actions, retries, audits, and final answers.
-- Contains: `LangGraphOrchestrator` and graph node logic in `src/agentic_workflows/orchestration/langgraph/graph.py`, mission parsing in `src/agentic_workflows/orchestration/langgraph/mission_parser.py`, routing in `src/agentic_workflows/orchestration/langgraph/model_router.py`, content/action validation helpers, reviewer logic, and checkpoint/memo coordination modules.
-- Depends on: Provider adapters, tool registry, typed state schema, persistence helpers, directives metadata.
-- Used by: API routes, CLI/demo entry points.
-
-**Specialist Subgraph Layer:**
-- Purpose: Isolate executor and evaluator responsibilities behind explicit handoff contracts.
-- Contains: Handoff schemas in `src/agentic_workflows/orchestration/langgraph/handoff.py`, executor subgraph in `src/agentic_workflows/orchestration/langgraph/specialist_executor.py`, evaluator subgraph in `src/agentic_workflows/orchestration/langgraph/specialist_evaluator.py`, and directive/tool-scope metadata in `src/agentic_workflows/orchestration/langgraph/directives.py`.
-- Depends on: Orchestration layer, tool registry, mission auditor.
-- Used by: `LangGraphOrchestrator._route_to_specialist()` in `src/agentic_workflows/orchestration/langgraph/graph.py`.
+- Purpose: Turn user intent into a controlled execution loop with planning,
+  mission parsing, specialist routing, memo policy checks, and audit.
+- Contains: `src/agentic_workflows/orchestration/langgraph/graph.py`,
+  `state_schema.py`, `mission_parser.py`, `mission_auditor.py`,
+  `model_router.py`, `policy.py`, `provider.py`, `reviewer.py`, and specialist
+  helpers such as `specialist_executor.py` and `specialist_evaluator.py`.
+- Depends on: Tool layer, directive contracts, observability, and SQLite stores.
+- Used by: FastAPI routes, direct CLI runners, and tests.
 
 **Execution Layer:**
-- Purpose: Perform deterministic work against files, text, shell, HTTP, SQL, and utility tasks.
-- Contains: Base tool contract in `src/agentic_workflows/tools/base.py`, concrete tools in `src/agentic_workflows/tools/*.py`, and output validation in `src/agentic_workflows/tools/output_schemas.py`.
-- Depends on: Local Python/runtime libraries only; no provider abstraction is used here.
-- Used by: Tool registry in `src/agentic_workflows/orchestration/langgraph/tools_registry.py`, legacy `src/agentic_workflows/core/orchestrator.py`.
+- Purpose: Perform concrete work without model calls.
+- Contains: `Tool` implementations in `src/agentic_workflows/tools/`, anchored
+  by `src/agentic_workflows/tools/base.py` and assembled through
+  `src/agentic_workflows/orchestration/langgraph/tools_registry.py`.
+- Depends on: Standard library plus targeted infrastructure helpers such as file
+  I/O, shell execution, HTTP, and data parsing.
+- Used by: The orchestrator execute node and specialist subgraphs.
 
-**Persistence and Runtime State Layer:**
-- Purpose: Keep run metadata, memoized values, and checkpointed graph state durable across requests and sessions.
-- Contains: Run store protocol in `src/agentic_workflows/storage/protocol.py`, SQLite run store in `src/agentic_workflows/storage/sqlite.py`, checkpoint store in `src/agentic_workflows/orchestration/langgraph/checkpoint_store.py`, memo store in `src/agentic_workflows/orchestration/langgraph/memo_store.py`, and typed run state in `src/agentic_workflows/orchestration/langgraph/state_schema.py`.
-- Depends on: SQLite, JSON serialization, AnyIO thread offloading for async-safe access.
-- Used by: API layer, orchestration layer, CLI session persistence in `src/agentic_workflows/cli/user_run.py`.
+**Persistence Layer:**
+- Purpose: Persist long-lived execution data and provide retrieval paths for
+  status APIs and reruns.
+- Contains: Run storage in `src/agentic_workflows/storage/protocol.py` and
+  `src/agentic_workflows/storage/sqlite.py`, plus memo/checkpoint stores in
+  `src/agentic_workflows/orchestration/langgraph/memo_store.py` and
+  `src/agentic_workflows/orchestration/langgraph/checkpoint_store.py`.
+- Depends on: SQLite and `anyio.to_thread.run_sync` for async-safe access.
+- Used by: API routes, orchestration finalization, memo policy, and audit tools.
 
-**Legacy Compatibility Layer:**
-- Purpose: Preserve the original single-agent loop for comparison, walkthroughs, and regression context.
-- Contains: `src/agentic_workflows/core/orchestrator.py`, `src/agentic_workflows/core/llm_provider.py`, `src/agentic_workflows/core/agent_state.py`, and `src/agentic_workflows/core/main.py`.
-- Depends on: Tool layer and legacy schemas in `src/agentic_workflows/schemas.py`.
-- Used by: `src/agentic_workflows/core/main.py`; not the active production service path.
+**Specification Layer:**
+- Purpose: Hold behavior contracts and shared schemas that constrain the runtime.
+- Contains: Directive documents in `src/agentic_workflows/directives/`,
+  response/request models in `src/agentic_workflows/api/models.py`, and shared
+  schema helpers in `src/agentic_workflows/schemas.py`.
+- Depends on: Minimal shared types only.
+- Used by: Runtime prompt construction, API validation, design review, and tests.
+
+**Legacy Baseline Layer:**
+- Purpose: Preserve the earlier single-agent loop for comparison and regression
+  reference.
+- Contains: `src/agentic_workflows/core/orchestrator.py`,
+  `src/agentic_workflows/core/llm_provider.py`, and
+  `src/agentic_workflows/core/main.py`.
+- Depends on: Tools and older schema/error modules.
+- Used by: Legacy demo entry point; not the primary production path.
 
 ## Data Flow
 
-**HTTP/SSE Run:**
+**HTTP Run Request (current production path):**
 
-1. A client calls `POST /run` in `src/agentic_workflows/api/routes/run.py`.
-2. The FastAPI lifespan in `src/agentic_workflows/api/app.py` initializes one `LangGraphOrchestrator` and one `SQLiteRunStore`.
-3. The route builds initial run state from `RunRequest`, merges any `prior_context`, and persists a `running` record through `src/agentic_workflows/storage/sqlite.py`.
-4. Mission parsing in `src/agentic_workflows/orchestration/langgraph/mission_parser.py` produces `StructuredPlan` plus per-mission contracts.
-5. The compiled graph in `src/agentic_workflows/orchestration/langgraph/graph.py` executes the loop `plan -> execute -> policy -> plan`, with terminal routing to `finalize`.
-6. The execute step routes work through specialist handoffs; the executor subgraph dispatches registered tools from `src/agentic_workflows/orchestration/langgraph/tools_registry.py`.
-7. The finalize step writes checkpoints, derives snapshots, runs deterministic audit logic, and prepares the final result payload.
-8. The API route streams node lifecycle events via helpers in `src/agentic_workflows/api/sse.py`, stores the completed result, and makes it retrievable through `GET /run/{run_id}`.
+1. `uvicorn` loads `src/agentic_workflows/api/app.py`, whose lifespan handler
+   creates one `LangGraphOrchestrator` and one `SQLiteRunStore`.
+2. `POST /run` in `src/agentic_workflows/api/routes/run.py` validates the body
+   with `RunRequest`, allocates a public `run_id`, persists the initial run row,
+   and opens an SSE stream.
+3. The route builds `RunState` via `new_run_state()` and
+   `ensure_state_defaults()` from
+   `src/agentic_workflows/orchestration/langgraph/state_schema.py`, then parses
+   missions through `parse_missions()` in `mission_parser.py`.
+4. `LangGraphOrchestrator._compiled.stream(...)` runs the graph. The standard
+   path loops `plan -> execute -> policy -> plan` until `finalize`; the
+   Anthropic-specific path can route `plan -> tools -> plan` through LangGraph
+   `ToolNode`.
+5. The plan node calls a `ChatProvider`; the execute node normalizes tool args,
+   enforces specialist scope, runs one `Tool`, and records mission/tool history;
+   the policy node may require `memoize`; the finalize node audits and saves the
+   terminal checkpoint.
+6. `src/agentic_workflows/api/routes/run.py` reloads the final checkpoint,
+   updates `SQLiteRunStore`, and emits `node_start`, `node_end`, and
+   `run_complete` SSE events to the client.
 
-**CLI Session Flow:**
+**CLI Conversation (API-backed):**
 
-1. A user starts `python -m agentic_workflows.cli.user_run`.
-2. `src/agentic_workflows/cli/user_run.py` checks `GET /health`, auto-starts `uvicorn` if needed, and loads prior chat history from `user_runs/context.json`.
-3. Each prompt is posted to `POST /run`, then SSE events are rendered in the terminal.
-4. On completion, the CLI appends the user/assistant turns back into `user_runs/context.json`.
-
-**Direct Demo Flow:**
-
-1. A user runs `python -m agentic_workflows.orchestration.langgraph.run`.
-2. The script constructs `LangGraphOrchestrator`, invokes `.run()`, and prints audit/review panels from `src/agentic_workflows/orchestration/langgraph/run_ui.py`.
-3. This bypasses FastAPI but still uses the same graph, state schema, memo store, and checkpoint store.
+1. `src/agentic_workflows/cli/user_run.py` checks `GET /health`, optionally
+   spawns `uvicorn`, and posts user text to `POST /run`.
+2. SSE events are rendered in the terminal, and condensed prior turns are stored
+   in `user_runs/context.json` for the next request.
 
 **State Management:**
-- Primary in-flight state is the `RunState` TypedDict in `src/agentic_workflows/orchestration/langgraph/state_schema.py`.
-- Durable execution state is persisted per node in `src/agentic_workflows/orchestration/langgraph/checkpoint_store.py`.
-- Memo-before-write enforcement uses `src/agentic_workflows/orchestration/langgraph/policy.py` with persisted values in `src/agentic_workflows/orchestration/langgraph/memo_store.py`.
-- Service-level run records are stored in `src/agentic_workflows/storage/sqlite.py`.
-- CLI conversation continuity is file-based in `user_runs/context.json`.
+- Primary in-memory execution state is `RunState`.
+- Durable orchestration state is split across `.tmp/langgraph_checkpoints.db`,
+  `.tmp/memo_store.db`, and `.tmp/run_store.db`.
+- Active reconnectable SSE streams live in `app.state.active_streams` in
+  `src/agentic_workflows/api/app.py`.
+- Shared plan snapshots are written to `Shared_plan.md`.
 
 ## Key Abstractions
 
 **LangGraphOrchestrator:**
-- Purpose: Central application service that compiles and runs the LangGraph workflow.
-- Examples: `src/agentic_workflows/orchestration/langgraph/graph.py`, re-exported by `src/agentic_workflows/orchestration/langgraph/langgraph_orchestrator.py`.
-- Pattern: Stateful orchestrator/facade around a compiled `StateGraph`.
+- Purpose: Compile the runtime graph and coordinate planning, execution, policy,
+  specialist routing, and final audit.
+- Examples: `src/agentic_workflows/orchestration/langgraph/graph.py`,
+  `src/agentic_workflows/orchestration/langgraph/langgraph_orchestrator.py`.
+- Pattern: Orchestration facade over a LangGraph `StateGraph`.
 
 **RunState:**
-- Purpose: Canonical typed state shared across graph nodes and persisted checkpoints.
-- Examples: `RunState`, `RunResult`, `MissionReport`, and `AgentMessage` in `src/agentic_workflows/orchestration/langgraph/state_schema.py`.
-- Pattern: TypedDict-based workflow state contract with reducer-annotated list fields.
-
-**StructuredPlan:**
-- Purpose: Structured decomposition of user input into ordered missions and dependencies.
-- Examples: `StructuredPlan` and `MissionStep` in `src/agentic_workflows/orchestration/langgraph/mission_parser.py`.
-- Pattern: Parser-produced domain model with backward-compatible flat mission list.
-
-**ChatProvider and ModelRouter:**
-- Purpose: Hide vendor-specific LLM clients behind a single `generate(messages)` contract and choose provider tier by task type.
-- Examples: `ChatProvider` and provider implementations in `src/agentic_workflows/orchestration/langgraph/provider.py`, `ModelRouter` in `src/agentic_workflows/orchestration/langgraph/model_router.py`.
-- Pattern: Protocol plus adapter/router abstraction.
+- Purpose: Canonical typed state for a run, including messages, mission reports,
+  retry counters, pending actions, and audit data.
+- Examples: `src/agentic_workflows/orchestration/langgraph/state_schema.py`.
+- Pattern: `TypedDict` state contract with default-repair helpers.
 
 **Tool:**
-- Purpose: Stable deterministic execution contract for all callable tools.
-- Examples: `Tool` in `src/agentic_workflows/tools/base.py`, registry assembly in `src/agentic_workflows/orchestration/langgraph/tools_registry.py`, concrete implementations like `src/agentic_workflows/tools/read_file.py` and `src/agentic_workflows/tools/query_sql.py`.
-- Pattern: Simple command object interface with registry lookup by name.
+- Purpose: Deterministic execution unit with a stable `execute(args)` contract.
+- Examples: `src/agentic_workflows/tools/base.py`,
+  `src/agentic_workflows/tools/write_file.py`,
+  `src/agentic_workflows/tools/run_bash.py`.
+- Pattern: Registry-backed command objects.
+
+**ChatProvider / ModelRouter:**
+- Purpose: Decouple orchestration from vendor-specific model APIs and choose
+  strong vs fast providers when both exist.
+- Examples: `src/agentic_workflows/orchestration/langgraph/provider.py`,
+  `src/agentic_workflows/orchestration/langgraph/model_router.py`.
+- Pattern: Protocol + adapter + routing facade.
+
+**StructuredPlan:**
+- Purpose: Represent parsed mission hierarchies before they are flattened into
+  execution contracts.
+- Examples: `src/agentic_workflows/orchestration/langgraph/mission_parser.py`.
+- Pattern: Structured planning model with compatibility flattening.
 
 **RunStore:**
-- Purpose: Abstract persistence contract for run metadata independent of backend.
-- Examples: `RunStore` in `src/agentic_workflows/storage/protocol.py`, `SQLiteRunStore` in `src/agentic_workflows/storage/sqlite.py`.
-- Pattern: Protocol-backed repository abstraction.
-
-**DirectiveConfig:**
-- Purpose: Versioned role metadata for supervisor, executor, and evaluator responsibilities.
-- Examples: `DirectiveConfig` and `DIRECTIVE_BY_SPECIALIST` in `src/agentic_workflows/orchestration/langgraph/directives.py`, markdown sources in `src/agentic_workflows/directives/*.md`.
-- Pattern: Configuration object linked to checked-in markdown contracts.
+- Purpose: Abstract persistence for API-visible run metadata and results.
+- Examples: `src/agentic_workflows/storage/protocol.py`,
+  `src/agentic_workflows/storage/sqlite.py`.
+- Pattern: `Protocol` with SQLite implementation.
 
 ## Entry Points
 
 **FastAPI Service:**
 - Location: `src/agentic_workflows/api/app.py`
-- Triggers: `uvicorn`, direct module execution, or the CLI auto-start path.
-- Responsibilities: Create app state, compile orchestrator once, register routes, return structured API errors.
+- Triggers: `uvicorn` startup or import of `agentic_workflows.api.app:app`
+- Responsibilities: Construct app state, register middleware/routes, and host
+  the HTTP/SSE interface.
 
-**Streaming Run Endpoint:**
-- Location: `src/agentic_workflows/api/routes/run.py`
-- Triggers: `POST /run`
-- Responsibilities: Persist run start, execute the graph in a worker thread, stream SSE events, and store final results.
-
-**Interactive API Client:**
+**API-backed CLI:**
 - Location: `src/agentic_workflows/cli/user_run.py`
 - Triggers: `python -m agentic_workflows.cli.user_run`
-- Responsibilities: Ensure the service is live, post user turns, render SSE output, persist local context.
+- Responsibilities: Ensure service availability, stream SSE events, and persist
+  local conversation context.
 
-**Direct Graph Demo:**
+**Direct LangGraph Demo CLI:**
 - Location: `src/agentic_workflows/orchestration/langgraph/run.py`
 - Triggers: `python -m agentic_workflows.orchestration.langgraph.run`
-- Responsibilities: Execute the orchestrator without HTTP and print review/audit panels.
+- Responsibilities: Run the orchestrator directly, print audit panels, and
+  support reviewer-driven rerun flows.
 
-**Audit Demo:**
+**Run Audit CLI:**
 - Location: `src/agentic_workflows/orchestration/langgraph/run_audit.py`
 - Triggers: `python -m agentic_workflows.orchestration.langgraph.run_audit`
-- Responsibilities: Audit-oriented CLI workflow. Concrete runtime behavior was not inspected in this pass.
+- Responsibilities: Read checkpoint and memo stores and export run summaries.
 
-**Legacy Demo:**
+**Legacy Phase 0 Demo:**
 - Location: `src/agentic_workflows/core/main.py`
-- Triggers: Direct script execution or import-time demo usage.
-- Responsibilities: Exercise the old `core/` orchestrator loop against a hardcoded multi-task prompt.
+- Triggers: Direct module execution or developer comparison workflow
+- Responsibilities: Exercise the older single-agent loop in
+  `src/agentic_workflows/core/orchestrator.py`.
 
 ## Error Handling
 
-**Strategy:** Fail closed inside the orchestration loop, persist checkpoints for post-mortem inspection, and expose structured API errors at the service boundary.
+**Strategy:** Validate aggressively at the boundaries, retry recoverable planner
+errors inside the graph, and persist checkpoints/results so failures are
+inspectable after the fact.
 
 **Patterns:**
-- Planner invalid JSON, empty outputs, provider timeouts, and premature finish attempts are retried or downgraded to deterministic fallback behavior inside `src/agentic_workflows/orchestration/langgraph/graph.py`.
-- Memoization policy violations are enforced after execution by `src/agentic_workflows/orchestration/langgraph/policy.py` before the graph is allowed to continue.
-- Tool-level failures are returned as result payloads and recorded in run history rather than hidden.
-- API validation and unexpected server errors are translated to `ErrorResponse` in `src/agentic_workflows/api/app.py`.
-- SQLite-backed checkpoints in `src/agentic_workflows/orchestration/langgraph/checkpoint_store.py` and run records in `src/agentic_workflows/storage/sqlite.py` preserve failure context.
+- FastAPI returns structured `ErrorResponse` payloads from
+  `src/agentic_workflows/api/models.py` for `401`, `403`, `404`, `413`, `422`,
+  and `500` paths.
+- `src/agentic_workflows/orchestration/langgraph/provider.py` wraps vendor calls
+  with timeout detection and retry/backoff behavior.
+- `src/agentic_workflows/orchestration/langgraph/graph.py` tracks invalid JSON,
+  duplicate tools, content validation failures, finish rejections, and memo
+  policy retries inside `RunState["retry_counts"]`.
+- Finalization always runs deterministic audit logic from
+  `src/agentic_workflows/orchestration/langgraph/mission_auditor.py` before the
+  terminal checkpoint is saved.
 
 ## Cross-Cutting Concerns
 
 **Logging:**
-- Standard logging is centralized in `src/agentic_workflows/logger.py`.
-- The project writes both verbose and admin-filtered logs into `.tmp/` through `setup_dual_logging()`.
-- API/service logs additionally use `structlog` in `src/agentic_workflows/api/app.py` and `src/agentic_workflows/api/routes/run.py`.
+- API requests use `structlog` plus request correlation in
+  `src/agentic_workflows/api/middleware/request_id.py`.
+- Direct CLI/orchestrator flows use `src/agentic_workflows/logger.py`, which can
+  emit both verbose and admin-filtered logs into `.tmp/`.
 
 **Validation:**
-- Request and response schemas are defined with Pydantic v2 in `src/agentic_workflows/api/models.py`.
-- Planner output and tool output validation are enforced in `src/agentic_workflows/orchestration/langgraph/graph.py` and `src/agentic_workflows/tools/output_schemas.py`.
-- State-shape repair and defaulting are handled in `src/agentic_workflows/orchestration/langgraph/state_schema.py`.
+- HTTP inputs and outputs are typed with Pydantic v2 models in
+  `src/agentic_workflows/api/models.py`.
+- Planner actions are normalized and validated in
+  `src/agentic_workflows/orchestration/langgraph/graph.py`, and tool outputs can
+  be checked with `src/agentic_workflows/tools/output_schemas.py`.
 
 **Authentication:**
-- Not detected.
+- Shared API-key auth is implemented by
+  `src/agentic_workflows/api/middleware/api_key.py`.
+- SSE reconnects use HMAC stream tokens from
+  `src/agentic_workflows/api/stream_token.py`.
+- Per-user authorization or role-based access control: Not detected.
 
 **Observability:**
-- Optional Langfuse integration is wrapped in `src/agentic_workflows/observability.py`.
-- The runtime degrades to no-op instrumentation when Langfuse is absent or unconfigured.
+- Optional Langfuse hooks live in `src/agentic_workflows/observability.py` and
+  are attached by the API and direct orchestrator runs when configured.
 
 **Configuration:**
-- Runtime selection and provider credentials are environment-driven via `.env` and `.env.example`; actual secret values were not inspected.
-- Package/test/tooling configuration lives in `pyproject.toml`, `.pre-commit-config.yaml`, and `.github/workflows/ci.yml`.
+- Runtime configuration is environment-driven through `.env` and environment
+  variables consumed in `src/agentic_workflows/orchestration/langgraph/provider.py`
+  and `src/agentic_workflows/api/app.py`.
+
+---
 
 *Architecture analysis: 2026-03-05*
 *Update when major patterns change*

@@ -4,147 +4,145 @@
 
 ## Tech Debt
 
-**Monolithic LangGraph orchestrator:**
-- Issue: `src/agentic_workflows/orchestration/langgraph/graph.py` is a 2,682-line integration module that mixes prompt construction, graph wiring, retry policy, checkpointing, mission tracking, audit, and report/file side effects.
-- Why: Phase-by-phase delivery kept new behavior in the central orchestrator to preserve momentum and compatibility.
-- Impact: Small edits can regress unrelated runtime paths, and ownership boundaries inside the orchestrator are hard to reason about or test in isolation.
-- Fix approach: Split node handlers, persistence/reporting helpers, prompt builders, and recovery logic into smaller modules with narrower contracts and targeted tests.
+**LangGraph orchestrator monolith:**
+- Files: `src/agentic_workflows/orchestration/langgraph/graph.py`
+- Issue: `LangGraphOrchestrator` is a 2682-line module that still mixes prompt construction, planner retries, mission attribution, specialist routing, memo policy, checkpointing, and API-facing artifact writes.
+- Why: Phase work was added in place to keep graph behavior co-located while features were landing quickly.
+- Impact: Small changes have a wide regression surface, reasoning about failures is slow, and framework upgrades become riskier because business logic and LangGraph glue are tightly coupled.
+- Fix approach: Split the module into smaller units by responsibility and keep `graph.py` as thin graph-node wiring plus orchestration composition.
 
-**Global run artifact written outside the tool pipeline:**
-- Issue: `_write_shared_plan()` writes a root-level `Shared_plan.md` directly instead of going through the deterministic tool layer or a run-scoped artifact location.
-- Why: It provides a human-readable shared plan artifact with backward compatibility for existing workflows.
-- Impact: Concurrent runs overwrite the same file, and the side effect bypasses the memo-before-write discipline used elsewhere.
-- Fix approach: Write per-run artifacts under `.tmp/` or `user_runs/`, or route the write through an explicit artifact interface with run-scoped names.
-
-**Configuration side effects at import time:**
-- Issue: `src/agentic_workflows/orchestration/langgraph/provider.py` loads the repo `.env` during module import.
-- Why: It simplifies local CLI startup and provider bootstrapping.
-- Impact: Importing the module has global process effects, which makes embedding the package in larger services and testing multiple config profiles in one process harder.
-- Fix approach: Move environment loading to entrypoints like `src/agentic_workflows/api/app.py` and `src/agentic_workflows/cli/user_run.py`, then pass validated settings objects into providers.
+**Shared plan artifact still writes globally in service mode:**
+- Files: `src/agentic_workflows/orchestration/langgraph/graph.py`, `Shared_plan.md`
+- Issue: `_write_shared_plan()` writes a single repo-root `Shared_plan.md` on run start and finalize, outside the tool/policy pipeline and without per-run isolation.
+- Why: The artifact started as a useful local debug/demo output and was kept during the API transition.
+- Impact: Concurrent API runs overwrite each other, user task structure leaks across runs, and service requests still mutate a shared local file as a side effect.
+- Fix approach: Disable shared-plan writes for API runs by default, or write run-scoped artifacts under a configured artifact directory keyed by `run_id`.
 
 ## Known Bugs
 
-**`GET /tools` omits real tool descriptions:**
-- Symptoms: `/tools` can return empty or generic descriptions even though tools define a `description` attribute.
-- Trigger: Calling `GET /tools`.
-- Workaround: Inspect `src/agentic_workflows/orchestration/langgraph/tools_registry.py` or the individual tool modules directly.
-- Root cause: `src/agentic_workflows/api/routes/tools.py` reads `tool.__doc__` instead of `tool.description`, while `src/agentic_workflows/tools/base.py` defines the real metadata field.
+**CLI client fails against authenticated API deployments:**
+- Files: `src/agentic_workflows/cli/user_run.py`, `src/agentic_workflows/api/middleware/api_key.py`
+- Symptoms: `python -m agentic_workflows.cli.user_run` can pass the `/health` check but `POST /run` fails with `401 Unauthorized` when `API_KEY` is configured.
+- Trigger: Set `API_KEY`, start the FastAPI app, and use the bundled CLI client.
+- Workaround: Unset `API_KEY` for local use, or use another client that sends `X-API-Key`.
+- Root cause: The CLI never sends `X-API-Key`, and only `/health` is exempt from auth.
 - Blocked by: Not applicable.
 
-**`GET /health` can misreport the active provider:**
-- Symptoms: The health response can report `"unknown"` or a stale env value even when the running orchestrator has already selected a concrete provider or fallback chain.
-- Trigger: Running the API with auto-detected providers or `P1_PROVIDER_CHAIN`.
-- Workaround: Inspect `request.app.state.orchestrator.provider` directly.
-- Root cause: `src/agentic_workflows/api/routes/health.py` reports `os.environ.get("P1_PROVIDER")` instead of the instantiated provider object from application state.
-- Blocked by: Not applicable.
-
-**Concurrent runs clobber `Shared_plan.md`:**
-- Symptoms: `Shared_plan.md` can switch between unrelated runs and stop representing any single run accurately.
-- Trigger: Starting overlapping runs in the same working directory.
-- Workaround: Use checkpoint data from `src/agentic_workflows/orchestration/langgraph/checkpoint_store.py` instead of the shared file.
-- Root cause: `src/agentic_workflows/orchestration/langgraph/graph.py` always writes the same global filename.
-- Blocked by: Not applicable.
+**SSE reconnect path is not durable and appears single-consumer only:**
+- Files: `src/agentic_workflows/api/routes/run.py`, `src/agentic_workflows/api/app.py`
+- Symptoms: Reconnects can miss events, fail after process restart, and are not safe for multi-worker deployments.
+- Trigger: Disconnect during a long `POST /run`, then reconnect via `GET /run/{run_id}/stream`, or run behind more than one API worker.
+- Workaround: Keep the original SSE connection alive, or fall back to `GET /run/{run_id}` for completed results.
+- Root cause: The API stores one in-memory AnyIO `receive_stream` per run in `app.state.active_streams` instead of a durable event log or replay buffer.
+- Blocked by: Durable per-run event storage or broker-backed fan-out is not implemented.
 
 ## Security Considerations
 
-**Service is exposed without application-layer auth or throttling:**
-- Risk: Any reachable client can trigger LLM/tool execution, spend provider budget, and access run metadata endpoints.
-- Current mitigation: `src/agentic_workflows/api/routes/run.py` only applies a same-IP check for `GET /run/{run_id}/stream`; no auth, rate limiting, or CORS policy was detected in `src/agentic_workflows/api/app.py`.
-- Recommendations: Default bind to localhost, add API authentication and request throttling, and make public exposure an explicit opt-in deployment mode.
+**API and tool guardrails fail open when env vars are missing:**
+- Files: `src/agentic_workflows/api/middleware/api_key.py`, `src/agentic_workflows/tools/_security.py`, `src/agentic_workflows/tools/read_file.py`, `src/agentic_workflows/tools/write_file.py`, `src/agentic_workflows/tools/http_request.py`
+- Risk: If `API_KEY`, `P1_TOOL_SANDBOX_ROOT`, `P1_BASH_DENIED_PATTERNS`, or `P1_HTTP_ALLOWED_DOMAINS` are unset, the service becomes public and tool access is far broader than a production deployment should allow.
+- Current mitigation: Guardrails exist, and `HttpRequestTool` blocks private IPv4 ranges in `src/agentic_workflows/tools/http_request.py`.
+- Recommendations: Fail closed outside explicit dev mode, validate required hardening env vars at startup, and document separate dev vs. production defaults.
 
-**Tool guardrails are fail-open unless env vars are set:**
-- Risk: `src/agentic_workflows/tools/run_bash.py` executes shell commands with `shell=True`, and `src/agentic_workflows/tools/http_request.py` / `src/agentic_workflows/tools/_security.py` only enforce the stricter sandbox and domain rules when env vars are configured.
-- Current mitigation: Optional denylist/allowlist controls, path sandbox checks, private-IP blocking for HTTP, and unit tests in `tests/unit/test_tool_security.py`.
-- Recommendations: Enforce strict defaults in API mode, validate required security env vars at startup, and prefer argv-based subprocess execution over raw shell strings where possible.
+**`run_bash` remains a host-command execution hazard:**
+- Files: `src/agentic_workflows/tools/run_bash.py`, `src/agentic_workflows/tools/_security.py`
+- Risk: `RunBashTool` executes `subprocess.run(..., shell=True)` and relies on optional substring filters rather than a strict allowlist.
+- Current mitigation: Optional denylist/allowlist checks and optional sandbox validation on the `cwd` argument.
+- Recommendations: Disable `run_bash` in API deployments unless strictly required, prefer argv-based subprocess execution, and move from denylist matching to explicit command allowlists.
 
 ## Performance Bottlenecks
 
-**Checkpoint persistence writes the full state on every node transition:**
-- Problem: Full `RunState` payloads are JSON-serialized and inserted repeatedly into SQLite during execution.
-- Measurement: Not measured.
-- Cause: `src/agentic_workflows/orchestration/langgraph/checkpoint_store.py` stores complete `state_json` snapshots, and `src/agentic_workflows/api/routes/run.py` reloads the latest full state at completion.
-- Improvement path: Store smaller deltas or capped snapshots, compress large fields, and add retention/pruning for old checkpoints.
+**Checkpoint persistence on every graph transition:**
+- Files: `src/agentic_workflows/orchestration/langgraph/graph.py`, `src/agentic_workflows/orchestration/langgraph/checkpoint_store.py`
+- Problem: The graph saves full-state checkpoints repeatedly across planner, execute, policy, retry, and finalize paths.
+- Measurement: Not benchmarked in repo; current code serializes the full `RunState` JSON and inserts it into SQLite on each checkpoint save.
+- Cause: `SQLiteCheckpointStore.save()` opens a fresh SQLite connection and stores whole-state snapshots rather than deltas.
+- Improvement path: Reuse connections, enable WAL/busy timeout, reduce checkpoint frequency for API runs, or move to incremental/durable backend storage.
 
-**SQLite-backed service persistence is a likely concurrency bottleneck:**
-- Problem: Run metadata, memo data, and checkpoint data all go through local SQLite files.
-- Measurement: Not measured.
-- Cause: `src/agentic_workflows/storage/sqlite.py`, `src/agentic_workflows/orchestration/langgraph/memo_store.py`, and `src/agentic_workflows/orchestration/langgraph/checkpoint_store.py` optimize for simplicity over high-write service throughput.
-- Improvement path: Move to shared service backends for multi-user workloads and add latency/error instrumentation around persistence operations.
+**Queued planner actions can create bursty provider traffic:**
+- Files: `src/agentic_workflows/orchestration/langgraph/graph.py`
+- Problem: Multi-action planner outputs are drained from `pending_action_queue` with no backpressure or pacing.
+- Measurement: Not benchmarked in code; queue depth is unbounded by policy beyond what the model emits, and each drained action returns immediately to more planning/execution work.
+- Cause: The plan loop treats queued actions as a fast path and re-enters provider/tool flow without service-level rate control.
+- Improvement path: Cap queue depth, add per-run/provider backpressure, and short-circuit deterministic local steps when enough future actions are already known.
 
 ## Fragile Areas
 
-**Annotated reducer workaround in graph execution:**
-- Why fragile: Correctness depends on every sequential node being wrapped by `_sequential_node()` and every reducer-backed list field being mirrored in `_ANNOTATED_LIST_FIELDS` inside `src/agentic_workflows/orchestration/langgraph/graph.py`.
-- Common failures: Duplicated `tool_history` or `mission_reports`, dropped state updates, and subtle regressions when new reducer-backed fields are added.
-- Safe modification: Change reducer annotations and wrapper behavior together, then add or update regression tests before refactoring node return values.
-- Test coverage: Partial; `tests/integration/test_langgraph_flow.py` and `tests/unit/test_state_schema.py` cover state behavior, but there is no structural guard that every new reducer-backed field is registered in the workaround.
+**Annotated-list reducer workaround in sequential graph nodes:**
+- Files: `src/agentic_workflows/orchestration/langgraph/graph.py`, `src/agentic_workflows/orchestration/langgraph/state_schema.py`
+- Why fragile: `_sequential_node()` depends on `_ANNOTATED_LIST_FIELDS` staying perfectly aligned with reducer-backed list fields in `RunState`.
+- Common failures: Newly added reducer fields can duplicate `tool_history`, `memo_events`, `seen_tool_signatures`, or `mission_reports` if they are not zeroed in the returned delta.
+- Safe modification: Treat `RunState` and `_ANNOTATED_LIST_FIELDS` as a coupled change; update both together and add regression coverage for any new reducer-backed fields.
+- Test coverage: `tests/unit/test_state_schema.py`, `tests/unit/test_state_isolation.py`, and `tests/integration/test_langgraph_flow.py` cover reducer behavior indirectly, but no test asserts `_ANNOTATED_LIST_FIELDS` stays synchronized with the schema.
 
-**SSE reconnect path and stream ownership:**
-- Why fragile: `src/agentic_workflows/api/app.py` stores active streams in process memory, and `src/agentic_workflows/api/routes/run.py` ties reconnection to the same in-memory stream object plus client IP.
-- Common failures: Reconnect breaks after process restart, reverse proxies/NAT can invalidate the same-session heuristic, and horizontal scaling has no shared stream state.
-- Safe modification: Introduce durable event storage or pub/sub, use explicit session tokens, and remove assumptions that a single process owns the stream lifecycle.
-- Test coverage: Thin; `tests/integration/test_api_service.py` covers the missing-stream 404 path, but no successful reconnect scenario or proxy-aware session test was detected.
-
-**API metadata endpoints derive state indirectly:**
-- Why fragile: `src/agentic_workflows/api/routes/health.py` and `src/agentic_workflows/api/routes/tools.py` infer metadata from environment variables and docstrings instead of the instantiated runtime objects.
-- Common failures: Empty tool descriptions, stale provider reporting, and monitoring dashboards that disagree with runtime behavior.
-- Safe modification: Read metadata from `request.app.state.orchestrator` and the tool instances directly, then add contract tests for exact values.
-- Test coverage: Partial; `tests/integration/test_api_service.py` checks response shape, not semantic accuracy.
+**Run streaming and reconnect lifecycle:**
+- Files: `src/agentic_workflows/api/routes/run.py`, `src/agentic_workflows/api/app.py`
+- Why fragile: One route owns run creation, background execution, SSE emission, token issuance, reconnect lookup, and cleanup of `active_streams`.
+- Common failures: Dropped reconnects, inconsistent behavior across worker restarts, and hard-to-debug races around in-memory stream state.
+- Safe modification: Separate run execution, event buffering, and reconnect authorization into distinct components with stable contracts.
+- Test coverage: `tests/integration/test_api_service.py` covers happy-path `POST /run` and `GET /run/{id}`, but not valid reconnects, expired tokens, restart scenarios, or multi-worker behavior.
 
 ## Scaling Limits
 
-**In-memory streaming registry:**
-- Current capacity: Single-process only; exact concurrent stream capacity is Not measured.
-- Limit: `src/agentic_workflows/api/app.py` keeps `active_streams` in process memory, so reconnect support does not survive restarts or horizontal scaling.
-- Symptoms at limit: `GET /run/{run_id}/stream` returns 404 for live runs after failover, or clients lose the stream when the serving process changes.
-- Scaling path: Replace the in-memory registry with durable event storage or a shared pub/sub layer that supports reconnect without sticky sessions.
+**In-process API state prevents horizontal scaling:**
+- Files: `src/agentic_workflows/api/app.py`, `src/agentic_workflows/api/routes/run.py`, `src/agentic_workflows/orchestration/langgraph/graph.py`
+- Current capacity: Not benchmarked; current design is effectively single-node because live stream state and shared plan output are held locally in process.
+- Limit: `app.state.active_streams` and repo-root `Shared_plan.md` do not survive restarts and cannot be coordinated across workers.
+- Symptoms at limit: Lost reconnects, inconsistent run visibility, overwritten shared artifacts, and behavior differences between workers.
+- Scaling path: Move stream/event state and run artifacts to shared infrastructure such as Redis, Postgres, or object storage, and keep API nodes stateless.
 
-**Local SQLite persistence:**
-- Current capacity: Not measured.
-- Limit: `src/agentic_workflows/storage/sqlite.py`, `src/agentic_workflows/orchestration/langgraph/memo_store.py`, and `src/agentic_workflows/orchestration/langgraph/checkpoint_store.py` remain file-local and host-local.
-- Symptoms at limit: Higher write latency, potential lock contention, and operational friction when moving beyond a single-node deployment.
-- Scaling path: Migrate the existing storage interfaces to shared database backends with retention policies and operational monitoring.
+**SQLite persistence is a local-mode ceiling, especially for checkpoints:**
+- Files: `src/agentic_workflows/storage/sqlite.py`, `src/agentic_workflows/orchestration/langgraph/checkpoint_store.py`, `src/agentic_workflows/orchestration/langgraph/memo_store.py`
+- Current capacity: Not benchmarked; suitable for local development and light single-instance traffic.
+- Limit: Concurrent checkpoint-heavy workloads will hit SQLite locking and filesystem contention before service-scale throughput.
+- Symptoms at limit: Slower requests, intermittent `database is locked` errors, and degraded streaming responsiveness under concurrent runs.
+- Scaling path: Promote run, checkpoint, and memo persistence to a server database with connection management and keep SQLite as the local/dev backend only.
 
 ## Dependencies at Risk
 
-**Fast-moving orchestration and provider packages:**
-- Risk: `pyproject.toml` allows broad version ranges for `langgraph`, `langgraph-prebuilt`, `openai`, and `groq`, while `src/agentic_workflows/orchestration/langgraph/graph.py` and `src/agentic_workflows/orchestration/langgraph/provider.py` contain provider-specific compatibility branches and JSON-mode assumptions.
-- Impact: Patch or minor upgrades can change import surfaces or runtime behavior without any local code changes.
-- Migration plan: Pin known-good versions, run targeted compatibility CI for dependency upgrades, and keep vendor-specific behavior isolated behind smaller adapters.
+**`langgraph` / `langgraph-prebuilt`:**
+- Files: `pyproject.toml`, `src/agentic_workflows/orchestration/langgraph/graph.py`
+- Risk: The project depends on framework-specific behavior around `ToolNode`, reducer semantics, and graph state updates while allowing broad `1.0.x` upgrade ranges.
+- Impact: Patch upgrades can change error handling or state-merge behavior and break orchestration in subtle, hard-to-debug ways.
+- Migration plan: Pin known-good versions exactly, expand upgrade tests around ToolNode error handling and reducer-backed state, and isolate LangGraph-specific behavior behind smaller adapters.
+
+**Langfuse instrumentation coverage is provider-specific today:**
+- Files: `src/agentic_workflows/observability.py`, `src/agentic_workflows/orchestration/langgraph/provider.py`
+- Risk: Only `OllamaChatProvider.generate()` is decorated with `@observe`; `OpenAIChatProvider` and `GroqChatProvider` do not emit the same provider-level spans.
+- Impact: Traces differ by provider, which weakens debugging and makes production observability inconsistent.
+- Migration plan: Apply the same tracing wrapper to all supported providers and add structural tests so observability parity does not regress.
 
 ## Missing Critical Features
 
-**API authentication and deployment hardening:**
-- Problem: No API key, JWT, request-throttling, or origin/CORS policy was detected in the FastAPI service layer.
-- Current workaround: Rely on local-only deployments or external network controls.
-- Blocks: Safe shared staging, multi-user environments, and public-facing deployment.
-- Implementation complexity: Medium.
+**Durable SSE replay / reconnect support:**
+- Files: `src/agentic_workflows/api/routes/run.py`, `src/agentic_workflows/api/stream_token.py`
+- Problem: Stream reconnect depends on ephemeral in-memory state instead of persisted events.
+- Current workaround: Keep the original connection open or poll `GET /run/{id}` after the run finishes.
+- Blocks: Restart-safe streaming, multi-worker API deployment, and reliable reconnects for long runs.
+- Implementation complexity: Medium to High.
 
-**Retention and cleanup for run artifacts:**
-- Problem: Checkpoints, memo entries, run records, and the shared plan artifact accumulate without a retention or cleanup strategy.
-- Current workaround: Manual cleanup of `.tmp/` and root artifacts such as `Shared_plan.md`.
-- Blocks: Predictable long-lived service operation and disk usage control.
-- Implementation complexity: Low to Medium.
+**Rate limiting for the public run API:**
+- Files: `src/agentic_workflows/api/app.py`, `src/agentic_workflows/api/routes/run.py`
+- Problem: No request-rate or concurrency throttling is enforced by the application.
+- Current workaround: Rely on external proxy controls or keep the service private.
+- Blocks: Safely exposing `/run` beyond trusted single-tenant usage.
+- Implementation complexity: Medium.
 
 ## Test Coverage Gaps
 
-**Successful SSE reconnect and resume behavior:**
-- What's not tested: Happy-path `GET /run/{run_id}/stream`, reconnect during an active run, and same-session behavior behind proxies/NAT.
-- Risk: Reconnect logic can break while current integration tests still pass.
+**API auth, request metadata, reconnect, and pagination paths:**
+- Files: `src/agentic_workflows/api/middleware/api_key.py`, `src/agentic_workflows/api/middleware/request_id.py`, `src/agentic_workflows/api/routes/runs.py`, `src/agentic_workflows/api/routes/run.py`
+- What's not tested: No tests under `tests/` currently target API key enforcement, request ID propagation, `GET /runs` pagination, or successful/expired-token SSE reconnect flows.
+- Risk: Security and operability regressions can ship even while the existing API happy-path tests remain green.
 - Priority: High.
-- Difficulty to test: Requires concurrent async consumers and controlled stream lifecycle assertions.
+- Difficulty to test: Moderate; requires env-controlled app setup plus streaming assertions.
 
-**CLI-to-service live workflow:**
-- What's not tested: `src/agentic_workflows/cli/user_run.py` auto-start behavior, persistence of `user_runs/context.json`, and real-provider end-to-end runs.
-- Risk: The primary operator workflow can fail only in real environments; `.planning/STATE.md` still lists live-provider validation as pending.
+**First-party CLI and live-provider end-to-end behavior:**
+- Files: `src/agentic_workflows/cli/user_run.py`, `.planning/STATE.md`
+- What's not tested: The bundled API client has no automated tests, and the current state file still lists live-provider validation of `run.py` / `user_run.py` as pending.
+- Risk: Auto-start, auth, context resume, SSE parsing, and real provider integration can break without being caught by `ScriptedProvider` tests.
 - Priority: High.
-- Difficulty to test: Requires subprocess orchestration and either live-provider fixtures or opt-in environment-backed tests.
-
-**Production security posture defaults:**
-- What's not tested: Startup enforcement that strict env vars such as `P1_TOOL_SANDBOX_ROOT`, `P1_BASH_DENIED_PATTERNS`, `P1_HTTP_ALLOWED_DOMAINS`, and `P1_TOOL_OUTPUT_SCHEMA_STRICT` are present for service deployments.
-- Risk: Tests prove the guards work when enabled, but they do not prove production starts in a hardened configuration.
-- Priority: High.
-- Difficulty to test: Requires a deployment-mode config contract and startup validation tests.
+- Difficulty to test: Medium to High; needs subprocess control and optional live-provider smoke coverage.
 
 ---
 

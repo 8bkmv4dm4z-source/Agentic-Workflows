@@ -5,51 +5,47 @@
 ## Test Framework
 
 **Runner:**
-- `pytest>=8.0` with `pytest-asyncio>=0.24`, configured in `pyproject.toml`.
-- Global pytest config lives in `pyproject.toml` with `testpaths = ["tests"]`, `pythonpath = ["src"]`, and `asyncio_mode = "auto"`.
-- CI runs `pytest tests/ -q` in `.github/workflows/ci.yml`.
-- Current state mixes pytest-style tests with `unittest.TestCase` suites collected by pytest (`tests/unit/test_mission_parser.py`, `tests/integration/test_langgraph_flow.py`) even though `AGENTS.md` prefers pytest over raw unittest execution.
+- `pytest` is the test runner, configured in `pyproject.toml`.
+- Pytest configuration is in `[tool.pytest.ini_options]` in `pyproject.toml` with `testpaths = ["tests"]`, `pythonpath = ["src"]`, and `asyncio_mode = "auto"`.
+- Current-state note: many tests are still written as `unittest.TestCase` classes and are collected by pytest, for example `tests/integration/test_langgraph_flow.py` and `tests/unit/test_mission_auditor.py`.
 
 **Assertion Library:**
-- Primary assertion style is plain Python `assert` plus `pytest.raises(...)` (`tests/unit/test_api_models.py`, `tests/unit/test_run_store.py`, `tests/unit/test_tool_security.py`).
-- Legacy/class-based suites use `unittest.TestCase` assertion helpers such as `self.assertEqual`, `self.assertIn`, and `self.assertLess` (`tests/unit/test_mission_parser.py`, `tests/integration/test_langgraph_flow.py`).
-- Custom matcher libraries: Not detected.
+- Plain pytest assertion rewriting is widely used, for example `tests/unit/test_api_models.py` and `tests/integration/test_api_service.py`.
+- `pytest.raises(...)` is used for exception assertions, for example `tests/unit/test_api_models.py` and `tests/unit/test_output_schemas.py`.
+- `unittest` assertions are also present in `unittest.TestCase` suites, for example `self.assertEqual(...)` and `self.assertIn(...)` in `tests/integration/test_langgraph_flow.py`.
 
 **Run Commands:**
 ```bash
-pip install -e ".[dev]"                # install dev/test dependencies
-pytest tests/ -q                       # run all tests
-pytest tests/unit/ -q                  # unit tests
-pytest tests/integration/ -q           # integration tests
-pytest tests/eval/ -q                  # eval scenarios
-pytest tests/unit/test_run_store.py -q # single file pattern
+pytest tests/ -q                              # Run all tests
+pytest tests/unit/ -q                         # Unit tests
+pytest tests/integration/ -q                  # Integration tests
+pytest tests/eval/ -q                         # Eval scenarios
+pytest tests/unit/test_run_store.py -q        # Single file
 ```
 
 ## Test File Organization
 
 **Location:**
-- Tests live in a separate `tests/` tree, not alongside `src/`.
-- Shared fixtures live in `tests/conftest.py`.
-- Eval-only fixtures live in `tests/eval/conftest.py`.
-- Tests are split by intent into `tests/unit/`, `tests/integration/`, and `tests/eval/`.
+- Tests live in a separate `tests/` tree rather than beside source files.
+- Shared fixtures live in `tests/conftest.py`; eval-specific fixtures live in `tests/eval/conftest.py`.
 
 **Naming:**
-- All current test files use the `test_*.py` naming pattern (`tests/unit/test_logger.py`, `tests/integration/test_api_service.py`, `tests/eval/test_eval_harness.py`).
-- Unit vs. integration is communicated by directory, not by suffix such as `.integration.py`.
-- Browser/E2E-specific filename convention: Not detected.
+- Unit, integration, and eval files all follow `test_<subject>.py`, for example `tests/unit/test_write_file.py`, `tests/integration/test_model_router_integration.py`, and `tests/eval/test_eval_harness.py`.
+- A separate `.integration.test.py` or `.e2e.py` suffix pattern was not detected.
+- Browser-style E2E test files were not detected.
 
 **Structure:**
 ```text
 tests/
   conftest.py
   unit/
+    test_api_models.py
     test_run_store.py
     test_tool_security.py
-    test_mission_parser.py
   integration/
     test_api_service.py
     test_langgraph_flow.py
-    test_multi_mission_subgraph.py
+    test_model_router_integration.py
   eval/
     conftest.py
     test_eval_harness.py
@@ -59,127 +55,134 @@ tests/
 
 **Suite Organization:**
 ```python
-def test_save_and_get_run(store):
-    ...
+def test_run_request_extra_field_rejected():
+    with pytest.raises(ValidationError):
+        RunRequest(user_input="hello", surprise="boom")
 
 
-class MissionParserTests(unittest.TestCase):
-    def test_numbered_tasks_basic(self) -> None:
-        ...
+class TestWriteFileToolSecurity:
+    def test_blocks_oversized_content(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("P1_WRITE_FILE_MAX_BYTES", "10")
+        tool = WriteFileTool()
+        result = tool.execute({"path": str(tmp_path / "big.txt"), "content": "x" * 100})
+        assert "error" in result
 ```
 
 **Patterns:**
-- The suite uses both function-based pytest tests and class-based `unittest.TestCase` containers, often in the same subsystem.
-- Setup is fixture-heavy: `@pytest.fixture`, `tmp_path`, `monkeypatch`, and app/client builders are standard (`tests/conftest.py`, `tests/unit/test_run_bash.py`, `tests/eval/conftest.py`).
-- Teardown is handled with `yield` fixtures, context managers, and explicit cleanup helpers (`tests/unit/test_run_store.py`, `tests/unit/test_logger.py`, `tests/integration/test_api_service.py`).
-- Tests usually follow arrange/act/assert flow, but that structure is implicit rather than enforced with section comments.
-- Async tests are plain `async def` under `asyncio_mode=auto`; some files still add `@pytest.mark.asyncio` explicitly (`tests/unit/test_run_store.py`).
+- The suite is mixed-style: plain pytest functions, pytest classes, and `unittest.TestCase` classes all coexist.
+- Arrange/act/assert is the dominant structure, usually without heavy helper abstraction.
+- Shared setup is done with fixtures such as `memo_store`, `checkpoint_store`, and `tool` in `tests/conftest.py`, `tests/unit/test_run_bash.py`, and `tests/unit/test_write_file.py`.
+- Cleanup uses `yield` fixtures, `TemporaryDirectory`, and explicit `.close()` calls, for example `tests/unit/test_run_store.py` and `tests/integration/test_langgraph_flow.py`.
+- Async tests use either plain `async def` with global `asyncio_mode = "auto"` or explicit `@pytest.mark.asyncio`, as seen in `tests/integration/test_api_service.py` and `tests/unit/test_run_store.py`.
 
 ## Mocking
 
 **Framework:**
-- The dominant pattern is lightweight fakes plus pytest `monkeypatch`, not a central mocking framework.
-- Import-level mocking via `unittest.mock.patch(...)`: Not detected as a common repo-wide pattern.
+- The suite favors lightweight fakes and monkeypatching over heavy mock frameworks.
+- `pytest` fixtures plus `monkeypatch` are common, for example `tests/unit/test_tool_security.py` and `tests/unit/test_observability.py`.
+- `unittest.mock.patch.dict` is used for environment manipulation in `tests/unit/test_provider_config.py`.
 
 **Patterns:**
 ```python
 class ScriptedProvider:
+    def __init__(self, responses: list[dict]) -> None:
+        self._responses = [json.dumps(item) for item in responses]
+        self._index = 0
+
     def generate(self, messages):
-        return ...
-
-
-monkeypatch.setenv("P1_TOOL_SANDBOX_ROOT", str(tmp_path))
-monkeypatch.chdir(tmp_path)
+        if self._index < len(self._responses):
+            value = self._responses[self._index]
+            self._index += 1
+            return value
+        return self._responses[-1]
 ```
 
 **What to Mock:**
-- LLM/provider behavior is replaced with deterministic fakes such as `ScriptedProvider` in `tests/conftest.py` and inline provider doubles in `tests/integration/test_langgraph_flow.py`.
-- Environment variables and feature flags are controlled with `monkeypatch.setenv()` / `monkeypatch.delenv()` (`tests/unit/test_tool_security.py`, `tests/unit/test_state_schema.py`, `tests/unit/test_observability.py`).
-- Filesystem state is isolated through `tmp_path` and `TemporaryDirectory()` (`tests/unit/test_parse_code_structure.py`, `tests/integration/test_langgraph_flow.py`).
-- HTTP integration tests use a real FastAPI app plus `httpx.AsyncClient` with `httpx.ASGITransport`, so network calls are avoided without mocking the route layer (`tests/integration/test_api_service.py`, `tests/eval/conftest.py`).
+- LLM/provider behavior is faked with `ScriptedProvider` or inline stub providers in `tests/conftest.py`, `tests/integration/test_langgraph_flow.py`, and `tests/integration/test_model_router_integration.py`.
+- Environment variables are frequently controlled with `monkeypatch.setenv()` and `monkeypatch.delenv()`, especially in `tests/unit/test_tool_security.py`.
+- Filesystem and SQLite state use `tmp_path` and temporary directories rather than mocked file/database layers, for example `tests/unit/test_parse_code_structure.py` and `tests/unit/test_run_store.py`.
+- HTTP integration is tested in-process with `httpx.AsyncClient` plus `httpx.ASGITransport` against a real FastAPI app in `tests/integration/test_api_service.py` and `tests/eval/conftest.py`.
 
 **What NOT to Mock:**
-- Internal route wiring, orchestrator flow, and SQLite behavior are exercised with real objects in integration tests (`tests/integration/test_api_service.py`, `tests/integration/test_multi_mission_subgraph.py`, `tests/unit/test_run_store.py`).
-- Pure helper logic is usually tested directly without stubbing intermediate functions.
-- Live provider API calls in tests/CI: Not applicable. `.github/workflows/ci.yml` sets `P1_PROVIDER=scripted`.
+- Core tool logic is usually exercised directly instead of mocked, for example `WriteFileTool` in `tests/unit/test_write_file.py` and `ParseCodeStructureTool` in `tests/unit/test_parse_code_structure.py`.
+- Internal orchestration flows are typically run end-to-end with fake providers rather than mocked node methods, for example `tests/integration/test_langgraph_flow.py`.
 
 ## Fixtures and Factories
 
 **Test Data:**
 ```python
 @pytest.fixture
-def memo_store(tmp_path):
+def memo_store(tmp_path: Path) -> SQLiteMemoStore:
     return SQLiteMemoStore(db_path=str(tmp_path / "memo.db"))
 
 
-def _build_test_app(responses=None, tmp_dir=None):
-    ...
+SIMPLE_MISSION_RESPONSES = [
+    {"action": "tool", "tool_name": "write_file", "args": {"path": "/tmp/eval_hello.txt", "content": "hello world"}},
+    {"action": "finish", "answer": "Wrote hello world to /tmp/eval_hello.txt"},
+]
 ```
 
 **Location:**
-- Shared cross-suite fixtures live in `tests/conftest.py` (`tmp_dir`, `memo_store`, `checkpoint_store`, `ScriptedProvider`).
-- Scenario builders and client fixtures for eval runs live in `tests/eval/conftest.py` (`simple_app`, `multi_app`, `chain_app`, and matching clients).
-- File-local fixtures are common for tools/stores (`tests/unit/test_run_bash.py`, `tests/unit/test_parse_code_structure.py`, `tests/unit/test_run_store.py`).
-- A dedicated `tests/factories/` or `tests/fixtures/` directory: Not detected.
+- Cross-suite fixtures and the shared `ScriptedProvider` live in `tests/conftest.py`.
+- Eval scenario fixtures and scripted response sequences live in `tests/eval/conftest.py`.
+- One-off factories and inline provider classes are defined inside individual test files such as `tests/integration/test_langgraph_flow.py`.
+- A dedicated `tests/fixtures/` or `tests/factories/` directory was not detected.
 
 ## Coverage
 
 **Requirements:**
-- Numeric coverage target: Not detected.
-- Coverage gating in CI: Not detected.
+- No coverage target or minimum threshold was detected in `pyproject.toml` or `AGENTS.md`.
+- Coverage enforcement in CI was not detected from repository-local configuration.
 
 **Configuration:**
-- CI enforces lint, typecheck, and full test pass in `.github/workflows/ci.yml`.
-- Coverage plugin/configuration in `pyproject.toml`: Not detected.
-- Coverage exclusions config: Not detected.
+- A `pytest-cov` configuration or coverage config file was not detected.
+- Coverage exclusions beyond ad hoc `# pragma: no cover` markers were not detected.
 
 **View Coverage:**
 ```bash
-# Not detected: no coverage command or report path is configured in current repo files
+Not detected
 ```
 
 ## Test Types
 
 **Unit Tests:**
-- Scope: single tool, model, helper, or store behavior in isolation (`tests/unit/test_write_file.py`, `tests/unit/test_api_models.py`, `tests/unit/test_run_store.py`).
-- Mocking: heavy use of temp dirs, env patching, and fake providers; dependencies are kept local and deterministic.
-- Speed/strict runtime budget: Not detected.
+- Located under `tests/unit/`.
+- Focus on a single tool, model, helper, or policy in isolation, for example `tests/unit/test_api_models.py`, `tests/unit/test_run_bash.py`, and `tests/unit/test_output_schemas.py`.
+- Use direct object construction, temp paths, and environment patching instead of networked dependencies.
 
 **Integration Tests:**
-- Scope: multiple modules wired together, especially orchestration flow and HTTP API behavior (`tests/integration/test_api_service.py`, `tests/integration/test_langgraph_flow.py`, `tests/integration/test_multi_mission_subgraph.py`).
-- Mocking: external providers are scripted, but internal routers, orchestrator objects, and SQLite stores are real.
-- Setup: test apps often bypass FastAPI lifespan intentionally because `httpx.ASGITransport` does not trigger it; state is assigned directly on `app.state` (`tests/integration/test_api_service.py`, `tests/eval/conftest.py`).
+- Located under `tests/integration/`.
+- Exercise multiple modules together, including LangGraph orchestration and FastAPI routing, for example `tests/integration/test_langgraph_flow.py` and `tests/integration/test_api_service.py`.
+- Use real internal components with fake providers and temporary SQLite stores instead of live external APIs.
 
-**E2E / Eval Tests:**
-- End-to-end API scenarios live in `tests/eval/test_eval_harness.py`, backed by fixtures from `tests/eval/conftest.py`.
-- These tests validate POST `/run` SSE output plus follow-up GET `/run/{id}` status retrieval through deterministic scripted responses.
-- Browser/UI automation framework: Not detected.
+**E2E Tests:**
+- Browser or external-system E2E tests were not detected.
+- `tests/eval/` acts as deterministic scenario/eval coverage through the API rather than browser automation.
 
 ## Common Patterns
 
 **Async Testing:**
 ```python
-async with httpx.AsyncClient(
-    transport=httpx.ASGITransport(app=app), base_url="http://test"
-) as client:
-    resp = await client.get("/health")
+async def test_health() -> None:
+    app = _build_test_app()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/health")
+    assert resp.status_code == 200
 ```
-- This pattern is used in `tests/integration/test_api_service.py` and `tests/eval/test_eval_harness.py`.
 
 **Error Testing:**
 ```python
 with pytest.raises(ValidationError):
     RunRequest(user_input="hello", surprise="boom")
 
-result = tool.execute({"command": ""})
-assert result == {"error": "command is required"}
+result = tool.execute({"path": ""})
+assert result == {"error": "path is required"}
 ```
-- Structured error-dict assertions are common for tools (`tests/unit/test_run_bash.py`, `tests/unit/test_tool_security.py`).
-- Exception assertions are used mainly for model validation or true exceptional control flow (`tests/unit/test_api_models.py`, `tests/unit/test_output_schemas.py`).
 
 **Snapshot Testing:**
-- Snapshot testing: Not detected.
-- Golden-file fixture directories: Not detected.
+- Not detected.
 
 *Testing analysis: 2026-03-05*
 *Update when test patterns change*
