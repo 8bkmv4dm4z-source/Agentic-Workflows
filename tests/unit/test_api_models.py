@@ -25,8 +25,8 @@ from agentic_workflows.api.sse import (
 def test_run_request_valid():
     req = RunRequest(user_input="hello")
     assert req.user_input == "hello"
-    assert req.run_id is None
-    assert req.prior_context is None
+    assert not hasattr(req, "run_id"), "run_id should not exist on RunRequest"
+    assert req.prior_context == []
 
 
 def test_run_request_extra_field_rejected():

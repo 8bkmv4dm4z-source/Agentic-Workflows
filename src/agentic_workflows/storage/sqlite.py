@@ -89,13 +89,29 @@ class SQLiteRunStore:
 
         return await anyio.to_thread.run_sync(_get)
 
-    async def list_runs(self, limit: int = 50) -> list[dict[str, Any]]:
-        """Return most recent runs."""
+    async def list_runs(
+        self, limit: int = 20, cursor: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Return runs newest-first with optional cursor-based pagination."""
 
         def _list() -> list[dict[str, Any]]:
-            rows = self._conn.execute(
-                "SELECT * FROM runs ORDER BY created_at DESC LIMIT ?", (limit,)
-            ).fetchall()
+            if cursor is not None:
+                # Look up the created_at of the cursor row to use as the anchor
+                anchor_row = self._conn.execute(
+                    "SELECT created_at FROM runs WHERE run_id = ?", (cursor,)
+                ).fetchone()
+                if anchor_row:
+                    rows = self._conn.execute(
+                        "SELECT * FROM runs WHERE created_at < ? ORDER BY created_at DESC LIMIT ?",
+                        (anchor_row["created_at"], limit),
+                    ).fetchall()
+                else:
+                    # Cursor not found — return empty page
+                    rows = []
+            else:
+                rows = self._conn.execute(
+                    "SELECT * FROM runs ORDER BY created_at DESC LIMIT ?", (limit,)
+                ).fetchall()
             return [dict(r) for r in rows]
 
         return await anyio.to_thread.run_sync(_list)

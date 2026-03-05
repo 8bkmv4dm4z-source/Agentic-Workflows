@@ -21,8 +21,10 @@ class RunStore(Protocol):
         """Retrieve a run by ID, or None if not found."""
         ...
 
-    async def list_runs(self, limit: int = 50) -> list[dict[str, Any]]:
-        """Return the most recent runs, ordered by creation time descending."""
+    async def list_runs(
+        self, limit: int = 20, cursor: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Return runs ordered by created_at DESC, with optional cursor pagination."""
         ...
 
     async def update_run(self, run_id: str, **fields: Any) -> None:
