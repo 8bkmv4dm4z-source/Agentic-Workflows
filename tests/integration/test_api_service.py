@@ -50,6 +50,7 @@ def _build_test_app(
     test_app.state.orchestrator = orchestrator
     test_app.state.run_store = run_store
     test_app.state.active_streams = {}
+    test_app.state.stream_secret = "test-stream-secret"
 
     return test_app
 

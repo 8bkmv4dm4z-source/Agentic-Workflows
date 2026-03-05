@@ -74,6 +74,7 @@ def _build_eval_app(
     eval_app.state.orchestrator = orchestrator
     eval_app.state.run_store = run_store
     eval_app.state.active_streams = {}
+    eval_app.state.stream_secret = "test-stream-secret"
 
     return eval_app
 

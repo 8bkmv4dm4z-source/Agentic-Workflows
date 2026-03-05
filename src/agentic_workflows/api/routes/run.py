@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from typing import Any
 from uuid import uuid4
@@ -13,12 +14,15 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
-from agentic_workflows.api.models import ErrorResponse, RunStatusResponse
+from agentic_workflows.api.models import ErrorResponse, RunRequest, RunStatusResponse
 from agentic_workflows.api.sse import make_error, make_node_end, make_node_start, make_run_complete
+from agentic_workflows.api.stream_token import generate_token, validate_token
 
 log = structlog.get_logger()
 
 router = APIRouter()
+
+_SSE_MAX_DEFAULT = 300  # seconds
 
 
 # ---------------------------------------------------------------------------
@@ -26,31 +30,27 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 
 
-@router.post("/run", response_model=None)
-async def post_run(request: Request) -> EventSourceResponse:
+@router.post(
+    "/run",
+    response_model=None,
+    summary="Start an orchestrator run",
+    description="Submit a natural-language task and receive SSE events as the agent executes. "
+    "The stream emits node_start, node_end, and run_complete events.",
+    responses={422: {"model": ErrorResponse, "description": "Validation error"}},
+)
+async def post_run(body: RunRequest, request: Request) -> EventSourceResponse:
     """Start an orchestrator run and stream node-transition SSE events."""
-    # Parse and validate body
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse(  # type: ignore[return-value]
-            status_code=422,
-            content=ErrorResponse(error="Invalid JSON body").model_dump(),
-        )
-
-    user_input = body.get("user_input")
-    if not user_input:
-        return JSONResponse(  # type: ignore[return-value]
-            status_code=422,
-            content=ErrorResponse(error="Validation error", detail="user_input is required").model_dump(),
-        )
-
-    run_id = body.get("run_id") or str(uuid4())
-    prior_context = body.get("prior_context")
+    user_input = body.user_input
+    run_id = f"pub_{uuid4().hex}"
+    prior_context = [entry.model_dump() for entry in body.prior_context] or None
     client_ip = request.client.host if request.client else "unknown"
 
     orchestrator = request.app.state.orchestrator
     run_store = request.app.state.run_store
+    stream_secret = request.app.state.stream_secret
+
+    # Generate HMAC stream token for reconnect authorization
+    stream_token = generate_token(run_id, stream_secret)
 
     # Persist initial run record
     await run_store.save_run(
@@ -149,7 +149,8 @@ async def post_run(request: Request) -> EventSourceResponse:
                     if not isinstance(update_dict, dict):
                         continue
                     for node_name, _chunk in update_dict.items():
-                        start_evt = make_node_start(node_name, run_id)
+                        model = getattr(orchestrator.provider, "model", None) if node_name == "plan" else None
+                        start_evt = make_node_start(node_name, run_id, model=model)
                         anyio.from_thread.run(send_stream.send, start_evt)
 
                         end_evt = make_node_end(node_name, run_id)
@@ -215,14 +216,21 @@ async def post_run(request: Request) -> EventSourceResponse:
             await send_stream.aclose()
             request.app.state.active_streams.pop(run_id, None)
 
+    _sse_max = int(os.environ.get("SSE_MAX_DURATION_SECONDS", str(_SSE_MAX_DEFAULT)))
+
     async def event_generator():  # type: ignore[no-untyped-def]
-        """Yield SSE events from the receive stream."""
+        """Yield SSE events from the receive stream with duration cap."""
+        start = time.time()
         async for event in receive_stream:
+            if time.time() - start > _sse_max:
+                yield json.dumps({"type": "error", "detail": "stream_timeout"}, default=str)
+                return
             yield json.dumps(event, default=str)
 
     return EventSourceResponse(
         event_generator(),
         data_sender_callable=producer,
+        headers={"X-Stream-Token": stream_token},
     )
 
 
@@ -231,7 +239,14 @@ async def post_run(request: Request) -> EventSourceResponse:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/run/{run_id}")
+@router.get(
+    "/run/{run_id}",
+    response_model=RunStatusResponse,
+    summary="Get run status",
+    description="Retrieve the current status of a run. Returns partial progress for in-progress runs "
+    "and full results (including audit report) for completed runs.",
+    responses={404: {"model": ErrorResponse, "description": "Run not found"}},
+)
 async def get_run(run_id: str, request: Request) -> JSONResponse:
     """Return run status (partial for in-progress, full for completed/failed)."""
     run_store = request.app.state.run_store
@@ -286,9 +301,19 @@ async def get_run(run_id: str, request: Request) -> JSONResponse:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/run/{run_id}/stream", response_model=None)
+@router.get(
+    "/run/{run_id}/stream",
+    response_model=None,
+    summary="Reconnect to SSE stream",
+    description="Reconnect to an in-progress run's SSE event stream. "
+    "Requires a valid X-Stream-Token header obtained from the POST /run response.",
+    responses={
+        404: {"model": ErrorResponse, "description": "Stream not found or run completed"},
+        403: {"model": ErrorResponse, "description": "Invalid or expired stream token"},
+    },
+)
 async def get_run_stream(run_id: str, request: Request) -> EventSourceResponse | JSONResponse:
-    """Reconnect to an in-progress run's SSE stream (same session only)."""
+    """Reconnect to an in-progress run's SSE stream (requires valid HMAC stream token)."""
     active_streams = request.app.state.active_streams
     stream_info = active_streams.get(run_id)
 
@@ -302,23 +327,31 @@ async def get_run_stream(run_id: str, request: Request) -> EventSourceResponse |
             ).model_dump(),
         )
 
-    # Session validation: verify client IP matches
-    client_ip = request.client.host if request.client else "unknown"
-    if stream_info.get("client_ip") and stream_info["client_ip"] != client_ip:
+    # Token-based validation: verify HMAC stream token
+    stream_token_header = request.headers.get("X-Stream-Token")
+    stream_secret = request.app.state.stream_secret
+
+    if not stream_token_header or not validate_token(stream_token_header, run_id, stream_secret):
         return JSONResponse(
             status_code=403,
             content=ErrorResponse(
                 error="Forbidden",
                 run_id=run_id,
-                detail="Session mismatch: stream belongs to a different client",
+                detail="Missing or invalid stream token",
             ).model_dump(),
         )
 
     receive_stream = stream_info["stream"]
 
+    _sse_max = int(os.environ.get("SSE_MAX_DURATION_SECONDS", str(_SSE_MAX_DEFAULT)))
+
     async def event_generator():  # type: ignore[no-untyped-def]
+        start = time.time()
         try:
             async for event in receive_stream:
+                if time.time() - start > _sse_max:
+                    yield json.dumps({"type": "error", "detail": "stream_timeout"}, default=str)
+                    return
                 yield json.dumps(event, default=str)
         except anyio.ClosedResourceError:
             pass
