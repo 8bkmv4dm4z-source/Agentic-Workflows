@@ -12,6 +12,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Protocol
 
+import httpx
 from dotenv import load_dotenv
 from groq import Groq
 from openai import OpenAI
@@ -49,6 +50,16 @@ def _resolve_ollama_base_url(base_url: str | None = None) -> str:
     return "http://localhost:11434/v1"
 
 
+def _resolve_ollama_native_chat_url(base_url: str | None = None) -> str:
+    """Resolve Ollama's native chat endpoint from explicit args/env."""
+    resolved = _resolve_ollama_base_url(base_url).rstrip("/")
+    if resolved.endswith("/api/chat"):
+        return resolved
+    if resolved.endswith("/v1"):
+        resolved = resolved[: -len("/v1")]
+    return f"{resolved}/api/chat"
+
+
 class ChatProvider(Protocol):
     """Provider contract used by the LangGraph planner node."""
 
@@ -75,6 +86,13 @@ def _env_int(name: str, default: int) -> int:
     except ValueError:
         return default
     return value if value >= 0 else default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = (os.getenv(name) or "").strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "on"}
 
 
 def _is_retryable_timeout_error(exc: Exception) -> bool:
@@ -184,13 +202,27 @@ class OllamaChatProvider(_RetryingProviderBase):
         super().__init__()
         resolved_model = model or os.getenv("OLLAMA_MODEL", "llama3.1:8b")
         resolved_base_url = _resolve_ollama_base_url(base_url)
-        self.client = OpenAI(
-            api_key="ollama",
-            base_url=resolved_base_url,
-            timeout=self.timeout_seconds,
-        )
         self.model = resolved_model
         self.num_ctx = _env_int("OLLAMA_NUM_CTX", 0)
+        self.use_native_chat_api = _env_bool(
+            "OLLAMA_USE_NATIVE_CHAT_API",
+            default=self.num_ctx > 0,
+        )
+        self.native_chat_url = (
+            _resolve_ollama_native_chat_url(base_url) if self.use_native_chat_api else None
+        )
+        self.native_client = (
+            httpx.Client(timeout=self.timeout_seconds) if self.use_native_chat_api else None
+        )
+        self.client = (
+            None
+            if self.use_native_chat_api
+            else OpenAI(
+                api_key="ollama",
+                base_url=resolved_base_url,
+                timeout=self.timeout_seconds,
+            )
+        )
 
     def _ollama_extra_body(self) -> dict | None:
         """Build Ollama-specific options passed via extra_body."""
@@ -198,11 +230,58 @@ class OllamaChatProvider(_RetryingProviderBase):
             return {"options": {"num_ctx": self.num_ctx}}
         return None
 
+    def _native_chat_payload(
+        self,
+        messages: Sequence[AgentMessage],
+        *,
+        json_mode: bool,
+    ) -> dict:
+        payload: dict[str, object] = {
+            "model": self.model,
+            "messages": list(messages),
+            "stream": False,
+        }
+        if self.num_ctx > 0:
+            payload["options"] = {"num_ctx": self.num_ctx}
+        if json_mode:
+            payload["format"] = "json"
+        return payload
+
+    def _request_native_chat(
+        self,
+        messages: Sequence[AgentMessage],
+        *,
+        json_mode: bool,
+    ) -> str:
+        if self.native_client is None or self.native_chat_url is None:
+            raise RuntimeError("Native Ollama client is not configured.")
+        response = self.native_client.post(
+            self.native_chat_url,
+            json=self._native_chat_payload(messages, json_mode=json_mode),
+        )
+        response.raise_for_status()
+        content = response.json().get("message", {}).get("content")
+        if content is None:
+            raise ValueError("Model returned empty content.")
+        return content
+
     @observe(name="provider.generate")
     def generate(self, messages: Sequence[AgentMessage]) -> str:
+        if self.use_native_chat_api:
+            try:
+                return self._request_with_retries(
+                    lambda: self._request_native_chat(messages, json_mode=True)
+                )
+            except Exception:
+                return self._request_with_retries(
+                    lambda: self._request_native_chat(messages, json_mode=False)
+                )
+
         extra = self._ollama_extra_body()
 
         def _request_json_mode() -> object:
+            if self.client is None:
+                raise RuntimeError("Ollama OpenAI-compatible client is not configured.")
             return self.client.chat.completions.create(
                 model=self.model,
                 messages=list(messages),
@@ -212,6 +291,8 @@ class OllamaChatProvider(_RetryingProviderBase):
             )
 
         def _request_plain_mode() -> object:
+            if self.client is None:
+                raise RuntimeError("Ollama OpenAI-compatible client is not configured.")
             return self.client.chat.completions.create(
                 model=self.model,
                 messages=list(messages),
