@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 Phase: 6 of 7 (Production Service Layer)
 Plan: 3 of 3 in current phase (06-03 DONE, awaiting human-verify checkpoint)
 Status: Phase 6 plan 03 complete — CLI user_run as API client, eval harness with 3 scenarios, streaming bug fix.
-Last activity: 2026-03-05 — 06-03: API client user_run, eval harness, streaming state accumulation fix
+Last activity: 2026-03-05 — Completed Extend feature for Phase 6: API security, input validation, public UUIDs, GET /runs, CORS, stream tokens
 
 Progress: [██████████] 100% (Phases 1-6 complete, Phase 6 plan 03/03 done)
 
@@ -82,6 +82,12 @@ Recent decisions affecting current work:
 
 - Validate run.py and user_run.py work end-to-end with live provider
 - Update ROADMAP.md Phase 2 checkbox status (plans 02-03 through 02-05 are done but unchecked)
+
+### Phase Features
+
+| Phase | Feature | Mode | Date | Commit | Status |
+|-------|---------|------|------|--------|--------|
+| 6 | API security, input validation, public UUIDs, GET /runs, CORS, stream tokens | Extend | 2026-03-05 | 669ec5c | ✓ Complete |
 
 ### Blockers/Concerns
 
