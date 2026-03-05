@@ -69,7 +69,6 @@ async def post_run(body: RunRequest, request: Request) -> EventSourceResponse:
     # Store receive_stream for reconnection support
     request.app.state.active_streams[run_id] = {
         "stream": receive_stream,
-        "client_ip": client_ip,
     }
 
     async def producer() -> None:

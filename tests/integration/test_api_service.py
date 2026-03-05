@@ -14,7 +14,7 @@ from typing import Any
 import httpx
 from fastapi import FastAPI
 
-from agentic_workflows.api.routes import health, run, tools
+from agentic_workflows.api.routes import health, run, runs, tools
 from agentic_workflows.orchestration.langgraph.graph import LangGraphOrchestrator
 from agentic_workflows.storage.sqlite import SQLiteRunStore
 from tests.conftest import ScriptedProvider
@@ -45,6 +45,7 @@ def _build_test_app(
     test_app.include_router(health.router)
     test_app.include_router(tools.router)
     test_app.include_router(run.router)
+    test_app.include_router(runs.router)
 
     # Set state directly (lifespan not triggered by ASGITransport)
     test_app.state.orchestrator = orchestrator
@@ -223,3 +224,73 @@ async def test_concurrent_runs() -> None:
         if rid:
             run_ids.add(rid)
     assert len(run_ids) == 3, f"Expected 3 distinct run_ids, got {len(run_ids)}: {run_ids}"
+
+
+async def test_post_run_returns_pub_id() -> None:
+    """run_id in SSE events starts with 'pub_' (public ID prefix)."""
+    app = _build_test_app()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/run",
+            json={"user_input": "Task 1: Repeat the message 'hello' using repeat_message."},
+            timeout=60.0,
+        )
+    assert resp.status_code == 200
+    events = _parse_sse_events(resp.text)
+    run_id = _extract_run_id_from_events(events)
+    assert run_id is not None
+    assert run_id.startswith("pub_"), f"Expected pub_ prefix, got: {run_id}"
+
+
+async def test_post_run_returns_stream_token() -> None:
+    """POST /run response includes an X-Stream-Token header."""
+    app = _build_test_app()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/run",
+            json={"user_input": "Task 1: Repeat the message 'hello' using repeat_message."},
+            timeout=60.0,
+        )
+    assert resp.status_code == 200
+    assert resp.headers.get("x-stream-token"), "Expected X-Stream-Token header in response"
+
+
+async def test_get_runs_empty() -> None:
+    """GET /runs with no prior runs returns empty items list."""
+    app = _build_test_app()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/runs")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["items"] == []
+    assert data["next_cursor"] is None
+
+
+async def test_get_runs_after_run() -> None:
+    """After POST /run, GET /runs returns 1 item with matching run_id."""
+    app = _build_test_app()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        # Do a run
+        run_resp = await client.post(
+            "/run",
+            json={"user_input": "Task 1: Repeat the message 'hello' using repeat_message."},
+            timeout=60.0,
+        )
+        assert run_resp.status_code == 200
+        events = _parse_sse_events(run_resp.text)
+        run_id = _extract_run_id_from_events(events)
+
+        # List runs
+        list_resp = await client.get("/runs")
+    assert list_resp.status_code == 200
+    data = list_resp.json()
+    assert len(data["items"]) == 1
+    assert data["items"][0]["run_id"] == run_id

@@ -102,3 +102,27 @@ def test_compaction_threshold_env_var(monkeypatch):
     msgs = _make_messages(20)  # well above threshold of 5
     state = ensure_state_defaults({"messages": msgs})
     assert len(state["messages"]) <= 5
+
+
+# ---------------------------------------------------------------------------
+# _ANNOTATED_LIST_FIELDS synchronization test
+# ---------------------------------------------------------------------------
+
+
+def test_annotated_list_fields_synchronized():
+    """_ANNOTATED_LIST_FIELDS must contain every Annotated[list[...], operator.add] field in RunState."""
+    from typing import Annotated, get_args, get_origin, get_type_hints
+
+    from agentic_workflows.orchestration.langgraph.graph import _ANNOTATED_LIST_FIELDS
+
+    hints = get_type_hints(RunState, include_extras=True)
+    reducer_fields = set()
+    for name, hint in hints.items():
+        if get_origin(hint) is Annotated:
+            args = get_args(hint)
+            if len(args) >= 2 and args[1] is operator.add:
+                reducer_fields.add(name)
+
+    assert reducer_fields == _ANNOTATED_LIST_FIELDS, (
+        f"Mismatch: RunState has {reducer_fields}, _ANNOTATED_LIST_FIELDS has {_ANNOTATED_LIST_FIELDS}"
+    )

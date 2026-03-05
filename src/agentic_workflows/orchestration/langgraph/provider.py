@@ -190,15 +190,25 @@ class OllamaChatProvider(_RetryingProviderBase):
             timeout=self.timeout_seconds,
         )
         self.model = resolved_model
+        self.num_ctx = _env_int("OLLAMA_NUM_CTX", 0)
+
+    def _ollama_extra_body(self) -> dict | None:
+        """Build Ollama-specific options passed via extra_body."""
+        if self.num_ctx > 0:
+            return {"options": {"num_ctx": self.num_ctx}}
+        return None
 
     @observe(name="provider.generate")
     def generate(self, messages: Sequence[AgentMessage]) -> str:
+        extra = self._ollama_extra_body()
+
         def _request_json_mode() -> object:
             return self.client.chat.completions.create(
                 model=self.model,
                 messages=list(messages),
                 response_format={"type": "json_object"},
                 timeout=self.timeout_seconds,
+                **({"extra_body": extra} if extra else {}),
             )
 
         def _request_plain_mode() -> object:
@@ -206,6 +216,7 @@ class OllamaChatProvider(_RetryingProviderBase):
                 model=self.model,
                 messages=list(messages),
                 timeout=self.timeout_seconds,
+                **({"extra_body": extra} if extra else {}),
             )
 
         try:

@@ -16,15 +16,18 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def make_node_start(node: str, run_id: str) -> dict[str, Any]:
+def make_node_start(node: str, run_id: str, model: str | None = None) -> dict[str, Any]:
     """Emit when a graph node begins execution."""
-    return {
+    evt: dict[str, Any] = {
         "type": "node_start",
         "tier": "ui",
         "node": node,
         "run_id": run_id,
         "timestamp": _now_iso(),
     }
+    if model is not None:
+        evt["model"] = model
+    return evt
 
 
 def make_node_end(

@@ -33,7 +33,11 @@ def _ensure_server_running() -> None:
     """Check if the API server is reachable; auto-start uvicorn if not."""
     for attempt in range(6):
         try:
-            resp = httpx.get(f"{API_BASE_URL}/health", timeout=2.0)
+            _health_headers: dict[str, str] = {}
+            _health_api_key = os.environ.get("API_KEY")
+            if _health_api_key:
+                _health_headers["X-API-Key"] = _health_api_key
+            resp = httpx.get(f"{API_BASE_URL}/health", timeout=2.0, headers=_health_headers)
             if resp.status_code == 200:
                 return
         except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPError):
@@ -82,13 +86,48 @@ def _render_event(event: dict[str, Any]) -> None:
 
     if event_type == "node_start":
         node = event.get("node", "unknown")
-        console.print(f"[bold blue]>>> {node}[/]")
+        model = event.get("model")
+        label = f">>> {node}" + (f" (model: {model})" if model else "")
+        console.print(f"[bold blue]{label}[/]")
 
     elif event_type == "node_end":
         node = event.get("node", "unknown")
         console.print(f"[green]  completed: {node}[/]")
 
     elif event_type == "run_complete":
+        result = event.get("result", {})
+
+        # Answer panel
+        answer = result.get("answer", "")
+        if answer:
+            console.print(Panel(str(answer), title="Answer", style="bold cyan"))
+
+        # Mission report panels
+        reports = result.get("mission_report", [])
+        for i, report in enumerate(reports, 1):
+            if not isinstance(report, dict):
+                continue
+            mission_text = report.get("mission", "")
+            title = f"Mission {i}: {mission_text[:60]}" if mission_text else f"Mission {i}"
+            tools = report.get("used_tools", [])
+            status = report.get("result", "")
+            lines = []
+            if status:
+                status_str = str(status)[:300]
+                lines.append(status_str)
+            if tools:
+                lines.append(f"Tools: {', '.join(str(t) for t in tools)}")
+            body = "\n".join(lines) if lines else "(no details)"
+            console.print(Panel(body, title=title, style="cyan"))
+
+        # Audit panel
+        audit = result.get("audit_report")
+        if isinstance(audit, dict):
+            checks = audit.get("checks", [])
+            passed = sum(1 for c in checks if isinstance(c, dict) and c.get("passed"))
+            total = len(checks)
+            console.print(Panel(f"Checks: {passed}/{total} passed", title="Audit", style="bold yellow"))
+
         console.print(Panel("Run Complete", style="bold green"))
 
     elif event_type == "state_diff":
@@ -110,9 +149,14 @@ async def stream_run(
     if prior_context is not None:
         payload["prior_context"] = prior_context
 
+    headers: dict[str, str] = {}
+    _api_key = os.environ.get("API_KEY")
+    if _api_key:
+        headers["X-API-Key"] = _api_key
+
     run_id = ""
     async with httpx.AsyncClient(base_url=API_BASE_URL, timeout=300.0) as client:
-        async with client.stream("POST", "/run", json=payload) as resp:
+        async with client.stream("POST", "/run", json=payload, headers=headers) as resp:
             if resp.status_code != 200:
                 body = await resp.aread()
                 console.print(f"[bold red]Server error {resp.status_code}: {body.decode()[:500]}[/]")
@@ -144,7 +188,7 @@ async def interactive_session() -> None:
     console.print(sep)
     console.print("  Agentic Workflows - API Client Session")
     console.print(sep)
-    console.print("  Commands: quit/q  exit")
+    console.print("  Commands: quit/q  exit  clear")
     console.print(f"  API: {API_BASE_URL}")
     console.print(sep)
     console.print()
@@ -163,6 +207,10 @@ async def interactive_session() -> None:
         if user_input.lower() in {"quit", "exit", "q"}:
             console.print("Session ended.")
             break
+        if user_input.lower() == "clear":
+            prior_context = None
+            console.print("[yellow]Context cleared.[/]")
+            continue
 
         console.print()
         run_id = await stream_run(user_input, prior_context=prior_context)

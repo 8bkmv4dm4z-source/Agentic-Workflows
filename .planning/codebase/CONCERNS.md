@@ -108,7 +108,7 @@
 
 **Langfuse instrumentation coverage is provider-specific today:**
 - Files: `src/agentic_workflows/observability.py`, `src/agentic_workflows/orchestration/langgraph/provider.py`
-- Risk: Only `OllamaChatProvider.generate()` is decorated with `@observe`; `OpenAIChatProvider` and `GroqChatProvider` do not emit the same provider-level spans.
+- Risk: Only the Ollama providers (`OllamaChatProvider` and `OllamaThinkingChatProvider`) are decorated with `@observe`; `OpenAIChatProvider` and `GroqChatProvider` do not emit the same provider-level spans.
 - Impact: Traces differ by provider, which weakens debugging and makes production observability inconsistent.
 - Migration plan: Apply the same tracing wrapper to all supported providers and add structural tests so observability parity does not regress.
 
