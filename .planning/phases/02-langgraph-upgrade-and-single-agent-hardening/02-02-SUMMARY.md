@@ -6,6 +6,7 @@ tags: [reducers, annotated, compaction, langgraph, state]
 dependency_graph:
   requires: [02-01]
   provides: [LGUP-03, LGUP-04]
+  requirements_completed: [LGUP-03, LGUP-04]
   affects: [state_schema.py, graph.py, test_state_schema.py, test_langgraph_flow.py]
 tech_stack:
   added: [operator.add, typing.Annotated, os.getenv compaction]

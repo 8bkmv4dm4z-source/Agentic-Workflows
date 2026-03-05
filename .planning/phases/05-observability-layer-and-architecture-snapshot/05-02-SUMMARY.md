@@ -2,6 +2,7 @@
 plan: 05-02
 status: completed
 requirement: LRNG-03
+requirements_completed: [LRNG-03]
 ---
 
 ## Summary

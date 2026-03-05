@@ -2,6 +2,7 @@
 plan: 05-01
 status: completed
 requirement: OBSV-01
+requirements_completed: [OBSV-01]
 ---
 
 ## Summary
