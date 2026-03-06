@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: in-progress
-stopped_at: Completed 07-02-PLAN.md
-last_updated: "2026-03-06T15:29:16Z"
-last_activity: "2026-03-06 — Postgres test suite: store unit tests, factory tests, concurrency validation"
+stopped_at: Completed 07-03-PLAN.md
+last_updated: "2026-03-06T17:04:35Z"
+last_activity: "2026-03-06 — Docker containerization + CI pipeline with Postgres matrix and coverage"
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 22
-  completed_plans: 21
-  percent: 95
+  completed_plans: 22
+  percent: 100
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 ## Current Position
 
 Phase: 7 of 7 (Production Persistence and CI)
-Plan: 2 of 3 in current phase (07-02 DONE)
-Status: Phase 7 plan 02 complete — Postgres test suite with 25 tests covering all 3 stores, store factory, and 5-concurrent-request validation.
-Last activity: 2026-03-06 — Postgres test suite: store unit tests, factory tests, concurrency validation
+Plan: 3 of 3 in current phase (07-03 DONE)
+Status: Phase 7 plan 03 complete — Docker containerization + CI pipeline with sqlite/postgres matrix and 80% coverage gate.
+Last activity: 2026-03-06 — Docker containerization + CI pipeline with Postgres matrix and coverage
 
-Progress: [█████████░] 95% (Phases 1-6 complete, Phase 7 plan 02/03 done)
+Progress: [██████████] 100% (Phases 1-6 complete, Phase 7 plan 03/03 done)
 
 ## Test Status
 
@@ -55,7 +55,7 @@ Progress: [█████████░] 95% (Phases 1-6 complete, Phase 7 pla
 | 04-multi-agent-integration | 6 | 30 min | 5 min |
 | 05-observability | 2 | ~10 min | 5 min |
 | 06-fastapi-service-layer | 3/3 | 16 min | 5 min |
-| 07-production-persistence-and-ci | 2/3 | 13 min | 6 min |
+| 07-production-persistence-and-ci | 3/3 | 23 min | 8 min |
 
 ## Accumulated Context
 
@@ -89,6 +89,10 @@ Recent decisions affecting current work:
 - [Phase 07-02]: pytest.importorskip("psycopg_pool") at module level for Postgres test files -- prevents collection errors in SQLite-only CI
 - [Phase 07-02]: Session-scoped pg_pool fixture with per-test TRUNCATE via clean_pg -- one pool per session, deterministic isolation
 - [Phase 07-02]: Store factory tests verify ENV detection logic only, not Postgres connections -- runs in all CI matrices
+- [Phase 07-03]: Single-stage Docker build (python:3.12-slim) -- psycopg[binary] bundles libpq, no multi-stage needed
+- [Phase 07-03]: Port 5433:5432 for local docker-compose -- Docker Desktop + WSL2 port binding conflict on 5432
+- [Phase 07-03]: Coverage enforced only in CI (--cov-fail-under=80), not in default pytest addopts
+- [Phase 07-03]: CI matrix: sqlite leg runs lint+typecheck+test, postgres leg runs init+test
 
 ### Pending Todos
 
@@ -103,6 +107,7 @@ Recent decisions affecting current work:
 | 6 | Stabilize error handling, context eviction, SQLite thread safety | Stabilize | 2026-03-06 | d30bb22 | ✓ Complete |
 | 7 | Postgres persistence layer: stores, protocols, migrations, store factory | Implement | 2026-03-06 | 3734881 | ✓ Complete |
 | 7 | Postgres test suite: 25 tests, store factory, concurrency validation | Test | 2026-03-06 | 13fdedd | ✓ Complete |
+| 7 | Docker containerization + CI with sqlite/postgres matrix, 80% coverage | Infra | 2026-03-06 | 3fb6923 | ✓ Complete |
 
 ### Blockers/Concerns
 
@@ -112,6 +117,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-03-06T15:29:16Z
-Stopped at: Completed 07-02-PLAN.md
-Resume file: .planning/phases/07-production-persistence-and-ci/07-02-SUMMARY.md
+Last session: 2026-03-06T17:04:35Z
+Stopped at: Completed 07-03-PLAN.md
+Resume file: .planning/phases/07-production-persistence-and-ci/07-03-SUMMARY.md

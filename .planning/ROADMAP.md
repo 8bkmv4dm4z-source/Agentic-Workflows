@@ -123,8 +123,8 @@ Plans:
 **Plans**: 4 plans
 Plans:
 - [x] 07-01-PLAN.md — Postgres store implementations: Protocol abstractions, PostgresCheckpointStore, PostgresMemoStore, PostgresRunStore, store factory wiring, SQL init scripts (PROD-03)
-- [ ] 07-02-PLAN.md — Postgres test suite: test fixtures, unit tests for all three stores, store factory tests, concurrency test (PROD-03)
-- [ ] 07-03-PLAN.md — Docker containerization + CI pipeline: Dockerfile, docker-compose.yml, CI with Postgres matrix, coverage enforcement (PROD-04, PROD-05)
+- [x] 07-02-PLAN.md — Postgres test suite: test fixtures, unit tests for all three stores, store factory tests, concurrency test (PROD-03)
+- [x] 07-03-PLAN.md — Docker containerization + CI pipeline: Dockerfile, docker-compose.yml, CI with Postgres matrix, coverage enforcement (PROD-04, PROD-05)
 - [ ] 07-04-PLAN.md — Architecture walkthrough: WALKTHROUGH_PHASE7.md covering Docker, Postgres, CI, store factory (PROD-03, PROD-04, PROD-05)
 
 ## Progress
@@ -140,4 +140,4 @@ Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7
 | 4. Multi-Agent Integration and Model Routing | 6/6 | Complete | 2026-03-03 |
 | 5. Observability Layer and Architecture Snapshot | 2/2 | Complete | 2026-03-04 |
 | 6. Production Service Layer | 3/3 | Complete | 2026-03-04 |
-| 7. Production Persistence and CI | 2/4 | In Progress|  |
+| 7. Production Persistence and CI | 3/4 | In Progress|  |
