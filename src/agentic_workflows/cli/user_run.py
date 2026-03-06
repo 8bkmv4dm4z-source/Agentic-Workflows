@@ -16,17 +16,58 @@ import os
 import subprocess
 import sys
 import time
+from pathlib import Path
 from typing import Any
 
 import httpx
 from rich.console import Console
 from rich.panel import Panel
 
+from agentic_workflows.logger import setup_dual_logging
+
 API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
+_TMP_DIR = Path(os.environ.get("TMP_DIR", ".tmp"))
 
 console = Console()
 
 _DEBUG = False
+
+
+def _write_run_report(run_id: str, result: dict[str, Any]) -> None:
+    """Write a compact run report to .tmp/p2_latest_run.log (overwrite each run)."""
+    _TMP_DIR.mkdir(parents=True, exist_ok=True)
+    lines = [f"RUN_ID: {run_id}"]
+
+    mission_reports = result.get("mission_report", [])
+    lines.append(f"MISSIONS: {len(mission_reports)}")
+    for report in mission_reports:
+        if not isinstance(report, dict):
+            continue
+        mid = report.get("mission_id", "?")
+        tools = ", ".join(str(t) for t in report.get("used_tools", [])) or "none"
+        result_text = str(report.get("result", ""))[:200]
+        lines.append(f"  Mission {mid} [tools={tools}]: {result_text}")
+
+    audit = result.get("audit_report")
+    if isinstance(audit, dict):
+        passed = audit.get("passed", 0)
+        warned = audit.get("warned", 0)
+        failed = audit.get("failed", 0)
+        lines.append(f"AUDIT: passed={passed} warned={warned} failed={failed}")
+        for finding in audit.get("findings", []):
+            if not isinstance(finding, dict):
+                continue
+            level = finding.get("level", "?")
+            if level != "pass":
+                lines.append(
+                    f"  [{level.upper()}] mission={finding.get('mission_id')} "
+                    f"{finding.get('check')}: {finding.get('detail')}"
+                )
+
+    answer = result.get("answer", "")
+    lines.append(f"ANSWER: {str(answer)[:500]}")
+
+    (_TMP_DIR / "p2_latest_run.log").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _ensure_server_running() -> None:
@@ -143,8 +184,8 @@ def _render_event(event: dict[str, Any]) -> None:
 async def stream_run(
     user_input: str,
     prior_context: list[dict[str, Any]] | None = None,
-) -> str:
-    """POST /run and stream SSE events, returning the run_id."""
+) -> tuple[str, str]:
+    """POST /run and stream SSE events, returning (run_id, answer)."""
     payload: dict[str, Any] = {"user_input": user_input}
     if prior_context is not None:
         payload["prior_context"] = prior_context
@@ -155,12 +196,14 @@ async def stream_run(
         headers["X-API-Key"] = _api_key
 
     run_id = ""
+    answer = ""
+    last_result: dict[str, Any] = {}
     async with httpx.AsyncClient(base_url=API_BASE_URL, timeout=300.0) as client:
         async with client.stream("POST", "/run", json=payload, headers=headers) as resp:
             if resp.status_code != 200:
                 body = await resp.aread()
                 console.print(f"[bold red]Server error {resp.status_code}: {body.decode()[:500]}[/]")
-                return ""
+                return "", ""
 
             async for line in resp.aiter_lines():
                 line = line.strip()
@@ -176,10 +219,16 @@ async def stream_run(
 
                 if not run_id and "run_id" in event:
                     run_id = event["run_id"]
+                if event.get("type") == "run_complete":
+                    last_result = event.get("result", {})
+                    answer = last_result.get("answer", "")
 
                 _render_event(event)
 
-    return run_id
+    if run_id and last_result:
+        _write_run_report(run_id, last_result)
+
+    return run_id, answer
 
 
 async def interactive_session() -> None:
@@ -213,14 +262,16 @@ async def interactive_session() -> None:
             continue
 
         console.print()
-        run_id = await stream_run(user_input, prior_context=prior_context)
+        run_id, answer = await stream_run(user_input, prior_context=prior_context)
 
         # Build minimal prior context for follow-up turns
         if run_id:
             if prior_context is None:
                 prior_context = []
             prior_context.append({"role": "user", "content": user_input})
-            # Keep context window manageable
+            if answer:
+                prior_context.append({"role": "assistant", "content": answer})
+            # Keep context window manageable (5 exchanges = 10 messages)
             if len(prior_context) > 10:
                 prior_context = prior_context[-10:]
 
@@ -233,6 +284,7 @@ def main() -> None:
     if "--debug" in sys.argv or os.environ.get("DEBUG_SSE"):
         _DEBUG = True
 
+    setup_dual_logging(log_dir=str(_TMP_DIR))
     _ensure_server_running()
     asyncio.run(interactive_session())
 
