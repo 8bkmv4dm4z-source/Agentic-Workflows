@@ -9,6 +9,8 @@ files_modified:
   - src/agentic_workflows/orchestration/langgraph/graph.py
   - src/agentic_workflows/storage/sqlite.py
   - tests/unit/test_run_store.py
+  - tests/unit/test_provider_retry.py
+  - tests/fixtures/__init__.py
   - tests/fixtures/sse_sequences/__init__.py
   - tests/fixtures/sse_sequences/happy_path.py
   - tests/fixtures/sse_sequences/error_event.py
@@ -38,6 +40,7 @@ must_haves:
     - "Concurrent update_run: 5 simultaneous calls complete without OperationalError"
     - "Context eviction trims message history before each plan call when estimated tokens exceed CTX_EVICTION_RATIO * OLLAMA_NUM_CTX"
     - "Evicted tool results are replaced by one-line placeholder messages in LLM context"
+    - "SQLiteRunStore creates .tmp/ directory on first init without crashing"
     - "All 536 existing tests continue to pass"
   artifacts:
     - path: "src/agentic_workflows/orchestration/langgraph/provider.py"
@@ -175,7 +178,8 @@ make_error(run_id, detail)     -> {"type": "error",       "tier": "ui", "run_id"
   <files>
     src/agentic_workflows/orchestration/langgraph/provider.py,
     src/agentic_workflows/storage/sqlite.py,
-    tests/unit/test_run_store.py
+    tests/unit/test_run_store.py,
+    tests/unit/test_provider_retry.py
   </files>
   <behavior>
     - test_http_500_is_retryable: _is_retryable_timeout_error returns True for exception with "http 500", "status code 500", "context length exceeded"
@@ -184,6 +188,7 @@ make_error(run_id, detail)     -> {"type": "error",       "tier": "ui", "run_id"
     - test_large_result_warning_logged: same scenario emits a structlog warning with key "run_store.result_truncated"
     - test_result_under_limit_not_truncated: result under 512KB stored without modification
     - test_concurrent_update_run: asyncio.gather with 5 simultaneous update_run calls all succeed, final status is deterministic
+    - test_makedirs_on_init: SQLiteRunStore instantiated with a path under a nonexistent temp directory does not raise
   </behavior>
   <action>
 1. **src/agentic_workflows/orchestration/langgraph/provider.py** — Extend `_is_retryable_timeout_error`:
@@ -258,6 +263,19 @@ make_error(run_id, detail)     -> {"type": "error",       "tier": "ui", "run_id"
        assert row["status"] == "running"  # all updates used same status
    ```
 
+   Add `test_makedirs_on_init` to verify SQLiteRunStore creates missing directories:
+   ```python
+   @pytest.mark.asyncio
+   async def test_makedirs_on_init(tmp_path):
+       """SQLiteRunStore must not crash if its parent directory does not yet exist."""
+       db_path = str(tmp_path / "nonexistent_subdir" / "runs.db")
+       store = SQLiteRunStore(db_path=db_path)
+       await store.initialize()  # should create the directory and schema without error
+       await store.save_run("init-test", status="running")
+       row = await store.get_run("init-test")
+       assert row is not None
+   ```
+
    Add `test_http_500_is_retryable` in a new `tests/unit/test_provider_retry.py` file:
    ```python
    from agentic_workflows.orchestration.langgraph.provider import _is_retryable_timeout_error
@@ -277,6 +295,7 @@ make_error(run_id, detail)     -> {"type": "error",       "tier": "ui", "run_id"
     - save_run with result > 512KB stores truncated tool_history with mission_reports intact
     - structlog warning emitted on truncation
     - 5 concurrent update_run calls complete without OperationalError
+    - SQLiteRunStore instantiated with nonexistent parent directory does not raise (test_makedirs_on_init passes)
     - All existing test_run_store.py tests still pass
   </done>
 </task>
@@ -388,10 +407,7 @@ make_error(run_id, detail)     -> {"type": "error",       "tier": "ui", "run_id"
    async def test_happy_path_render():
        """stream_run() renders node_start/node_end/run_complete and returns correct run_id."""
        transport = _make_transport(HAPPY_PATH_EVENTS)
-       captured_prints = []
-
        import agentic_workflows.cli.user_run as user_run_mod
-       original_console = user_run_mod.console
        buf = io.StringIO()
        test_console = Console(file=buf, highlight=False, markup=True)
        with patch.object(user_run_mod, "console", test_console):
@@ -399,7 +415,6 @@ make_error(run_id, detail)     -> {"type": "error",       "tier": "ui", "run_id"
                async with httpx.AsyncClient(
                    transport=transport, base_url="http://mock", timeout=10.0
                ) as client:
-                   # Patch httpx.AsyncClient inside stream_run to use our transport
                    with patch("httpx.AsyncClient", return_value=client):
                        run_id, answer = await user_run_mod.stream_run("test input")
 
@@ -416,17 +431,12 @@ make_error(run_id, detail)     -> {"type": "error",       "tier": "ui", "run_id"
        buf = io.StringIO()
        test_console = Console(file=buf, highlight=False, markup=True)
        with patch.object(user_run_mod, "console", test_console):
-           with patch("httpx.AsyncClient") as mock_cls:
-               # Build async context manager manually
-               client = httpx.AsyncClient(transport=transport, base_url="http://mock", timeout=10.0)
-               mock_cls.return_value.__aenter__ = lambda s: asyncio.coroutine(lambda: client)()
-               # Use the real transport by patching API_BASE_URL and constructing directly
-               with patch.object(user_run_mod, "API_BASE_URL", "http://mock"):
-                   async with httpx.AsyncClient(
-                       transport=transport, base_url="http://mock", timeout=10.0
-                   ) as real_client:
-                       with patch("httpx.AsyncClient", return_value=real_client):
-                           run_id, answer = await user_run_mod.stream_run("test input")
+           with patch.object(user_run_mod, "API_BASE_URL", "http://mock"):
+               async with httpx.AsyncClient(
+                   transport=transport, base_url="http://mock", timeout=10.0
+               ) as real_client:
+                   with patch("httpx.AsyncClient", return_value=real_client):
+                       run_id, answer = await user_run_mod.stream_run("test input")
 
        output = buf.getvalue()
        assert "ERROR" in output
@@ -697,7 +707,7 @@ def test_eviction_stops_when_under_threshold(orch):
 </tasks>
 
 <verification>
-- `pytest tests/unit/test_run_store.py tests/unit/test_provider_retry.py -x -q` — all pass including concurrent and truncation tests
+- `pytest tests/unit/test_run_store.py tests/unit/test_provider_retry.py -x -q` — all pass including concurrent, truncation, and makedirs tests
 - `pytest tests/unit/test_user_run.py -x -q` — all 3 MockTransport tests pass
 - `pytest tests/unit/test_context_eviction.py -x -q` — all 6 eviction tests pass
 - `pytest tests/ -q` — full suite passes at 536+ (no regressions)
@@ -710,6 +720,7 @@ def test_eviction_stops_when_under_threshold(orch):
 - test_user_run.py: 3 tests using httpx.MockTransport (no live server) — happy path, error event, reconnect
 - SSE fixture sequences importable from tests/fixtures/sse_sequences/
 - SQLiteRunStore: result > 512KB stored with truncated tool_history, mission_reports intact, warning logged
+- SQLiteRunStore: creates parent directory on init (test_makedirs_on_init passes)
 - Concurrent update_run: 5 simultaneous calls complete without OperationalError
 - Context eviction: _evict_tool_result_messages trims before plan call when OLLAMA_NUM_CTX set
 - Placeholder messages in LLM context when tool results evicted
