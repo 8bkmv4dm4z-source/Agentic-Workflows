@@ -13,6 +13,10 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any
 
+from agentic_workflows.logger import get_logger
+
+LOGGER = get_logger("langgraph.mission_parser")
+
 
 @dataclass
 class MissionStep:
@@ -116,24 +120,119 @@ _TOOL_KEYWORD_MAP: dict[str, list[str]] = {
     "correlation": ["data_analysis"],
     "json": ["json_parser"],
     "parse": ["json_parser"],
-    "validate": ["json_parser"],
+    "validate": ["json_parser", "validate_data"],
     "flatten": ["json_parser"],
     "extract_keys": ["json_parser"],
     "regex": ["regex_matcher"],
     "pattern": ["regex_matcher"],
     "match": ["regex_matcher"],
     "find_all": ["regex_matcher"],
+    "functions": ["parse_code_structure"],
+    "classes": ["parse_code_structure"],
+    "imports": ["parse_code_structure"],
+    "code": ["parse_code_structure"],
+    "schema": ["describe_db_schema", "validate_data"],
+    "database": ["describe_db_schema"],
+    "sqlite": ["describe_db_schema"],
+    "csv": ["describe_db_schema", "format_converter"],
+    "db": ["describe_db_schema"],
+    # Phase 6: filesystem search & navigation
+    "list": ["list_directory"],
+    "directory": ["list_directory"],
+    "ls": ["list_directory"],
+    "folder": ["list_directory"],
+    "search": ["search_files", "search_content"],
+    "find": ["search_files", "search_content"],
+    "glob": ["search_files"],
+    "locate": ["search_files"],
+    "grep": ["search_content"],
+    # Phase 6: comprehension & analysis
+    "summarize": ["summarize_text"],
+    "condense": ["summarize_text"],
+    "tldr": ["summarize_text"],
+    "compare": ["compare_texts"],
+    "diff": ["compare_texts"],
+    "difference": ["compare_texts"],
+    "similarity": ["compare_texts"],
+    "intent": ["classify_intent"],
+    "classify": ["classify_intent"],
+    "categorize": ["classify_intent"],
+    # Phase 6: format conversion
+    "convert": ["format_converter"],
+    "yaml": ["format_converter"],
+    "toml": ["format_converter"],
+    "ini": ["format_converter"],
+    "format": ["format_converter"],
+    # Phase 6: file management
+    "copy": ["file_manager"],
+    "move": ["file_manager"],
+    "rename": ["file_manager"],
+    "delete": ["file_manager"],
+    "mkdir": ["file_manager"],
+    # Phase 6: encode/decode
+    "encode": ["encode_decode"],
+    "decode": ["encode_decode"],
+    "base64": ["encode_decode"],
+    "hex": ["encode_decode"],
+    # Phase 6: validation
+    "check": ["validate_data"],
+    "verify": ["validate_data"],
+    "rule": ["validate_data"],
+    # Phase 6: run context
+    "last_run": ["retrieve_run_context"],
+    "previous": ["retrieve_run_context"],
+    "context": ["retrieve_run_context"],
+    "history": ["retrieve_run_context"],
+    # Natural language creation verbs
+    "create": ["write_file"],
+    "make": ["write_file"],
+    "generate": ["write_file"],
+    "produce": ["write_file"],
+    # Counting / measurement aliases
+    "count": ["math_stats"],
+    "tally": ["math_stats"],
+    "measure": ["math_stats"],
+    # Summarization alias
+    "brief": ["summarize_text"],
+    # Comparison alias
+    "contrast": ["compare_texts"],
+    # Classification alias
+    "label": ["classify_intent"],
+    # Extraction targets both regex and JSON
+    "extract": ["regex_matcher", "json_parser"],
 }
 
 
-def parse_missions(user_input: str, timeout_seconds: float = 5.0) -> StructuredPlan:
+def parse_missions(
+    user_input: str,
+    timeout_seconds: float = 5.0,
+    max_plan_steps: int = 7,
+) -> StructuredPlan:
     """Parse user input into a StructuredPlan.
 
     Tries structured parsing first, falls back to flat regex extraction.
     Protected by a hard timeout to prevent runaway parsing on huge inputs.
+
+    If the parsed plan has more than *max_plan_steps* top-level steps,
+    excess steps are merged into the last allowed step to prevent
+    over-decomposition (guidance doc recommendation: 3-7 steps per plan).
     """
+    LOGGER.info(
+        "PARSER START timeout_seconds=%.2f max_plan_steps=%s input_chars=%s",
+        timeout_seconds,
+        max_plan_steps,
+        len(user_input),
+    )
     if timeout_seconds <= 0:
-        return _parse_missions_inner(user_input)
+        plan = _parse_missions_inner(user_input)
+        limited = _enforce_step_limit(plan, max_plan_steps)
+        LOGGER.info(
+            "PARSER RESULT method=%s steps=%s flat_missions=%s",
+            limited.parsing_method,
+            len(limited.steps),
+            len(limited.flat_missions),
+        )
+        return limited
 
     outbox: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
 
@@ -148,11 +247,35 @@ def parse_missions(user_input: str, timeout_seconds: float = 5.0) -> StructuredP
     try:
         kind, payload = outbox.get(timeout=timeout_seconds)
     except queue.Empty:
-        return _build_fallback_plan(user_input)
+        LOGGER.info("PARSER FALLBACK reason=timeout timeout_seconds=%.2f", timeout_seconds)
+        fallback = _enforce_step_limit(_build_fallback_plan(user_input), max_plan_steps)
+        LOGGER.info(
+            "PARSER RESULT method=%s steps=%s flat_missions=%s",
+            fallback.parsing_method,
+            len(fallback.steps),
+            len(fallback.flat_missions),
+        )
+        return fallback
 
     if kind == "err":
-        return _build_fallback_plan(user_input)
-    return payload
+        LOGGER.info("PARSER FALLBACK reason=exception")
+        fallback = _enforce_step_limit(_build_fallback_plan(user_input), max_plan_steps)
+        LOGGER.info(
+            "PARSER RESULT method=%s steps=%s flat_missions=%s",
+            fallback.parsing_method,
+            len(fallback.steps),
+            len(fallback.flat_missions),
+        )
+        return fallback
+
+    limited = _enforce_step_limit(payload, max_plan_steps)
+    LOGGER.info(
+        "PARSER RESULT method=%s steps=%s flat_missions=%s",
+        limited.parsing_method,
+        len(limited.steps),
+        len(limited.flat_missions),
+    )
+    return limited
 
 
 def _parse_missions_inner(user_input: str) -> StructuredPlan:
@@ -334,19 +457,87 @@ def _detect_dependencies(steps: list[MissionStep]) -> None:
 def _steps_to_flat_missions(steps: list[MissionStep]) -> list[str]:
     """Convert steps into flat mission strings for backward compat.
 
-    Only top-level steps become flat missions (sub-tasks are implicit).
+    Top-level steps become flat missions and include child sub-task context.
+    This preserves critical constraints (for example: file paths/counts)
+    for downstream validators without changing mission count semantics.
     """
+    children_map: dict[str, list[MissionStep]] = {}
+    for step in steps:
+        if step.parent_id is None:
+            continue
+        children_map.setdefault(step.parent_id, []).append(step)
+
     flat: list[str] = []
     for step in steps:
         if step.parent_id is None:
-            # Reconstruct "Task N: description" format
-            flat.append(f"Task {step.id}: {step.description}")
+            mission = f"Task {step.id}: {step.description}"
+            children = children_map.get(step.id, [])
+            if children:
+                child_descriptions = "; ".join(
+                    f"{child.id}. {child.description}" for child in children
+                )
+                mission = f"{mission} | Subtasks: {child_descriptions}"
+            flat.append(mission)
     return flat if flat else [s.description for s in steps]
+
+
+def _enforce_step_limit(plan: StructuredPlan, max_steps: int) -> StructuredPlan:
+    """Merge excess top-level steps when the plan exceeds *max_steps*.
+
+    Sub-tasks (steps with a parent_id) are not counted toward the limit.
+    When merging, excess steps are folded into the last allowed step's
+    description so no information is lost.
+    """
+    if max_steps <= 0:
+        return plan
+
+    top_level = [s for s in plan.steps if s.parent_id is None]
+    if len(top_level) <= max_steps:
+        return plan
+
+    keep = top_level[:max_steps]
+    excess = top_level[max_steps:]
+    LOGGER.info(
+        "PARSER STEP LIMIT applied max_steps=%s original_top_level=%s merged_excess=%s",
+        max_steps,
+        len(top_level),
+        len(excess),
+    )
+
+    # Merge excess descriptions into the last kept step
+    last = keep[-1]
+    merged_desc = [last.description]
+    for s in excess:
+        merged_desc.append(s.description)
+        # Also merge any suggested tools
+        for tool in s.suggested_tools:
+            if tool not in last.suggested_tools:
+                last.suggested_tools.append(tool)
+    last.description = " | ".join(merged_desc)
+
+    # Rebuild steps: kept top-level + their children + excess children reparented
+    excess_ids = {s.id for s in excess}
+    kept_ids = {s.id for s in keep}
+    new_steps: list[MissionStep] = []
+    for s in plan.steps:
+        if s.parent_id is None:
+            if s.id in kept_ids:
+                new_steps.append(s)
+        else:
+            if s.parent_id in excess_ids:
+                # Reparent to the last kept step
+                s.parent_id = last.id
+            new_steps.append(s)
+
+    # Rebuild flat missions
+    flat = _steps_to_flat_missions(new_steps)
+    return StructuredPlan(steps=new_steps, flat_missions=flat, parsing_method=plan.parsing_method)
 
 
 def _build_fallback_plan(user_input: str) -> StructuredPlan:
     """Use the original regex extraction as fallback."""
     missions = _extract_missions_regex_fallback(user_input)
+    LOGGER.info("PARSER REGEX FALLBACK missions=%s", len(missions))
     steps = [MissionStep(id=str(i + 1), description=m) for i, m in enumerate(missions)]
     _suggest_tools_for_steps(steps)
     return StructuredPlan(steps=steps, flat_missions=missions, parsing_method="regex_fallback")

@@ -1,14 +1,13 @@
-# Shared Plan — Run 89d08bc5-8278-4b00-be5d-f58b6f0c80dc
+# Shared Plan — Run pub_d34dc9c92b6e424e979132a620724ecc
 
-**Parsing method:** structured
+**Parsing method:** regex_fallback
 **Total missions:** 1
 **Completed:** 1/1
 
 ## Mission Tree
 
-- [x] **Task 1:** Use write_file tool to write the fibonacci sequence until the 100th number to fib.txt  — IMPLEMENTED
-  - Suggested tools: write_file, math_stats
+- [ ] **Task 1:** Primary mission  — PENDING
 
 ## Flat Missions (backward-compat)
 
-1. [x] Task 1: Use write_file tool to write the fibonacci sequence until the 100th number to fib.txt  — IMPLEMENTED
+1. [x] Primary mission  — IMPLEMENTED

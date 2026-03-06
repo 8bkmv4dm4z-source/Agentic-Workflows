@@ -20,6 +20,23 @@ node_modules/
 .ipynb_checkpoints/
 *.db
 fib*.txt
+lastRun.txt
+analysis_results.txt
+pattern_report.txt
+users_sorted.txt
+*.md:Zone.Identifier
+
+# Test outputs and ephemeral files
+test_outputs/
+events/
+test*.txt
+test_summary.txt
+demo.txt
+summary.txt
+analysis.md
+pipeline_report.txt
+sample.json
+user_runs/events/
 
 # Caches
 .pytest_cache/

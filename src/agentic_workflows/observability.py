@@ -14,15 +14,20 @@ from typing import Any, TypeVar
 F = TypeVar("F", bound=Callable[..., Any])
 
 _langfuse_client = None
+_langfuse_observe = None
 _langfuse_available = False
 
 try:
     from langfuse import Langfuse
-    from langfuse.decorators import observe as _langfuse_observe
+
+    try:
+        from langfuse.decorators import observe as _langfuse_observe  # langfuse 2.x
+    except ImportError:
+        from langfuse import observe as _langfuse_observe  # langfuse 3.x
 
     _langfuse_available = True
 except ImportError:
-    _langfuse_observe = None
+    pass
 
 
 def _is_configured() -> bool:
@@ -40,6 +45,21 @@ def get_langfuse_client() -> Any | None:
     try:
         _langfuse_client = Langfuse()
         return _langfuse_client
+    except Exception:
+        return None
+
+
+def get_langfuse_callback_handler() -> Any | None:
+    """Return a LangchainCallbackHandler if langfuse is available and configured, else None.
+
+    Gated behind _is_configured() to prevent console auth warnings when credentials are absent.
+    """
+    if not _langfuse_available or not _is_configured():
+        return None
+    try:
+        from langfuse.langchain import CallbackHandler  # requires langchain (transitive dep)
+
+        return CallbackHandler()
     except Exception:
         return None
 

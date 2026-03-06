@@ -7,6 +7,12 @@
 ## Goal
 Evolve from single-agent to multi-agent orchestration with specialist roles, persistent memory, human-in-the-loop, and MCP server capabilities.
 
+## Phase 1 Bridge
+
+- A deterministic reviewer gate is implemented in Phase 1 runtime as a stability-first bridge.
+- Phase 3 should evolve this into a dedicated reviewer specialist/subgraph with richer routing and handoff handling.
+- Until then, reviewer policy selection remains runtime-configured and deterministic (`fail_only`, `weighted`, `both`).
+
 ## Sub-phases
 
 ### 3A: Agent Design
