@@ -42,8 +42,13 @@ user_runs/events/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.coverage
+htmlcov/
+coverage.xml
 
 # IDE
 .idea/
 .vscode/
 *.swp
+agent-planner-pe-methods.jsx
+Agentic AI Workflows_*.md

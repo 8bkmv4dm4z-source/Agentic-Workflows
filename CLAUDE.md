@@ -42,14 +42,23 @@ src/agentic_workflows/
   errors.py        -- Exception hierarchy
   logger.py        -- Structured logging
   core/            -- P0 baseline agent
+  agents/          -- Agent variants (LocalAgent, etc.)
+  api/             -- FastAPI routes and models
+  cli/             -- CLI interfaces for orchestration
   orchestration/   -- LangGraph graphs, state, providers, checkpoints
     langgraph/     -- graph.py, state_schema.py, provider.py, ...
-  tools/           -- 12 tool implementations (deterministic, no LLM calls)
+  storage/         -- Postgres/SQLite checkpoint and memo stores
+  tools/           -- 15+ tool implementations (deterministic, no LLM calls)
   directives/      -- Agent SOPs and instruction templates
 tests/
   conftest.py      -- Shared fixtures
   unit/            -- Unit tests
   integration/     -- Integration tests (ScriptedProvider, no live API)
+config/
+  local.env.example -- Local Ollama configuration template
+docs/
+  phases/          -- Phase progression documentation
+  architecture/    -- ADRs and architectural decisions
 ```
 
 ### Environment
@@ -68,13 +77,13 @@ Tuning: `P1_PROVIDER_TIMEOUT_SECONDS` (30), `P1_PLAN_CALL_TIMEOUT_SECONDS` (45)
 - Default to highest implemented phase unless user says otherwise
 - Check existing tools before creating new ones
 - Never overwrite directives without explicit user request
-- Operational learnings go in `P1_WALKTHROUGH.md`
+- Operational learnings go in phase walkthroughs under `docs/WALKTHROUGH_PHASE*.md`
 
 ### Context Load Order
-1. `ProjectCompass.md` -- roadmap and target architecture
-2. `AGENTS.md` -- universal coding conventions
-3. `P1_WALKTHROUGH.md` -- current phase architecture and known bugs
-4. `directives/phase1_langgraph.md` -- Phase 1 SOP
+1. `AGENTS.md` -- universal coding conventions
+2. `docs/WALKTHROUGH_PHASE*.md` -- current phase architecture and operational learnings
+3. `docs/phases/` -- phase progression and architecture
+4. `directives/*.md` -- specialist SOPs and instruction templates
 
 ### Known Constraints
 - JSON contract violations: some providers emit XML-ish tool-call envelopes;
