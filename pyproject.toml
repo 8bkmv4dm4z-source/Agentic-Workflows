@@ -24,6 +24,8 @@ dependencies = [
     "uvicorn>=0.34",
     "sse-starlette>=3.3",
     "anyio>=4.0",
+    "psycopg[binary]>=3.2",
+    "psycopg_pool>=3.2",
 ]
 
 [project.optional-dependencies]
@@ -34,6 +36,7 @@ dev = [
     "mypy>=1.10",
     "pre-commit>=4.0",
     "httpx-sse>=0.4",
+    "pytest-cov>=6.0",
 ]
 observability = ["langfuse>=3.0"]
 

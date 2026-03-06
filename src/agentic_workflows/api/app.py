@@ -31,10 +31,48 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     """Compile the graph once and initialise storage at startup."""
     log.info("api.startup", status="compiling_graph")
 
-    orchestrator = LangGraphOrchestrator()
-    application.state.orchestrator = orchestrator
+    db_url = os.environ.get("DATABASE_URL")
+    pool = None
 
-    run_store = SQLiteRunStore()
+    if db_url:
+        # -- Postgres backend --
+        from psycopg_pool import ConnectionPool as PgConnectionPool
+
+        from agentic_workflows.orchestration.langgraph.checkpoint_postgres import (
+            PostgresCheckpointStore,
+        )
+        from agentic_workflows.orchestration.langgraph.memo_postgres import PostgresMemoStore
+        from agentic_workflows.storage.postgres import PostgresRunStore
+
+        pool = PgConnectionPool(
+            conninfo=db_url,
+            min_size=2,
+            max_size=10,
+            open=False,
+            kwargs={"autocommit": True, "prepare_threshold": 0},
+        )
+        pool.open(wait=True)
+
+        run_store = PostgresRunStore(pool)
+        checkpoint_store = PostgresCheckpointStore(pool)
+        memo_store = PostgresMemoStore(pool)
+        log.info("api.startup", storage="postgres", pool_max_size=10)
+    else:
+        # -- SQLite backend (dev/test default) --
+        from agentic_workflows.orchestration.langgraph.checkpoint_store import (
+            SQLiteCheckpointStore,
+        )
+        from agentic_workflows.orchestration.langgraph.memo_store import SQLiteMemoStore
+
+        run_store = SQLiteRunStore()
+        checkpoint_store = SQLiteCheckpointStore()
+        memo_store = SQLiteMemoStore()
+        log.info("api.startup", storage="sqlite")
+
+    orchestrator = LangGraphOrchestrator(
+        memo_store=memo_store, checkpoint_store=checkpoint_store
+    )
+    application.state.orchestrator = orchestrator
     application.state.run_store = run_store
 
     application.state.active_streams: dict = {}  # type: ignore[annotation-unchecked]
@@ -49,7 +87,10 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
 
     yield
 
-    run_store.close()
+    if pool is not None:
+        pool.close()
+    else:
+        run_store.close()  # type: ignore[union-attr]
     log.info("api.shutdown", status="clean")
 
 
