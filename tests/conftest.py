@@ -82,7 +82,7 @@ def pg_pool():
     if migration_path.exists():
         sql = migration_path.read_text()
         with pool.connection() as conn:
-            conn.execute(sql)
+            conn.execute(sql, prepare=False)
 
     yield pool
 

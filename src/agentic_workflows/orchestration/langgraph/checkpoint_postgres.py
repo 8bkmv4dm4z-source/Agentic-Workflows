@@ -76,7 +76,8 @@ class PostgresCheckpointStore:
         with self._pool.connection() as conn:
             rows = conn.execute(
                 """
-                SELECT run_id, MAX(step) AS step_count, node_name,
+                SELECT run_id, MAX(step) AS step_count,
+                       MAX(node_name) AS node_name,
                        MAX(created_at) AS timestamp
                 FROM graph_checkpoints
                 GROUP BY run_id

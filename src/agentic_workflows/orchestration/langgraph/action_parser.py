@@ -7,11 +7,19 @@ explicit parameter instead of accessing ``self.tool_registry``.
 """
 
 import json
+import re
 from typing import Any
 
 from pydantic import ValidationError
 
 from agentic_workflows.schemas import FinishAction, ToolAction
+
+_THINKING_RE = re.compile(r"<thinking>.*?</thinking>", re.DOTALL | re.IGNORECASE)
+
+
+def _strip_thinking(text: str) -> str:
+    """Strip <thinking>...</thinking> scratchpad blocks before JSON extraction."""
+    return _THINKING_RE.sub("", text).strip()
 
 
 def validate_action(
@@ -25,10 +33,14 @@ def validate_action(
         and isinstance(data.get("action"), str)
         and action_alias in tool_registry
     ):
+        _reserved = {"action", "tool_name", "args", "arguments", "name", "__mission_id"}
+        flat_args = {k: v for k, v in data.items() if k not in _reserved}
+        # Prefer "args", then "arguments" (OpenAI-style), then flat remaining keys
+        resolved_args = data.get("args") or data.get("arguments") or flat_args
         data = {
             "action": "tool",
             "tool_name": action_alias,
-            "args": dict(data.get("args", {})),
+            "args": dict(resolved_args) if isinstance(resolved_args, dict) else {},
         }
     if (
         data.get("action") == "tool"
@@ -36,6 +48,10 @@ def validate_action(
         and isinstance(data.get("name"), str)
     ):
         data["tool_name"] = data["name"]
+    # Normalize "arguments" → "args" for models using OpenAI-style format
+    if "arguments" in data and "args" not in data:
+        args_val = data.pop("arguments")
+        data["args"] = dict(args_val) if isinstance(args_val, dict) else {}
     action = str(data.get("action", "")).strip().lower()
     if action in {"tool", "finish"}:
         data["action"] = action
@@ -61,13 +77,14 @@ def validate_action(
 
 def parse_action_json(model_output: str) -> dict[str, Any]:
     """Parse planner output, recovering first JSON object when extra data is emitted."""
+    cleaned = _strip_thinking(model_output)
     try:
-        data = json.loads(model_output)
+        data = json.loads(cleaned)
         if not isinstance(data, dict):
             raise ValueError("action payload must be a JSON object")
         return data
     except json.JSONDecodeError as exc:
-        candidate = extract_first_json_object(model_output)
+        candidate = extract_first_json_object(cleaned)
         if not candidate:
             raise ValueError(f"invalid json: {str(exc)}") from exc
         try:
@@ -150,14 +167,15 @@ def extract_all_json_objects(text: str) -> list[str]:
 
 def parse_all_actions_json(model_output: str) -> list[dict[str, Any]]:
     """Parse all JSON action objects from planner output."""
+    cleaned = _strip_thinking(model_output)
     try:
-        data = json.loads(model_output)
+        data = json.loads(cleaned)
         if isinstance(data, dict):
             return [data]
     except json.JSONDecodeError:
         pass
 
-    candidates = extract_all_json_objects(model_output)
+    candidates = extract_all_json_objects(cleaned)
     actions = []
     for candidate in candidates:
         try:

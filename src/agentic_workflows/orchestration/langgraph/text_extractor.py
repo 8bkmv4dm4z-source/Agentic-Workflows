@@ -65,11 +65,43 @@ def extract_missions(user_input: str) -> list[str]:
 
 
 def extract_write_path_from_mission(mission: str) -> str:
-    """Extract target file path from mission text when present."""
+    """Extract target file path from mission text when present.
+
+    Prefers filenames associated with write/save/create/generate verbs so that
+    missions like "delete foo.py then write bar.py" resolve to bar.py, not foo.py.
+    """
     ext = r"[A-Za-z][A-Za-z0-9]{0,9}"
     quoted_matches = re.findall(rf"""["']([^"']+\.(?:{ext}))["']""", mission)
     if quoted_matches:
         return quoted_matches[-1].strip()
+    # Prefer filename after redirect/pipe keywords (e.g. "redirect that to test.txt")
+    redirect_re = re.compile(
+        r"\b(?:redirect(?:\s+(?:that|output|stdout))?\s+to|pipe\s+to)\s+"
+        rf"(/?[A-Za-z0-9_.\\/-]+\.(?:{ext}))",
+        re.IGNORECASE,
+    )
+    m = redirect_re.search(mission)
+    if m:
+        return m.group(1).strip().rstrip(".,;:")
+    # Prefer filename immediately following a write/save/create/generate verb
+    write_verb_re = re.compile(
+        r"\b(?:write|save|create|generate|produce|output)\b\s+(?:to\s+)?"
+        rf"(/?[A-Za-z0-9_.\\/-]+\.(?:{ext}))",
+        re.IGNORECASE,
+    )
+    m = write_verb_re.search(mission)
+    if m:
+        return m.group(1).strip().rstrip(".,;:")
+    # Prefer filename after "write ... to" with intervening words
+    write_to_re = re.compile(
+        r"\bwrite\b.{1,60}?\bto\s+"
+        rf"(/?[A-Za-z0-9_.\\/-]+\.(?:{ext}))",
+        re.IGNORECASE,
+    )
+    m = write_to_re.search(mission)
+    if m:
+        return m.group(1).strip().rstrip(".,;:")
+    # Fall back to first filename found
     for match in re.finditer(rf"(/?[A-Za-z0-9_./\\-]+\.(?:{ext}))", mission):
         candidate = match.group(1).strip().rstrip(".,;:")
         # Guard against decimal numbers being interpreted as file paths.

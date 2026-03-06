@@ -33,6 +33,22 @@ class TestActionParser(unittest.TestCase):
         self.assertEqual(parsed["tool_name"], "repeat_message")
         self.assertEqual(parsed["args"]["message"], "ok")
 
+    def test_strip_thinking_removes_scratchpad(self) -> None:
+        raw = '<thinking>Let me reason about this.</thinking>{"action":"finish","answer":"ok"}'
+        parsed = action_parser.parse_action_json(raw)
+        self.assertEqual(parsed["action"], "finish")
+        self.assertEqual(parsed["answer"], "ok")
+
+    def test_strip_thinking_multiline(self) -> None:
+        raw = "<thinking>\nStep 1: plan\nStep 2: act\n</thinking>\n{\"action\":\"finish\",\"answer\":\"done\"}"
+        parsed = action_parser.parse_action_json(raw)
+        self.assertEqual(parsed["answer"], "done")
+
+    def test_strip_thinking_parse_all_actions(self) -> None:
+        raw = '<thinking>reasoning</thinking>{"action":"finish","answer":"a"} {"action":"finish","answer":"b"}'
+        actions = action_parser.parse_all_actions_json(raw)
+        self.assertEqual(len(actions), 2)
+
     def test_validate_action_from_dict_preserves_mission_id(self) -> None:
         registry = {"repeat_message": object()}
         payload = {
