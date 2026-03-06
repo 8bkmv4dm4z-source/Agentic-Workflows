@@ -8,8 +8,27 @@ on:
 
 jobs:
   quality:
-    name: Lint, Typecheck, Test
+    name: Quality (${{ matrix.backend }})
     runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        backend: [sqlite, postgres]
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test_agentic
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Checkout
@@ -24,14 +43,41 @@ jobs:
         run: pip install -e ".[dev]"
 
       - name: Lint (ruff)
+        if: matrix.backend == 'sqlite'
         run: ruff check src/ tests/
 
       - name: Typecheck (mypy)
+        if: matrix.backend == 'sqlite'
         run: mypy src/
 
-      - name: Test (pytest)
-        run: pytest tests/ -q
+      - name: Init Postgres
+        if: matrix.backend == 'postgres'
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
+          PGPASSWORD=test psql -h localhost -U test -d test_agentic -f db/migrations/001_init.sql
+          PGPASSWORD=test psql -h localhost -U test -d test_agentic -f db/migrations/002_foundation.sql
         env:
-          # ScriptedProvider is the test double for all LLM calls.
-          # No live provider API keys are needed or used in the test suite.
+          PGPASSWORD: test
+
+      - name: Test (SQLite)
+        if: matrix.backend == 'sqlite'
+        run: pytest tests/ -q --cov=src/agentic_workflows --cov-report=term-missing --cov-fail-under=80
+        env:
           P1_PROVIDER: scripted
+
+      - name: Test (Postgres)
+        if: matrix.backend == 'postgres'
+        run: pytest tests/ -q --cov=src/agentic_workflows --cov-report=term-missing --cov-fail-under=80
+        env:
+          P1_PROVIDER: scripted
+          DATABASE_URL: postgresql://test:test@localhost:5432/test_agentic
+
+  docker-build:
+    name: Docker Build Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t agentic-workflows-test .
