@@ -2,13 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: in_progress
-last_updated: "2026-03-04T23:25:00.000Z"
+status: in-progress
+stopped_at: Completed 07-01-PLAN.md
+last_updated: "2026-03-06T15:17:01Z"
+last_activity: "2026-03-06 — Postgres persistence layer: stores, protocols, migrations, store factory"
 progress:
   total_phases: 7
-  completed_phases: 5
-  total_plans: 19
-  completed_plans: 19
+  completed_phases: 6
+  total_plans: 22
+  completed_plans: 20
+  percent: 91
 ---
 
 # Project State
@@ -18,22 +21,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-02)
 
 **Core value:** A specialist-routing multi-agent system that reliably executes multi-mission workloads end-to-end — with the architecture understood deeply enough to stress test, evolve, and deploy with confidence.
-**Current focus:** Phase 6 — Production Service Layer (in-progress on branch `p5-p6-implementing`)
+**Current focus:** Phase 7 — Production Persistence and CI (in-progress on branch `p7-production-persistence-and-ci`)
 
 ## Current Position
 
-Phase: 6 of 7 (Production Service Layer)
-Plan: 3 of 3 in current phase (06-03 DONE, awaiting human-verify checkpoint)
-Status: Phase 6 plan 03 complete — CLI user_run as API client, eval harness with 3 scenarios, streaming bug fix.
-Last activity: 2026-03-06 — Completed Stabilize feature for Phase 6: error handling, context eviction, SQLite thread safety
+Phase: 7 of 7 (Production Persistence and CI)
+Plan: 1 of 3 in current phase (07-01 DONE)
+Status: Phase 7 plan 01 complete — Postgres persistence layer with Protocol abstractions, store implementations, SQL migrations, and store factory.
+Last activity: 2026-03-06 — Postgres persistence layer: stores, protocols, migrations, store factory
 
-Progress: [██████████] 100% (Phases 1-6 complete, Phase 6 plan 03/03 done)
+Progress: [█████████░] 91% (Phases 1-6 complete, Phase 7 plan 01/03 done)
 
 ## Test Status
 
-- **536 tests pass** on `p5-p6-implementing` (3 new eval from 06-03)
-- ruff check: clean
-- Branch: `p5-p6-implementing`
+- **577 tests pass** on `p7-production-persistence-and-ci` (519 unit + 58 integration)
+- 3 pre-existing unit test failures (test_run_bash_python_guard, 2x write_file shebang tests) -- unrelated to Phase 7
+- ruff check: clean (pre-existing UP035 in app.py noted)
+- Branch: `p7-production-persistence-and-ci`
 
 ## Performance Metrics
 
@@ -51,6 +55,7 @@ Progress: [██████████] 100% (Phases 1-6 complete, Phase 6 pl
 | 04-multi-agent-integration | 6 | 30 min | 5 min |
 | 05-observability | 2 | ~10 min | 5 min |
 | 06-fastapi-service-layer | 3/3 | 16 min | 5 min |
+| 07-production-persistence-and-ci | 1/3 | 5 min | 5 min |
 
 ## Accumulated Context
 
@@ -77,6 +82,10 @@ Recent decisions affecting current work:
 - [Phase 06-03]: CLI user_run talks to FastAPI via httpx, not orchestrator directly -- single source of truth
 - [Phase 06-03]: Final state retrieved from checkpoint_store.load_latest() instead of stream chunk accumulation -- avoids _sequential_node annotated list zeroing
 - [Phase 06-03]: Old user_run.py kept with deprecation warning for backward compatibility
+- [Phase 07-01]: psycopg[binary] + psycopg_pool instead of asyncpg -- AsyncPostgresSaver API incompatible with project's CheckpointStore interface
+- [Phase 07-01]: Sync ConnectionPool shared across all 3 Postgres stores -- CheckpointStore/MemoStore called synchronously from graph nodes
+- [Phase 07-01]: Lazy conditional imports in app.py lifespan -- Postgres imports only when DATABASE_URL set
+- [Phase 07-01]: autocommit=True and prepare_threshold=0 in pool kwargs per RESEARCH.md pitfall findings
 
 ### Pending Todos
 
@@ -89,6 +98,7 @@ Recent decisions affecting current work:
 |-------|---------|------|------|--------|--------|
 | 6 | API security, input validation, public UUIDs, GET /runs, CORS, stream tokens | Extend | 2026-03-05 | 669ec5c | ✓ Complete |
 | 6 | Stabilize error handling, context eviction, SQLite thread safety | Stabilize | 2026-03-06 | d30bb22 | ✓ Complete |
+| 7 | Postgres persistence layer: stores, protocols, migrations, store factory | Implement | 2026-03-06 | 3734881 | ✓ Complete |
 
 ### Blockers/Concerns
 
@@ -98,6 +108,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-03-05
-Stopped at: Completed 06-03-PLAN.md (API client + eval harness, awaiting human-verify checkpoint)
-Resume file: None
+Last session: 2026-03-06T15:17:01Z
+Stopped at: Completed 07-01-PLAN.md
+Resume file: .planning/phases/07-production-persistence-and-ci/07-01-SUMMARY.md
