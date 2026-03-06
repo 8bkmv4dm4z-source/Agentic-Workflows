@@ -9,7 +9,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 import anyio
+import structlog as _structlog
 
+_log = _structlog.get_logger()
+
+MAX_RESULT_JSON_BYTES = int(os.environ.get("MAX_RESULT_JSON_BYTES", str(512 * 1024)))
 
 _DEFAULT_DB_PATH = os.environ.get("RUN_STORE_DB", ".tmp/run_store.db")
 
@@ -47,12 +51,42 @@ class SQLiteRunStore:
         self._conn.execute(_CREATE_TABLE)
         self._conn.commit()
 
+    async def initialize(self) -> None:
+        """No-op async initializer for protocol compatibility.
+
+        The store is fully initialized in __init__ (synchronous). This method
+        exists for callers that await store.initialize() after construction.
+        """
+
     # ------------------------------------------------------------------
     # RunStore protocol methods
     # ------------------------------------------------------------------
 
     async def save_run(self, run_id: str, *, status: str, **fields: Any) -> None:
         """Insert a new run record."""
+
+        # Guard against oversized result blobs: truncate tool_history if needed.
+        result_value = fields.get("result")
+        if result_value is not None:
+            candidate = _to_json(result_value) or ""
+            if len(candidate.encode()) > MAX_RESULT_JSON_BYTES:
+                _log.warning(
+                    "run_store.result_truncated",
+                    run_id=run_id,
+                    original_bytes=len(candidate.encode()),
+                    limit_bytes=MAX_RESULT_JSON_BYTES,
+                )
+                truncated = dict(result_value)
+                tool_history = truncated.get("tools_used", [])
+                truncated["tools_used"] = [
+                    {
+                        "tool": t.get("tool", "") if isinstance(t, dict) else str(t),
+                        "args_summary": str(t.get("args", ""))[:200] if isinstance(t, dict) else "",
+                        "result_truncated": True,
+                    }
+                    for t in tool_history
+                ]
+                result_value = truncated
 
         def _save() -> None:
             self._conn.execute(
@@ -68,7 +102,7 @@ class SQLiteRunStore:
                     _to_json(fields.get("prior_context")),
                     fields.get("client_ip"),
                     _to_json(fields.get("request_headers")),
-                    _to_json(fields.get("result")),
+                    _to_json(result_value),
                     datetime.now(UTC).isoformat(),
                     fields.get("missions_completed", 0),
                     _to_json(fields.get("tools_used")),

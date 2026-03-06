@@ -106,6 +106,12 @@ def _is_retryable_timeout_error(exc: Exception) -> bool:
         "service unavailable",
         "read timeout",
         "connect timeout",
+        "http 500",
+        "status code 500",
+        "context length exceeded",
+        "context window",
+        "request entity too large",
+        "payload too large",
     )
     return any(marker in text for marker in markers)
 
@@ -141,8 +147,34 @@ class _RetryingProviderBase:
         ) from last_exc
 
 
+# JSON Schema response format for OpenAI — guides the model toward the expected action shape.
+# Non-strict (strict omitted) to allow flexible `args` objects without recursive constraints.
+_OPENAI_ACTION_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "agent_action",
+        "description": "An agent action: tool call, finish, or clarify",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["tool", "finish", "clarify"],
+                },
+                "tool_name": {"type": "string"},
+                "args": {"type": "object"},
+                "answer": {"type": "string"},
+                "question": {"type": "string"},
+            },
+            "required": ["action"],
+            "additionalProperties": True,
+        },
+    },
+}
+
+
 class OpenAIChatProvider(_RetryingProviderBase):
-    """OpenAI-compatible provider using strict JSON responses."""
+    """OpenAI-compatible provider using schema-guided JSON responses."""
 
     def __init__(self, model: str | None = None) -> None:
         super().__init__()
@@ -153,15 +185,28 @@ class OpenAIChatProvider(_RetryingProviderBase):
         self.model = model or os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 
     def generate(self, messages: Sequence[AgentMessage]) -> str:
-        # Prefer structured JSON responses to reduce parse failures in the plan node.
-        response = self._request_with_retries(
-            lambda: self.client.chat.completions.create(
+        # Use json_schema response format to guide the model toward the expected action shape.
+        # Falls back to json_object if the model does not support json_schema.
+        def _request_schema_mode() -> object:
+            return self.client.chat.completions.create(
+                model=self.model,
+                messages=list(messages),
+                response_format=_OPENAI_ACTION_RESPONSE_FORMAT,
+                timeout=self.timeout_seconds,
+            )
+
+        def _request_json_mode() -> object:
+            return self.client.chat.completions.create(
                 model=self.model,
                 messages=list(messages),
                 response_format={"type": "json_object"},
                 timeout=self.timeout_seconds,
             )
-        )
+
+        try:
+            response = self._request_with_retries(_request_schema_mode)
+        except Exception:
+            response = self._request_with_retries(_request_json_mode)
         content = response.choices[0].message.content
         if content is None:
             raise ValueError("Model returned empty content.")
@@ -200,6 +245,10 @@ class OllamaChatProvider(_RetryingProviderBase):
 
     def __init__(self, model: str | None = None, base_url: str | None = None) -> None:
         super().__init__()
+        # Per-provider timeout override: magistral and other reasoning models need more time.
+        ollama_timeout = _env_float("OLLAMA_TIMEOUT", 0.0)
+        if ollama_timeout > 0:
+            self.timeout_seconds = ollama_timeout
         resolved_model = model or os.getenv("OLLAMA_MODEL", "llama3.1:8b")
         resolved_base_url = _resolve_ollama_base_url(base_url)
         self.model = resolved_model
@@ -269,13 +318,17 @@ class OllamaChatProvider(_RetryingProviderBase):
     def generate(self, messages: Sequence[AgentMessage]) -> str:
         if self.use_native_chat_api:
             try:
-                return self._request_with_retries(
+                result = self._request_with_retries(
                     lambda: self._request_native_chat(messages, json_mode=True)
                 )
+                if result:
+                    return result
+                # json_mode returned empty — fall through to plain mode
             except Exception:
-                return self._request_with_retries(
-                    lambda: self._request_native_chat(messages, json_mode=False)
-                )
+                pass
+            return self._request_with_retries(
+                lambda: self._request_native_chat(messages, json_mode=False)
+            )
 
         extra = self._ollama_extra_body()
 
@@ -309,7 +362,66 @@ class OllamaChatProvider(_RetryingProviderBase):
         content = response.choices[0].message.content
         if content is None:
             raise ValueError("Model returned empty content.")
+        # json_mode can force empty output on some models — retry in plain mode
+        if not content:
+            try:
+                response = self._request_with_retries(_request_plain_mode)
+                content = response.choices[0].message.content or ""
+            except Exception:
+                pass
         return content
+
+
+    def _ollama_native_base(self) -> str:
+        """Return the Ollama native API base URL (e.g. http://localhost:11434)."""
+        if self.native_chat_url:
+            return self.native_chat_url.rstrip("/").removesuffix("/api/chat")
+        resolved = _resolve_ollama_base_url().rstrip("/")
+        if resolved.endswith("/v1"):
+            resolved = resolved[:-3]
+        return resolved
+
+    def ensure_model(self, num_ctx: int = 32000) -> str:
+        """Ensure a custom Modelfile-backed model with the correct context window exists.
+
+        Derives a safe name from the base model (e.g. ``"magistral"`` →
+        ``"magistral-32k"``, ``"qwen3:8b"`` → ``"qwen3-8b-32k"``), checks
+        ``GET /api/tags`` for an existing model, and creates one via
+        ``POST /api/create`` if absent.  Updates ``self.model`` to the custom
+        name and returns it.
+        """
+        base_model = self.model
+        k_label = f"{num_ctx // 1000}k"
+        custom_name = f"{base_model.replace(':', '-')}-{k_label}"
+
+        native_base = self._ollama_native_base()
+        client = httpx.Client(timeout=30.0)
+        try:
+            tags_resp = client.get(f"{native_base}/api/tags")
+            tags_resp.raise_for_status()
+            # Tags can appear as "name:latest" even when created without a tag.
+            existing: set[str] = set()
+            for m in tags_resp.json().get("models", []):
+                n: str = m["name"]
+                existing.add(n)
+                existing.add(n.split(":")[0])
+
+            if custom_name not in existing:
+                create_resp = client.post(
+                    f"{native_base}/api/create",
+                    json={
+                        "model": custom_name,
+                        "from": base_model,
+                        "parameters": {"num_ctx": num_ctx},
+                    },
+                    timeout=300.0,
+                )
+                create_resp.raise_for_status()
+        finally:
+            client.close()
+
+        self.model = custom_name
+        return custom_name
 
 
 def build_provider(preferred: str | None = None) -> ChatProvider:
