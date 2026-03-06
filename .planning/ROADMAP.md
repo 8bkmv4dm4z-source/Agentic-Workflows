@@ -17,7 +17,7 @@ Starting from a working single-agent LangGraph foundation (208 tests green, 4-no
 - [x] **Phase 4: Multi-Agent Integration and Model Routing** - Wire _route_to_specialist() to real compiled subgraphs, stabilize multi-mission result preservation, implement real model routing (completed 2026-03-03)
 - [x] **Phase 5: Observability Layer and Architecture Snapshot** - Wire Langfuse CallbackHandler for automatic graph tracing, produce phase progression documentation (completed 2026-03-04)
 - [x] **Phase 6: Production Service Layer** - FastAPI HTTP service with POST /run, GET /run/{id}, and SSE streaming endpoint (completed 2026-03-04)
-- [ ] **Phase 7: Production Persistence and CI** - AsyncPostgresSaver replacing SQLite, Dockerfile + docker-compose, GitHub Actions CI pipeline
+- [ ] **Phase 7: Production Persistence and CI** - Postgres persistence replacing SQLite, Dockerfile + docker-compose, GitHub Actions CI pipeline
 
 ## Phase Details
 
@@ -112,7 +112,7 @@ Plans:
 - [x] 06-03-PLAN.md — Convert user_run.py to API client, eval harness, end-to-end verification (PROD-01, PROD-02)
 
 ### Phase 7: Production Persistence and CI
-**Goal**: SQLite checkpointer is replaced by AsyncPostgresSaver for production; the full system (API + Postgres) starts with docker-compose up; GitHub Actions runs the complete quality gate on every push
+**Goal**: All three stores (CheckpointStore, RunStore, MemoStore) swap from SQLite to Postgres when DATABASE_URL is set; the full system starts with docker-compose up; CI runs the complete quality gate against both backends on every push
 **Depends on**: Phase 6
 **Requirements**: PROD-03, PROD-04, PROD-05
 **Success Criteria** (what must be TRUE):
@@ -120,7 +120,11 @@ Plans:
   2. Concurrent POST /run requests under Postgres checkpointer produce no locking errors — 5 concurrent requests all complete and return distinct run_ids with correct results
   3. GitHub Actions CI workflow passes on a clean push — ruff check, mypy, and pytest all green using ScriptedProvider; no live LLM credentials required in CI
   4. SQLite checkpointer is retained for dev/test (SQLITE_URL env var) and swapped automatically for Postgres in production (DATABASE_URL env var) — no graph logic changes required to switch
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+- [ ] 07-01-PLAN.md — Postgres store implementations: Protocol abstractions, PostgresCheckpointStore, PostgresMemoStore, PostgresRunStore, store factory wiring, SQL init scripts (PROD-03)
+- [ ] 07-02-PLAN.md — Postgres test suite: test fixtures, unit tests for all three stores, store factory tests (PROD-03)
+- [ ] 07-03-PLAN.md — Docker containerization + CI pipeline: Dockerfile, docker-compose.yml, CI with Postgres matrix, coverage enforcement (PROD-04, PROD-05)
 
 ## Progress
 
@@ -135,4 +139,4 @@ Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7
 | 4. Multi-Agent Integration and Model Routing | 6/6 | Complete | 2026-03-03 |
 | 5. Observability Layer and Architecture Snapshot | 2/2 | Complete | 2026-03-04 |
 | 6. Production Service Layer | 3/3 | Complete | 2026-03-04 |
-| 7. Production Persistence and CI | 0/TBD | Not started | - |
+| 7. Production Persistence and CI | 0/3 | Planned | - |
