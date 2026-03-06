@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: in-progress
-stopped_at: Completed 07-01-PLAN.md
-last_updated: "2026-03-06T15:17:01Z"
-last_activity: "2026-03-06 — Postgres persistence layer: stores, protocols, migrations, store factory"
+stopped_at: Completed 07-02-PLAN.md
+last_updated: "2026-03-06T15:29:16Z"
+last_activity: "2026-03-06 — Postgres test suite: store unit tests, factory tests, concurrency validation"
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 22
-  completed_plans: 20
-  percent: 91
+  completed_plans: 21
+  percent: 95
 ---
 
 # Project State
@@ -26,15 +26,15 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 ## Current Position
 
 Phase: 7 of 7 (Production Persistence and CI)
-Plan: 1 of 3 in current phase (07-01 DONE)
-Status: Phase 7 plan 01 complete — Postgres persistence layer with Protocol abstractions, store implementations, SQL migrations, and store factory.
-Last activity: 2026-03-06 — Postgres persistence layer: stores, protocols, migrations, store factory
+Plan: 2 of 3 in current phase (07-02 DONE)
+Status: Phase 7 plan 02 complete — Postgres test suite with 25 tests covering all 3 stores, store factory, and 5-concurrent-request validation.
+Last activity: 2026-03-06 — Postgres test suite: store unit tests, factory tests, concurrency validation
 
-Progress: [█████████░] 91% (Phases 1-6 complete, Phase 7 plan 01/03 done)
+Progress: [█████████░] 95% (Phases 1-6 complete, Phase 7 plan 02/03 done)
 
 ## Test Status
 
-- **577 tests pass** on `p7-production-persistence-and-ci` (519 unit + 58 integration)
+- **523 unit tests pass + 4 skipped** (Postgres tests) on `p7-production-persistence-and-ci`
 - 3 pre-existing unit test failures (test_run_bash_python_guard, 2x write_file shebang tests) -- unrelated to Phase 7
 - ruff check: clean (pre-existing UP035 in app.py noted)
 - Branch: `p7-production-persistence-and-ci`
@@ -55,7 +55,7 @@ Progress: [█████████░] 91% (Phases 1-6 complete, Phase 7 pla
 | 04-multi-agent-integration | 6 | 30 min | 5 min |
 | 05-observability | 2 | ~10 min | 5 min |
 | 06-fastapi-service-layer | 3/3 | 16 min | 5 min |
-| 07-production-persistence-and-ci | 1/3 | 5 min | 5 min |
+| 07-production-persistence-and-ci | 2/3 | 13 min | 6 min |
 
 ## Accumulated Context
 
@@ -86,6 +86,9 @@ Recent decisions affecting current work:
 - [Phase 07-01]: Sync ConnectionPool shared across all 3 Postgres stores -- CheckpointStore/MemoStore called synchronously from graph nodes
 - [Phase 07-01]: Lazy conditional imports in app.py lifespan -- Postgres imports only when DATABASE_URL set
 - [Phase 07-01]: autocommit=True and prepare_threshold=0 in pool kwargs per RESEARCH.md pitfall findings
+- [Phase 07-02]: pytest.importorskip("psycopg_pool") at module level for Postgres test files -- prevents collection errors in SQLite-only CI
+- [Phase 07-02]: Session-scoped pg_pool fixture with per-test TRUNCATE via clean_pg -- one pool per session, deterministic isolation
+- [Phase 07-02]: Store factory tests verify ENV detection logic only, not Postgres connections -- runs in all CI matrices
 
 ### Pending Todos
 
@@ -99,6 +102,7 @@ Recent decisions affecting current work:
 | 6 | API security, input validation, public UUIDs, GET /runs, CORS, stream tokens | Extend | 2026-03-05 | 669ec5c | ✓ Complete |
 | 6 | Stabilize error handling, context eviction, SQLite thread safety | Stabilize | 2026-03-06 | d30bb22 | ✓ Complete |
 | 7 | Postgres persistence layer: stores, protocols, migrations, store factory | Implement | 2026-03-06 | 3734881 | ✓ Complete |
+| 7 | Postgres test suite: 25 tests, store factory, concurrency validation | Test | 2026-03-06 | 13fdedd | ✓ Complete |
 
 ### Blockers/Concerns
 
@@ -108,6 +112,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-03-06T15:17:01Z
-Stopped at: Completed 07-01-PLAN.md
-Resume file: .planning/phases/07-production-persistence-and-ci/07-01-SUMMARY.md
+Last session: 2026-03-06T15:29:16Z
+Stopped at: Completed 07-02-PLAN.md
+Resume file: .planning/phases/07-production-persistence-and-ci/07-02-SUMMARY.md

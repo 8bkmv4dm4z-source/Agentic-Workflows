@@ -31,7 +31,7 @@
 
 - [x] **PROD-01**: FastAPI service exposes `POST /run` (submit a mission) and `GET /run/{id}` (retrieve results) with request/response validation
 - [x] **PROD-02**: FastAPI service exposes `GET /run/{id}/stream` as a Server-Sent Events endpoint that streams step-transition events during execution
-- [ ] **PROD-03**: `AsyncPostgresSaver` replaces the SQLite checkpointer for production use (SQLite retained for dev/test only)
+- [x] **PROD-03**: `AsyncPostgresSaver` replaces the SQLite checkpointer for production use (SQLite retained for dev/test only)
 - [ ] **PROD-04**: `Dockerfile` and `docker-compose.yml` allow the full system (API + Postgres) to be started with a single `docker-compose up`
 - [ ] **PROD-05**: GitHub Actions CI pipeline runs `ruff check`, `mypy`, and `pytest` on every push, using `ScriptedProvider` (no live LLM calls in CI)
 
