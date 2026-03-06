@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import threading
 from datetime import UTC, datetime
 from typing import Any
 
@@ -44,6 +45,7 @@ class SQLiteRunStore:
     def __init__(self, db_path: str = _DEFAULT_DB_PATH) -> None:
         self.db_path = db_path
         os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
+        self._lock = threading.Lock()
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
@@ -89,26 +91,27 @@ class SQLiteRunStore:
                 result_value = truncated
 
         def _save() -> None:
-            self._conn.execute(
-                """INSERT INTO runs
-                   (run_id, status, user_input, prior_context_json,
-                    client_ip, request_headers_json, result_json,
-                    created_at, missions_completed, tools_used_json)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    run_id,
-                    status,
-                    fields.get("user_input"),
-                    _to_json(fields.get("prior_context")),
-                    fields.get("client_ip"),
-                    _to_json(fields.get("request_headers")),
-                    _to_json(result_value),
-                    datetime.now(UTC).isoformat(),
-                    fields.get("missions_completed", 0),
-                    _to_json(fields.get("tools_used")),
-                ),
-            )
-            self._conn.commit()
+            with self._lock:
+                self._conn.execute(
+                    """INSERT INTO runs
+                       (run_id, status, user_input, prior_context_json,
+                        client_ip, request_headers_json, result_json,
+                        created_at, missions_completed, tools_used_json)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        run_id,
+                        status,
+                        fields.get("user_input"),
+                        _to_json(fields.get("prior_context")),
+                        fields.get("client_ip"),
+                        _to_json(fields.get("request_headers")),
+                        _to_json(result_value),
+                        datetime.now(UTC).isoformat(),
+                        fields.get("missions_completed", 0),
+                        _to_json(fields.get("tools_used")),
+                    ),
+                )
+                self._conn.commit()
 
         await anyio.to_thread.run_sync(_save)
 
@@ -116,9 +119,10 @@ class SQLiteRunStore:
         """Retrieve a run by ID."""
 
         def _get() -> dict[str, Any] | None:
-            row = self._conn.execute(
-                "SELECT * FROM runs WHERE run_id = ?", (run_id,)
-            ).fetchone()
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT * FROM runs WHERE run_id = ?", (run_id,)
+                ).fetchone()
             return dict(row) if row else None
 
         return await anyio.to_thread.run_sync(_get)
@@ -129,24 +133,25 @@ class SQLiteRunStore:
         """Return runs newest-first with optional cursor-based pagination."""
 
         def _list() -> list[dict[str, Any]]:
-            if cursor is not None:
-                # Look up the created_at of the cursor row to use as the anchor
-                anchor_row = self._conn.execute(
-                    "SELECT created_at FROM runs WHERE run_id = ?", (cursor,)
-                ).fetchone()
-                if anchor_row:
-                    rows = self._conn.execute(
-                        "SELECT * FROM runs WHERE created_at < ? ORDER BY created_at DESC LIMIT ?",
-                        (anchor_row["created_at"], limit),
-                    ).fetchall()
+            with self._lock:
+                if cursor is not None:
+                    # Look up the created_at of the cursor row to use as the anchor
+                    anchor_row = self._conn.execute(
+                        "SELECT created_at FROM runs WHERE run_id = ?", (cursor,)
+                    ).fetchone()
+                    if anchor_row:
+                        rows = self._conn.execute(
+                            "SELECT * FROM runs WHERE created_at < ? ORDER BY created_at DESC LIMIT ?",
+                            (anchor_row["created_at"], limit),
+                        ).fetchall()
+                    else:
+                        # Cursor not found — return empty page
+                        rows = []
                 else:
-                    # Cursor not found — return empty page
-                    rows = []
-            else:
-                rows = self._conn.execute(
-                    "SELECT * FROM runs ORDER BY created_at DESC LIMIT ?", (limit,)
-                ).fetchall()
-            return [dict(r) for r in rows]
+                    rows = self._conn.execute(
+                        "SELECT * FROM runs ORDER BY created_at DESC LIMIT ?", (limit,)
+                    ).fetchall()
+                return [dict(r) for r in rows]
 
         return await anyio.to_thread.run_sync(_list)
 
@@ -168,8 +173,9 @@ class SQLiteRunStore:
                 return
             values.append(run_id)
             sql = f"UPDATE runs SET {', '.join(set_clauses)} WHERE run_id = ?"
-            self._conn.execute(sql, values)
-            self._conn.commit()
+            with self._lock:
+                self._conn.execute(sql, values)
+                self._conn.commit()
 
         await anyio.to_thread.run_sync(_update)
 
