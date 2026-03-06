@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 Phase: 6 of 7 (Production Service Layer)
 Plan: 3 of 3 in current phase (06-03 DONE, awaiting human-verify checkpoint)
 Status: Phase 6 plan 03 complete — CLI user_run as API client, eval harness with 3 scenarios, streaming bug fix.
-Last activity: 2026-03-05 — Completed Extend feature for Phase 6: API security, input validation, public UUIDs, GET /runs, CORS, stream tokens
+Last activity: 2026-03-06 — Completed Stabilize feature for Phase 6: error handling, context eviction, SQLite thread safety
 
 Progress: [██████████] 100% (Phases 1-6 complete, Phase 6 plan 03/03 done)
 
@@ -88,6 +88,7 @@ Recent decisions affecting current work:
 | Phase | Feature | Mode | Date | Commit | Status |
 |-------|---------|------|------|--------|--------|
 | 6 | API security, input validation, public UUIDs, GET /runs, CORS, stream tokens | Extend | 2026-03-05 | 669ec5c | ✓ Complete |
+| 6 | Stabilize error handling, context eviction, SQLite thread safety | Stabilize | 2026-03-06 | d30bb22 | ✓ Complete |
 
 ### Blockers/Concerns
 
