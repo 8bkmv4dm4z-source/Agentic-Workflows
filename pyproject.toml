@@ -58,6 +58,9 @@ ignore = [
 testpaths = ["tests"]
 pythonpath = ["src"]
 asyncio_mode = "auto"
+markers = [
+    "postgres: requires PostgreSQL database (DATABASE_URL env var)",
+]
 
 [tool.mypy]
 python_version = "3.12"
