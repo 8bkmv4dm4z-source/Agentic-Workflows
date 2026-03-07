@@ -30,7 +30,45 @@ _TMP_DIR = Path(os.environ.get("TMP_DIR", ".tmp"))
 
 console = Console()
 
+# Tools that represent data-access / data-query operations
+_DATA_ACCESS_TOOLS = frozenset({
+    "read_file",
+    "write_file",
+    "data_analysis",
+    "sort_array",
+    "run_bash",
+    "search_files",
+    "http_request",
+    "hash_content",
+})
+
 _DEBUG = False
+
+
+def _render_data_access_panel(tools_used: list[dict]) -> None:
+    """Render a Rich panel summarising data-access tool calls from tool_history."""
+    hits = [t for t in tools_used if isinstance(t, dict) and t.get("tool") in _DATA_ACCESS_TOOLS]
+    if not hits:
+        return
+    lines = []
+    for entry in hits:
+        tool = entry.get("tool", "?")
+        args = entry.get("args", {})
+        result = entry.get("result", "")
+        # Build a short arg summary — show "path" or "query" key if present, else first key
+        arg_summary = ""
+        if isinstance(args, dict):
+            for key in ("path", "query", "command", "url", "content"):
+                if key in args:
+                    arg_summary = f"{key}={str(args[key])[:60]}"
+                    break
+            if not arg_summary and args:
+                first_key = next(iter(args))
+                arg_summary = f"{first_key}={str(args[first_key])[:60]}"
+        result_str = str(result)[:120] if result else "(no output)"
+        lines.append(f"[bold]{tool}[/]({arg_summary})\n  -> {result_str}")
+    body = "\n".join(lines)
+    console.print(Panel(body, title=f"Data Access ({len(hits)} calls)", style="bold magenta"))
 
 
 def _write_run_report(run_id: str, result: dict[str, Any]) -> None:
@@ -63,6 +101,15 @@ def _write_run_report(run_id: str, result: dict[str, Any]) -> None:
                     f"  [{level.upper()}] mission={finding.get('mission_id')} "
                     f"{finding.get('check')}: {finding.get('detail')}"
                 )
+
+    tools_used_list = result.get("tools_used", [])
+    data_hits = [t for t in tools_used_list if isinstance(t, dict) and t.get("tool") in _DATA_ACCESS_TOOLS]
+    if data_hits:
+        lines.append(f"DATA_ACCESS: {len(data_hits)} call(s)")
+        for entry in data_hits:
+            tool = entry.get("tool", "?")
+            result_snippet = str(entry.get("result", ""))[:100]
+            lines.append(f"  {tool}: {result_snippet}")
 
     answer = result.get("answer", "")
     lines.append(f"ANSWER: {str(answer)[:500]}")
@@ -160,6 +207,11 @@ def _render_event(event: dict[str, Any]) -> None:
                 lines.append(f"Tools: {', '.join(str(t) for t in tools)}")
             body = "\n".join(lines) if lines else "(no details)"
             console.print(Panel(body, title=title, style="cyan"))
+
+        # Data access panel — shows data-querying tool calls
+        tools_used_list = result.get("tools_used", [])
+        if isinstance(tools_used_list, list):
+            _render_data_access_panel(tools_used_list)
 
         # Audit panel
         audit = result.get("audit_report")
