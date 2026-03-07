@@ -28,7 +28,7 @@ from agentic_workflows.orchestration.langgraph import (
     text_extractor,
 )
 from agentic_workflows.orchestration.langgraph.checkpoint_store import SQLiteCheckpointStore
-from agentic_workflows.orchestration.langgraph.context_manager import ContextManager
+from agentic_workflows.orchestration.langgraph.context_manager import ContextManager, MissionContext
 from agentic_workflows.orchestration.langgraph.handoff import create_handoff, create_handoff_result
 from agentic_workflows.orchestration.langgraph.memo_store import SQLiteMemoStore
 from agentic_workflows.orchestration.langgraph.mission_auditor import audit_run
@@ -1556,6 +1556,21 @@ class LangGraphOrchestrator:
         if mission_index >= 0:
             state["active_mission_index"] = mission_index
             state["active_mission_id"] = mission_index + 1
+            # Initialize MissionContext if not already present
+            _mid = mission_index + 1
+            _mid_str = str(_mid)
+            _mctxs = state.get("mission_contexts")
+            if isinstance(_mctxs, dict) and _mid_str not in _mctxs:
+                _goal = ""
+                _missions_list = state.get("missions", [])
+                if mission_index < len(_missions_list):
+                    _goal = _missions_list[mission_index]
+                _mctx = MissionContext(
+                    mission_id=_mid,
+                    goal=_goal,
+                    step_range=(state.get("step", 0), state.get("step", 0)),
+                )
+                _mctxs[_mid_str] = _mctx.model_dump()
         self.logger.info(
             (
                 "SPECIALIST EXECUTE step=%s run_id=%s specialist=%s tool=%s "
@@ -1801,6 +1816,15 @@ class LangGraphOrchestrator:
                     mission_id=_mid,
                     mission_preview=str(_r.get("mission", ""))[:60],
                 )
+                # Evict mission messages and inject summary via ContextManager
+                if isinstance(state.get("mission_contexts"), dict):
+                    try:
+                        self.context_manager.on_mission_complete(state, _mid)
+                    except Exception:
+                        self.logger.debug(
+                            "ContextManager.on_mission_complete failed (non-fatal)",
+                            exc_info=True,
+                        )
         progress_hint = (
             self._progress_hint_message(state)
             or "Continue with the next task or finish when all tasks are complete."
@@ -1819,6 +1843,24 @@ class LangGraphOrchestrator:
                 ),
             }
         )
+
+        # Update MissionContext with tool result via ContextManager
+        _ctx_mission_id = int(state.get("active_mission_id", 0))
+        if _ctx_mission_id > 0 and isinstance(state.get("mission_contexts"), dict):
+            try:
+                # Update step_range end to current step
+                _ctx_mid_str = str(_ctx_mission_id)
+                _ctx_entry = state["mission_contexts"].get(_ctx_mid_str)
+                if isinstance(_ctx_entry, dict) and _ctx_entry.get("step_range"):
+                    _sr = _ctx_entry["step_range"]
+                    _ctx_entry["step_range"] = (_sr[0], state.get("step", _sr[1]))
+                self.context_manager.on_tool_result(
+                    state, tool_name, tool_result, tool_args, _ctx_mission_id
+                )
+            except Exception:
+                self.logger.debug(
+                    "ContextManager.on_tool_result failed (non-fatal)", exc_info=True
+                )
 
         if validation_error:
             if (
