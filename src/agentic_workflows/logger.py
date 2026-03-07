@@ -73,27 +73,29 @@ def setup_dual_logging(log_dir: str = ".tmp") -> None:
     root.setLevel(logging.DEBUG)
 
     # Verbose: captures everything (DEBUG+)
-    verbose_handler = logging.FileHandler(log_path / "log.txt")
+    verbose_handler = logging.FileHandler(log_path / "log.txt", mode="a")
     verbose_handler.setLevel(logging.DEBUG)
     verbose_handler.setFormatter(fmt)
     root.addHandler(verbose_handler)
 
     # Admin: operational events only (filtered by prefix)
-    admin_handler = logging.FileHandler(log_path / "admin_log.txt")
+    admin_handler = logging.FileHandler(log_path / "admin_log.txt", mode="a")
     admin_handler.setLevel(logging.DEBUG)
     admin_handler.setFormatter(fmt)
     admin_handler.addFilter(AdminFilter())
     root.addHandler(admin_handler)
 
     # Server: INFO+ from all loggers → server_logs.txt
-    server_handler = logging.FileHandler(log_path / "server_logs.txt")
+    server_handler = logging.FileHandler(log_path / "server_logs.txt", mode="a")
     server_handler.setLevel(logging.INFO)
     server_handler.setFormatter(fmt)
     root.addHandler(server_handler)
 
-    # Provider: ERROR+ from provider logger → provider_logs.txt
-    provider_handler = logging.FileHandler(log_path / "provider_logs.txt")
-    provider_handler.setLevel(logging.ERROR)
+    # Provider: DEBUG+ from provider/graph/tool loggers → provider_logs.txt
+    provider_handler = logging.FileHandler(log_path / "provider_logs.txt", mode="a")
+    provider_handler.setLevel(logging.DEBUG)
     provider_handler.setFormatter(fmt)
-    logging.getLogger("langgraph.provider").addHandler(provider_handler)
-    logging.getLogger("langgraph.provider").propagate = True
+    for _name in ("langgraph.provider", "agentic_workflows", "langgraph"):
+        _lg = logging.getLogger(_name)
+        _lg.addHandler(provider_handler)
+        _lg.propagate = True
