@@ -9,7 +9,6 @@ before each node executes.
 
 import json
 import operator
-import os
 from datetime import UTC, datetime
 from hashlib import sha256
 from typing import Annotated, Any, Literal, TypedDict, cast
@@ -261,13 +260,7 @@ def ensure_state_defaults(state: RunState | dict[str, Any], *, system_prompt: st
     policy_flags.setdefault("cache_reuse_attempted", [])
     policy_flags.setdefault("planner_timeout_mode", False)
 
-    # Message compaction — sliding window, drop oldest non-system messages
-    _threshold = int(os.getenv("P1_MESSAGE_COMPACTION_THRESHOLD", "40"))
-    _messages = state_dict.get("messages", [])
-    if len(_messages) > _threshold:
-        _system_msgs = [m for m in _messages if m.get("role") == "system"]
-        _non_system = [m for m in _messages if m.get("role") != "system"]
-        _keep_count = max(0, _threshold - len(_system_msgs))
-        state_dict["messages"] = _system_msgs + _non_system[-_keep_count:]
+    # Message compaction removed — ContextManager is now the single source of
+    # truth for message lifecycle (Phase 7.1, CTX-05/CTX-06).
 
     return cast(RunState, state_dict)

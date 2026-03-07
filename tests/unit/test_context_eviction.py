@@ -1,141 +1,115 @@
-"""Tests for _evict_tool_result_messages in LangGraphOrchestrator."""
+"""Tests for ContextManager eviction — replaces old _evict_tool_result_messages tests.
+
+Phase 7.1 Plan 02: all eviction is now handled by ContextManager, not graph.py methods.
+"""
 
 from __future__ import annotations
 
-import os
-from unittest.mock import patch
-
-from agentic_workflows.orchestration.langgraph.graph import LangGraphOrchestrator
-from tests.conftest import ScriptedProvider
+from agentic_workflows.orchestration.langgraph.context_manager import ContextManager
 
 
-def _make_orch() -> LangGraphOrchestrator:
-    """Build a LangGraphOrchestrator with a scripted provider."""
-    provider = ScriptedProvider(responses=[{"action": "finish", "answer": "done"}])
-    return LangGraphOrchestrator(provider=provider, max_steps=5)
-
-
-def _state_with_messages(messages: list[dict]) -> dict:
-    """Build minimal RunState with given messages."""
+def _state_with_messages(messages: list[dict], mission_contexts=None) -> dict:
+    """Build minimal state for ContextManager eviction testing."""
     return {
         "messages": messages,
-        "run_id": "test-evict",
-        "step": 0,
-        "tool_history": [],
-        "mission_reports": [],
-        "pending_action": None,
-        "pending_action_queue": [],
-        "retry_counts": {},
+        "mission_contexts": mission_contexts or {},
         "policy_flags": {},
-        "token_budget_remaining": 100000,
-        "token_budget_used": 0,
-        "missions": [],
-        "structured_plan": None,
-        "mission_contracts": [],
-        "active_mission_index": -1,
-        "active_mission_id": 0,
-        "final_answer": "",
-        "mission_ledger": [],
-        "memo_events": [],
-        "seen_tool_signatures": [],
-        "truncated_actions": [],
-        "handoff_queue": [],
-        "handoff_results": [],
-        "active_specialist": "supervisor",
-        "rerun_context": {},
-        "audit_report": None,
-        "mission_tracker": {},
+        "step": 5,
     }
 
 
-def test_eviction_not_triggered_without_ollama_num_ctx():
-    """When OLLAMA_NUM_CTX=0, no eviction occurs regardless of message size."""
-    orch = _make_orch()
-    messages = [
-        {"role": "system", "content": "sys"},
-        {"role": "user", "content": "TOOL RESULT (read_file):\n" + "x" * 40000},
-    ]
+def test_compact_sliding_window_enforced():
+    """compact() drops oldest non-system messages when over sliding_window_cap."""
+    cm = ContextManager(sliding_window_cap=10)
+    messages = [{"role": "system", "content": "sys"}]
+    messages += [{"role": "user", "content": f"msg-{i}"} for i in range(20)]
     state = _state_with_messages(messages)
-    with patch.dict(os.environ, {"OLLAMA_NUM_CTX": "0"}):
-        orch._evict_tool_result_messages(state)
-    assert state["messages"][1]["content"].startswith("TOOL RESULT")  # not evicted
+    cm.compact(state)
+    assert len(state["messages"]) == 10
+    assert state["messages"][0]["role"] == "system"
+    assert state["messages"][-1]["content"] == "msg-19"
 
 
-def test_eviction_not_triggered_under_threshold():
-    """With OLLAMA_NUM_CTX=8000 and small content, no eviction occurs."""
-    orch = _make_orch()
-    messages = [
-        {"role": "system", "content": "sys"},
-        {"role": "user", "content": "TOOL RESULT (read_file):\n" + "x" * 100},
-    ]
-    state = _state_with_messages(messages)
-    # ~25 tokens total; threshold is 0.75 * 8000 = 6000
-    with patch.dict(os.environ, {"OLLAMA_NUM_CTX": "8000", "CTX_EVICTION_RATIO": "0.75"}):
-        orch._evict_tool_result_messages(state)
-    assert state["messages"][1]["content"].startswith("TOOL RESULT")  # not evicted
-
-
-def test_eviction_removes_large_tool_results():
-    """Large tool result message is replaced by placeholder when over threshold."""
-    orch = _make_orch()
-    large_content = "TOOL RESULT (read_file):\n" + "x" * 30000  # ~7500 tokens
+def test_on_tool_result_replaces_large_result():
+    """on_tool_result() replaces messages with content > threshold with placeholders."""
+    cm = ContextManager(large_result_threshold=50)
+    large_content = "TOOL RESULT (read_file):\n" + "x" * 200
     messages = [
         {"role": "system", "content": "sys"},
         {"role": "user", "content": large_content},
-        {"role": "assistant", "content": '{"action": "finish", "answer": "done"}'},
     ]
     state = _state_with_messages(messages)
-    with patch.dict(os.environ, {"OLLAMA_NUM_CTX": "8000", "CTX_EVICTION_RATIO": "0.75"}):
-        orch._evict_tool_result_messages(state)
-    evicted_msg = state["messages"][1]
-    assert evicted_msg["content"].startswith("[tool_result: read_file,")
-    assert "bytes, stored in run_store" in evicted_msg["content"]
+    cm.on_tool_result(
+        state,
+        tool_name="read_file",
+        result={"data": "x" * 200},
+        args={},
+        mission_id=0,
+    )
+    replaced = state["messages"][1]
+    assert replaced["role"] == "user"
+    assert "[Orchestrator]" in replaced["content"]
+    assert "[tool_result: read_file" in replaced["content"]
+    assert "chars" in replaced["content"]
 
 
-def test_eviction_preserves_system_prompt():
-    """System prompt (messages[0]) is never evicted."""
-    orch = _make_orch()
+def test_system_prompt_never_evicted():
+    """System prompt (messages[0]) is never evicted by compact()."""
+    cm = ContextManager(sliding_window_cap=5)
     sys_content = "You are an orchestrator."
     messages = [
         {"role": "system", "content": sys_content},
-        {"role": "user", "content": "TOOL RESULT (write_file):\n" + "x" * 30000},
     ]
+    messages += [{"role": "user", "content": f"msg-{i}"} for i in range(10)]
     state = _state_with_messages(messages)
-    with patch.dict(os.environ, {"OLLAMA_NUM_CTX": "8000", "CTX_EVICTION_RATIO": "0.75"}):
-        orch._evict_tool_result_messages(state)
-    assert state["messages"][0]["content"] == sys_content  # system prompt unchanged
+    cm.compact(state)
+    assert state["messages"][0]["content"] == sys_content
+    assert state["messages"][0]["role"] == "system"
 
 
-def test_eviction_placeholder_content():
-    """Evicted message content follows the placeholder format."""
-    orch = _make_orch()
-    large_content = "TOOL RESULT (my_tool):\n" + "x" * 30000
+def test_placeholder_format():
+    """Evicted message placeholder follows the [Orchestrator] [tool_result: ...] format."""
+    cm = ContextManager(large_result_threshold=50)
     messages = [
         {"role": "system", "content": "sys"},
-        {"role": "user", "content": large_content},
+        {"role": "user", "content": "TOOL RESULT (my_tool):\n" + "x" * 300},
     ]
     state = _state_with_messages(messages)
-    with patch.dict(os.environ, {"OLLAMA_NUM_CTX": "8000", "CTX_EVICTION_RATIO": "0.75"}):
-        orch._evict_tool_result_messages(state)
+    cm.on_tool_result(
+        state,
+        tool_name="my_tool",
+        result={"data": "x" * 300},
+        args={},
+        mission_id=0,
+    )
     placeholder = state["messages"][1]["content"]
-    # Format: "[tool_result: {tool_name}, {N} bytes, stored in run_store]"
-    assert placeholder.startswith("[tool_result: my_tool,")
-    assert "bytes, stored in run_store]" in placeholder
+    assert placeholder.startswith("[Orchestrator] [tool_result: my_tool,")
+    assert "chars, stored in context]" in placeholder
 
 
-def test_eviction_stops_when_under_threshold():
-    """With two large messages, only the first is evicted if that brings under threshold."""
-    orch = _make_orch()
-    large_content_1 = "TOOL RESULT (file1):\n" + "x" * 20000
-    large_content_2 = "TOOL RESULT (file2):\n" + "x" * 20000
-    # total ~10000 tokens, threshold 0.75*8000=6000; evicting one (~5000t) brings to ~5000 < 6000
+def test_eviction_stops_under_cap():
+    """compact() does not remove messages when under sliding_window_cap."""
+    cm = ContextManager(sliding_window_cap=30)
+    messages = [{"role": "system", "content": "sys"}]
+    messages += [{"role": "user", "content": f"msg-{i}"} for i in range(5)]
+    state = _state_with_messages(messages)
+    cm.compact(state)
+    assert len(state["messages"]) == 6  # all preserved
+
+
+def test_small_results_not_evicted():
+    """Small tool results (under threshold) are not replaced."""
+    cm = ContextManager(large_result_threshold=4000)
     messages = [
         {"role": "system", "content": "sys"},
-        {"role": "user", "content": large_content_1},
-        {"role": "user", "content": large_content_2},
+        {"role": "user", "content": "TOOL RESULT (small):\n{\"ok\": true}"},
     ]
     state = _state_with_messages(messages)
-    with patch.dict(os.environ, {"OLLAMA_NUM_CTX": "8000", "CTX_EVICTION_RATIO": "0.75"}):
-        orch._evict_tool_result_messages(state)
-    # First message should be evicted (placeholder)
-    assert state["messages"][1]["content"].startswith("[tool_result:")
+    cm.on_tool_result(
+        state,
+        tool_name="small",
+        result={"ok": True},
+        args={},
+        mission_id=0,
+    )
+    assert "TOOL RESULT" in state["messages"][1]["content"]

@@ -581,7 +581,7 @@ class LangGraphOrchestrator:
     def _plan_next_action(self, state: RunState) -> RunState:
         """Call the model planner and parse one strict JSON action."""
         state = ensure_state_defaults(state, system_prompt=self.system_prompt)
-        self._compact_messages(state)
+        self.context_manager.compact(state)
         pending_action = state.get("pending_action") or {}
         if pending_action.get("action") == "finish":
             return state
@@ -736,9 +736,9 @@ class LangGraphOrchestrator:
         progress_message = self._progress_hint_message(state)
         if progress_message:
             state["messages"].append({"role": "user", "content": f"[Orchestrator] {progress_message}"})
-        handoff_hint = self._mission_handoff_hint(state)
-        if handoff_hint:
-            state["messages"].append({"role": "system", "content": handoff_hint})
+        context_injection = self.context_manager.build_planner_context_injection(state)
+        if context_injection:
+            state["messages"].append({"role": "user", "content": context_injection})
         tool_hint = self._mission_tool_hint(state)
         if tool_hint:
             state["messages"].append({"role": "user", "content": f"[Orchestrator] {tool_hint}"})
@@ -2211,146 +2211,8 @@ class LangGraphOrchestrator:
             return ""
         return f"Suggested tools for this task: {', '.join(suggested)}"
 
-    def _mission_handoff_hint(self, state: RunState) -> str:
-        """Build a structured context message when transitioning to a new mission.
-
-        Only injected once per mission boundary (detected by absence in recent messages).
-        """
-        reports = state.get("mission_reports", [])
-        completed = [r for r in reports if str(r.get("status", "")) == "completed"]
-        if not completed:
-            return ""
-        next_mission = self._next_incomplete_mission(state)
-        if not next_mission:
-            return ""
-        # Avoid duplicate injection: check last 6 messages for an existing handoff hint
-        for msg in state.get("messages", [])[-6:]:
-            if msg.get("role") == "system" and "Mission complete:" in msg.get("content", ""):
-                return ""
-        last = completed[-1]
-        used_tools = list(last.get("used_tools", []))
-        result = str(last.get("result", "")).strip()[:150]
-        mission_text = str(last.get("mission", "")).strip()[:100]
-        tool_chain = " \u2192 ".join(used_tools) if used_tools else "none"
-        return (
-            f"Mission complete: {mission_text}. "
-            f"Tools used: {tool_chain}. "
-            f"Result: {result!r}. "
-            f"Now starting: {next_mission.strip()[:200]}"
-        )
-
     def _build_auto_finish_answer(self, state: RunState) -> str:
         return mission_tracker.build_auto_finish_answer(state)
-
-    def _evict_tool_result_messages(self, state: RunState) -> None:
-        """Evict oldest large tool-result messages when token budget nears the context window.
-
-        Only activates when OLLAMA_NUM_CTX is set (> 0). Evicted messages are replaced
-        by a one-line placeholder so the LLM knows the result exists but was pruned.
-
-        The full result is preserved in RunStore/tool_history -- only the LLM context is trimmed.
-        """
-        import os as _os
-
-        num_ctx = int(_os.environ.get("OLLAMA_NUM_CTX", "0"))
-        if num_ctx <= 0:
-            return  # Not Ollama or context size unknown -- skip eviction
-
-        eviction_ratio = float(_os.environ.get("CTX_EVICTION_RATIO", "0.75"))
-        threshold_tokens = int(num_ctx * eviction_ratio)
-
-        messages = state.get("messages", [])
-        estimated_tokens = sum(len(m.get("content", "")) // 4 for m in messages)
-        if estimated_tokens <= threshold_tokens:
-            return  # Under threshold -- nothing to do
-
-        # Find eviction candidates: role=user messages with tool results (oldest first).
-        # These are injected by _dispatch_tool_actions as:
-        #   {"role": "user", "content": "TOOL RESULT ({tool_name}):\n{json_blob}"}
-        candidates: list[int] = []
-        for i, msg in enumerate(messages):
-            if i == 0:
-                continue  # Always keep system prompt
-            content = msg.get("content", "")
-            if msg.get("role") == "user" and content.startswith("TOOL RESULT"):
-                candidates.append(i)
-
-        # Evict oldest candidates until we are under threshold
-        evicted_indices: set[int] = set()
-        for idx in candidates:  # already oldest-first (list order)
-            if estimated_tokens <= threshold_tokens:
-                break
-            msg = messages[idx]
-            content = msg.get("content", "")
-            # Extract tool name from "TOOL RESULT (tool_name):\n..."
-            tool_name = "unknown"
-            try:
-                after_paren = content[len("TOOL RESULT ("):]
-                tool_name = after_paren[: after_paren.index(")")]
-            except (ValueError, IndexError):
-                pass
-            original_bytes = len(content.encode())
-            # Replace with placeholder
-            messages[idx] = {
-                "role": "user",
-                "content": f"[tool_result: {tool_name}, {original_bytes} bytes, stored in run_store]",
-            }
-            evicted_indices.add(idx)
-            estimated_tokens -= original_bytes // 4
-            self.logger.info(
-                "CONTEXT EVICT tool=%s bytes=%s remaining_est_tokens=%s",
-                tool_name,
-                original_bytes,
-                estimated_tokens,
-            )
-
-        if evicted_indices:
-            state["messages"] = messages
-
-    def _compact_messages(self, state: RunState, *, max_messages: int = 50) -> None:
-        """Compact older messages when the transcript exceeds *max_messages*.
-
-        Preserves the system prompt (first message) and the latest *keep_recent*
-        messages.  Everything in between is summarized into a single digest
-        message to prevent context overflow on long runs.
-        """
-        self._evict_tool_result_messages(state)  # token-budget eviction (no-op if OLLAMA_NUM_CTX=0)
-        messages = state.get("messages", [])
-        if len(messages) <= max_messages:
-            return
-
-        keep_recent = max_messages // 2
-        # System prompt is always messages[0]
-        system_msg = messages[0] if messages and messages[0].get("role") == "system" else None
-        recent = messages[-keep_recent:]
-        middle = messages[1:-keep_recent] if system_msg else messages[:-keep_recent]
-
-        # Build a compact digest of the middle messages
-        tool_calls: list[str] = []
-        for msg in middle:
-            content = str(msg.get("content", ""))[:200]
-            role = msg.get("role", "?")
-            if role == "tool" or (role == "assistant" and "tool_name" in content):
-                tool_calls.append(content[:80])
-
-        digest_lines = [
-            f"[Context compacted: {len(middle)} messages summarized]",
-            f"Tool calls in compacted window: {len(tool_calls)}",
-        ]
-        if tool_calls:
-            digest_lines.append("Recent tool summaries: " + "; ".join(tool_calls[-5:]))
-
-        digest_msg: AgentMessage = {
-            "role": "system",
-            "content": "\n".join(digest_lines),
-        }
-
-        compacted: list[AgentMessage] = []
-        if system_msg:
-            compacted.append(system_msg)
-        compacted.append(digest_msg)
-        compacted.extend(recent)
-        state["messages"] = compacted
 
     def _normalize_tool_args(self, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
         return fallback_planner.normalize_tool_args(tool_name, args)
