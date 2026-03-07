@@ -18,6 +18,7 @@ Starting from a working single-agent LangGraph foundation (208 tests green, 4-no
 - [x] **Phase 5: Observability Layer and Architecture Snapshot** - Wire Langfuse CallbackHandler for automatic graph tracing, produce phase progression documentation (completed 2026-03-04)
 - [x] **Phase 6: Production Service Layer** - FastAPI HTTP service with POST /run, GET /run/{id}, and SSE streaming endpoint (completed 2026-03-04)
 - [x] **Phase 7: Production Persistence and CI** - Postgres persistence replacing SQLite, Dockerfile + docker-compose, GitHub Actions CI pipeline (completed 2026-03-06)
+- [ ] **Phase 7.1: Context Manipulation for Better Sub-Agent Multi-Task Handling** (INSERTED) - MissionContext model, event-driven eviction, specialist enrichment, provider-agnostic context management
 
 ## Phase Details
 
@@ -127,10 +128,30 @@ Plans:
 - [x] 07-03-PLAN.md — Docker containerization + CI pipeline: Dockerfile, docker-compose.yml, CI with Postgres matrix, coverage enforcement (PROD-04, PROD-05)
 - [ ] 07-04-PLAN.md — Architecture walkthrough: WALKTHROUGH_PHASE7.md covering Docker, Postgres, CI, store factory (PROD-03, PROD-04, PROD-05)
 
+### Phase 07.1: Context Manipulation for Better Sub-Agent Multi-Task Handling (INSERTED)
+
+**Goal:** Introduce a typed MissionContext model as a durable queryable context store, replace fragmented eviction mechanisms with a unified provider-agnostic ContextManager, enrich specialist subgraph context with mission goals and prior results, and scope planner messages per-mission with deterministic summarization
+**Depends on:** Phase 7
+**Requirements**: CTX-01, CTX-02, CTX-03, CTX-04, CTX-05, CTX-06, CTX-07, CTX-08, CTX-09, CTX-10, CTX-11, CTX-12
+**Success Criteria** (what must be TRUE):
+  1. MissionContext Pydantic model stores per-mission context with hierarchical sub-mission support, serialized as dicts on RunState
+  2. Mission completion triggers deterministic summarization (no LLM calls) and message eviction, with summaries injected as role="user" [Orchestrator] messages
+  3. Large tool results (>4000 chars) are replaced with compact placeholders; sliding window hard cap (30 messages) prevents unbounded growth
+  4. Specialist subgraphs receive mission_goal and prior_results_summary as top-level TypedDict fields
+  5. Old eviction code (_evict_tool_result_messages, _compact_messages, _mission_handoff_hint, ensure_state_defaults compaction) is fully removed
+  6. Every eviction event emits both a log entry and a Langfuse trace event
+  7. All 523+ existing tests pass after changes (no regressions)
+**Plans**: 4 plans
+Plans:
+- [ ] 07.1-01-PLAN.md — MissionContext model + artifact extraction + summary generation + RunState wiring (CTX-01, CTX-02, CTX-03, CTX-09)
+- [ ] 07.1-02-PLAN.md — ContextManager eviction system + observability + remove old code + test updates (CTX-04, CTX-05, CTX-06, CTX-08, CTX-10, CTX-11)
+- [ ] 07.1-03-PLAN.md — Specialist context enrichment: ExecutorState/EvaluatorState fields + build_specialist_context + graph.py wiring (CTX-07, CTX-09)
+- [ ] 07.1-04-PLAN.md — Full lifecycle wiring (on_tool_result, on_mission_complete) + integration test + regression verification (CTX-12)
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7
+Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7 → 7.1
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -141,3 +162,4 @@ Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7
 | 5. Observability Layer and Architecture Snapshot | 2/2 | Complete | 2026-03-04 |
 | 6. Production Service Layer | 3/3 | Complete | 2026-03-04 |
 | 7. Production Persistence and CI | 4/4 | Complete   | 2026-03-06 |
+| 7.1. Context Manipulation (INSERTED) | 0/4 | In Progress | — |
