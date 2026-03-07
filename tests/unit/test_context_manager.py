@@ -317,3 +317,247 @@ class TestSpecialistEnrichment:
         from agentic_workflows.orchestration.langgraph.specialist_evaluator import EvaluatorState
         assert "mission_goal" in EvaluatorState.__annotations__
         assert "prior_results_summary" in EvaluatorState.__annotations__
+
+
+# ── Eviction tests (Plan 02) ────────────────────────────────────────
+
+
+def _make_state(messages=None, mission_contexts=None, policy_flags=None, step=5):
+    """Build a minimal state dict for eviction testing."""
+    return {
+        "messages": messages or [],
+        "mission_contexts": mission_contexts or {},
+        "policy_flags": policy_flags or {},
+        "step": step,
+    }
+
+
+class TestEvictionMissionBoundary:
+    """on_mission_complete() creates summary, evicts mission messages, injects summary."""
+
+    def test_eviction_mission_boundary(self):
+        cm = ContextManager()
+        ctx = MissionContext(
+            mission_id=1,
+            goal="Sort the data",
+            tools_used=["sort_array"],
+            key_results={"sorted": "[1,2,3]"},
+            step_range=(2, 4),
+        )
+        messages = [
+            {"role": "system", "content": "You are an agent."},
+            {"role": "user", "content": "Sort this data"},  # step 1 (before mission)
+            {"role": "assistant", "content": "sorting..."},  # step 2 (in mission)
+            {"role": "user", "content": "TOOL RESULT: sorted"},  # step 3 (in mission)
+            {"role": "assistant", "content": "done sorting"},  # step 4 (in mission)
+            {"role": "user", "content": "Next task"},  # step 5 (after mission)
+        ]
+        state = _make_state(
+            messages=messages,
+            mission_contexts={"1": ctx.model_dump()},
+            step=5,
+        )
+        cm.on_mission_complete(state, mission_id=1)
+
+        # Mission messages (indices 2-4) should be removed and replaced by summary
+        remaining_contents = [m["content"] for m in state["messages"]]
+        assert "sorting..." not in remaining_contents
+        assert "TOOL RESULT: sorted" not in remaining_contents
+        assert "done sorting" not in remaining_contents
+
+        # Summary should be injected as role="user" with [Orchestrator] prefix
+        summary_msgs = [m for m in state["messages"] if "[Orchestrator]" in m.get("content", "")]
+        assert len(summary_msgs) >= 1
+        assert summary_msgs[0]["role"] == "user"
+        assert "Mission 1" in summary_msgs[0]["content"]
+
+        # System prompt and non-mission messages preserved
+        assert state["messages"][0]["role"] == "system"
+        assert "Sort this data" in [m["content"] for m in state["messages"]]
+        assert "Next task" in [m["content"] for m in state["messages"]]
+
+        # MissionContext status updated
+        updated_ctx = MissionContext.model_validate(state["mission_contexts"]["1"])
+        assert updated_ctx.status == "completed"
+        assert updated_ctx.summary != ""
+
+
+class TestLargeResultEviction:
+    """on_tool_result() replaces large results with compact placeholders."""
+
+    def test_large_result_eviction(self):
+        cm = ContextManager(large_result_threshold=100)
+        large_result = {"data": "x" * 200}
+        messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "do something"},
+            {"role": "user", "content": f"TOOL RESULT (big_tool):\n{{'data': '{'x' * 200}'}}"},
+        ]
+        ctx = MissionContext(mission_id=1, goal="test", step_range=(1, 3))
+        state = _make_state(
+            messages=messages,
+            mission_contexts={"1": ctx.model_dump()},
+        )
+        cm.on_tool_result(state, tool_name="big_tool", result=large_result, args={}, mission_id=1)
+
+        # The large tool result message should be replaced with a placeholder
+        replaced = state["messages"][2]
+        assert replaced["role"] == "user"
+        assert "[Orchestrator]" in replaced["content"]
+        assert "[tool_result: big_tool" in replaced["content"]
+        assert "chars" in replaced["content"]
+
+    def test_small_result_not_evicted(self):
+        cm = ContextManager(large_result_threshold=4000)
+        small_result = {"data": "ok"}
+        messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "TOOL RESULT (small_tool):\n{\"data\": \"ok\"}"},
+        ]
+        ctx = MissionContext(mission_id=1, goal="test", step_range=(1, 2))
+        state = _make_state(
+            messages=messages,
+            mission_contexts={"1": ctx.model_dump()},
+        )
+        cm.on_tool_result(state, tool_name="small_tool", result=small_result, args={}, mission_id=1)
+
+        # Small result should NOT be replaced
+        assert "TOOL RESULT" in state["messages"][1]["content"]
+
+
+class TestSlidingWindowCap:
+    """compact() enforces sliding_window_cap, dropping oldest non-system messages."""
+
+    def test_sliding_window_cap(self):
+        cm = ContextManager(sliding_window_cap=10)
+        messages = [{"role": "system", "content": "sys"}]
+        messages += [{"role": "user", "content": f"msg-{i}"} for i in range(20)]
+        state = _make_state(messages=messages)
+        cm.compact(state)
+
+        # Should have system prompt + 9 newest = 10 total
+        assert len(state["messages"]) == 10
+        assert state["messages"][0]["role"] == "system"
+        assert state["messages"][0]["content"] == "sys"
+        # Last message should be the newest
+        assert state["messages"][-1]["content"] == "msg-19"
+
+    def test_under_cap_not_trimmed(self):
+        cm = ContextManager(sliding_window_cap=30)
+        messages = [{"role": "system", "content": "sys"}]
+        messages += [{"role": "user", "content": f"msg-{i}"} for i in range(5)]
+        state = _make_state(messages=messages)
+        cm.compact(state)
+        assert len(state["messages"]) == 6  # unchanged
+
+
+class TestEvictionObservability:
+    """Eviction events emit logger.info and policy_flags.pipeline_trace entries."""
+
+    def test_eviction_observability(self):
+        cm = ContextManager()
+        state = _make_state(policy_flags={})
+        cm._emit_eviction_event(
+            state,
+            trigger="mission_complete",
+            mission_id=1,
+            messages_removed=3,
+            summary_injected="Mission 1 summary",
+        )
+        trace = state["policy_flags"].get("pipeline_trace", [])
+        assert len(trace) == 1
+        entry = trace[0]
+        assert entry["stage"] == "context_eviction"
+        assert entry["trigger"] == "mission_complete"
+        assert entry["mission_id"] == 1
+        assert entry["messages_removed"] == 3
+
+
+class TestNoConsecutiveSystemMessages:
+    """All injected messages use role='user' with [Orchestrator] prefix."""
+
+    def test_no_consecutive_system_messages(self):
+        cm = ContextManager()
+        ctx = MissionContext(
+            mission_id=1,
+            goal="Test",
+            tools_used=["sort_array"],
+            step_range=(1, 3),
+        )
+        messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "assistant", "content": "working"},
+            {"role": "user", "content": "result"},
+        ]
+        state = _make_state(
+            messages=messages,
+            mission_contexts={"1": ctx.model_dump()},
+        )
+        cm.on_mission_complete(state, mission_id=1)
+
+        # No injected message should have role="system"
+        for msg in state["messages"]:
+            if "[Orchestrator]" in msg.get("content", ""):
+                assert msg["role"] == "user", f"Injected message has role={msg['role']}, expected 'user'"
+
+
+class TestCompactReplacesOldEviction:
+    """compact() calls on_tool_result for large results + enforces sliding window."""
+
+    def test_compact_replaces_old_eviction(self):
+        cm = ContextManager(large_result_threshold=100, sliding_window_cap=10)
+        messages = [{"role": "system", "content": "sys"}]
+        # Add a large tool result message
+        messages.append({"role": "user", "content": "TOOL RESULT (big):\n" + "x" * 500})
+        # Add more messages to exceed sliding window
+        messages += [{"role": "user", "content": f"msg-{i}"} for i in range(15)]
+        state = _make_state(messages=messages)
+        cm.compact(state)
+
+        # Should enforce sliding window cap
+        assert len(state["messages"]) <= 10
+
+
+class TestBuildPlannerContextInjection:
+    """build_planner_context_injection returns formatted string with completed mission summaries."""
+
+    def test_build_planner_context_injection(self):
+        cm = ContextManager()
+        ctx1 = MissionContext(
+            mission_id=1,
+            goal="Sort data",
+            status="completed",
+            summary="Mission 1: Sort data | Tools: sort_array",
+            artifacts=[
+                ArtifactRecord(
+                    key="sorted_result",
+                    value="[1,2,3]",
+                    source_tool="sort_array",
+                    source_mission_id=1,
+                )
+            ],
+        )
+        ctx2 = MissionContext(mission_id=2, goal="Write file", status="pending")
+        state = _make_state(
+            mission_contexts={
+                "1": ctx1.model_dump(),
+                "2": ctx2.model_dump(),
+            }
+        )
+        result = cm.build_planner_context_injection(state)
+        assert "[Orchestrator]" in result
+        assert "Mission 1" in result or "Sort data" in result
+        assert "sorted_result" in result
+
+    def test_build_planner_context_injection_empty(self):
+        cm = ContextManager()
+        state = _make_state(mission_contexts={})
+        result = cm.build_planner_context_injection(state)
+        assert result == ""
+
+    def test_build_planner_context_injection_no_completed(self):
+        cm = ContextManager()
+        ctx = MissionContext(mission_id=1, goal="Pending", status="pending")
+        state = _make_state(mission_contexts={"1": ctx.model_dump()})
+        result = cm.build_planner_context_injection(state)
+        assert result == ""
