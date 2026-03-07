@@ -135,6 +135,9 @@ def _ensure_server_running() -> None:
             console.print("[yellow]API server not running, starting uvicorn...[/]")
             host = os.environ.get("API_HOST", "0.0.0.0")
             port = os.environ.get("API_PORT", "8000")
+            _TMP_DIR.mkdir(parents=True, exist_ok=True)
+            _server_log_fh = open(_TMP_DIR / "server_logs.txt", "a")  # noqa: SIM115
+            env = {**os.environ, "GSD_LOG_DIR": str(_TMP_DIR)}
             subprocess.Popen(
                 [
                     sys.executable,
@@ -146,11 +149,12 @@ def _ensure_server_running() -> None:
                     "--port",
                     port,
                     "--log-level",
-                    "warning",
+                    "info",
                 ],
                 start_new_session=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=_server_log_fh,
+                stderr=_server_log_fh,
+                env=env,
             )
 
         if attempt < 5:
