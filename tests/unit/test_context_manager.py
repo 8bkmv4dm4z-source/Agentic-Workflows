@@ -501,6 +501,130 @@ class TestNoConsecutiveSystemMessages:
                 assert msg["role"] == "user", f"Injected message has role={msg['role']}, expected 'user'"
 
 
+class TestFullMultiMissionLifecycle:
+    """Integration-level test: multi-mission flow through ContextManager lifecycle."""
+
+    def test_full_multi_mission_context_lifecycle(self):
+        """End-to-end: 2 missions through ContextManager lifecycle."""
+        cm = ContextManager(large_result_threshold=100, sliding_window_cap=30)
+
+        # Setup: state with 2 missions
+        ctx1 = MissionContext(
+            mission_id=1,
+            goal="Write fibonacci to file",
+            step_range=(1, 4),
+        )
+        ctx2 = MissionContext(
+            mission_id=2,
+            goal="Read file and sort contents",
+            step_range=(5, 8),
+        )
+        messages = [
+            {"role": "system", "content": "You are an agent."},
+            {"role": "assistant", "content": "I will write fibonacci."},  # step 1
+            {"role": "user", "content": "TOOL RESULT (write_file):\n{\"result\": \"wrote 50 chars to /tmp/fib.txt\"}"},  # step 2
+            {"role": "assistant", "content": "File written."},  # step 3
+            {"role": "user", "content": "TOOL RESULT (memoize):\n{\"value_hash\": \"abc123\"}"},  # step 4
+            {"role": "assistant", "content": "Now reading file."},  # step 5
+            {"role": "user", "content": "TOOL RESULT (read_file):\n{\"content\": \"1,1,2,3,5\"}"},  # step 6
+            {"role": "assistant", "content": "Sorting contents."},  # step 7
+            {"role": "user", "content": "TOOL RESULT (sort_array):\n{\"sorted\": [1,1,2,3,5]}"},  # step 8
+        ]
+        state = _make_state(
+            messages=messages,
+            mission_contexts={
+                "1": ctx1.model_dump(),
+                "2": ctx2.model_dump(),
+            },
+            step=8,
+        )
+
+        # Mission 1: on_tool_result(write_file) -> on_mission_complete(1)
+        write_result = {"result": "Successfully wrote 50 characters to /tmp/fib.txt"}
+        write_args = {"path": "/tmp/fib.txt", "content": "1, 1, 2, 3, 5"}
+        cm.on_tool_result(state, "write_file", write_result, write_args, mission_id=1)
+
+        # Verify artifacts extracted for mission 1
+        ctx1_updated = MissionContext.model_validate(state["mission_contexts"]["1"])
+        assert len(ctx1_updated.artifacts) >= 1
+        assert any(a.key == "file_path" for a in ctx1_updated.artifacts)
+        assert "write_file" in ctx1_updated.tools_used
+
+        # Complete mission 1
+        cm.on_mission_complete(state, mission_id=1)
+
+        # Verify: mission 1 summary injected, messages pruned
+        ctx1_done = MissionContext.model_validate(state["mission_contexts"]["1"])
+        assert ctx1_done.status == "completed"
+        assert ctx1_done.summary != ""
+
+        # Verify summary message injected with [Orchestrator] prefix
+        orchestrator_msgs = [
+            m for m in state["messages"]
+            if "[Orchestrator]" in m.get("content", "") and "Mission 1" in m.get("content", "")
+        ]
+        assert len(orchestrator_msgs) >= 1
+        assert orchestrator_msgs[0]["role"] == "user"
+
+        # Mission 2: check artifacts from mission 1 available
+        artifacts = cm.get_artifacts_for_mission(state, mission_id=2)
+        assert len(artifacts) >= 1
+        assert artifacts[0].key == "file_path"
+        assert artifacts[0].value == "/tmp/fib.txt"
+
+        # Verify: build_specialist_context for mission 2 includes mission 1 summary
+        specialist_ctx = cm.build_specialist_context(state, mission_id=2)
+        assert "Mission 1" in specialist_ctx["prior_results_summary"]
+        assert "Write fibonacci" in specialist_ctx["prior_results_summary"]
+        assert specialist_ctx["mission_goal"] == "Read file and sort contents"
+
+        # Verify: compact() enforces sliding window
+        cm.compact(state)
+        assert len(state["messages"]) <= 30
+
+        # Verify: no consecutive system messages in final state
+        for i in range(1, len(state["messages"])):
+            if state["messages"][i].get("role") == "system":
+                assert state["messages"][i - 1].get("role") != "system", (
+                    f"Consecutive system messages at index {i-1} and {i}"
+                )
+
+    def test_edge_case_empty_state(self):
+        """ContextManager doesn't crash on empty state (no mission_contexts key)."""
+        cm = ContextManager()
+        state: dict = {"messages": [], "policy_flags": {}, "step": 0}
+
+        # on_tool_result with no mission_contexts -- should not crash
+        cm.on_tool_result(state, "write_file", {"result": "ok"}, {}, mission_id=1)
+        # on_mission_complete with no mission_contexts -- should not crash
+        cm.on_mission_complete(state, mission_id=1)
+        # compact with empty messages -- should not crash
+        cm.compact(state)
+        # build_specialist_context with no mission_contexts -- should not crash
+        result = cm.build_specialist_context(state, mission_id=1)
+        assert result["mission_goal"] == ""
+        assert result["prior_results_summary"] == ""
+
+    def test_edge_case_mission_id_zero(self):
+        """ContextManager handles mission_id=0 gracefully."""
+        cm = ContextManager()
+        state = _make_state(mission_contexts={})
+        # Should not crash with mission_id=0
+        cm.on_tool_result(state, "write_file", {"result": "ok"}, {}, mission_id=0)
+        cm.on_mission_complete(state, mission_id=0)
+
+    def test_edge_case_missing_mission_context(self):
+        """ContextManager handles missing mission_context entry gracefully."""
+        cm = ContextManager()
+        state = _make_state(
+            messages=[{"role": "system", "content": "sys"}],
+            mission_contexts={"1": MissionContext(mission_id=1, goal="test").model_dump()},
+        )
+        # Mission 2 doesn't exist in mission_contexts -- should not crash
+        cm.on_tool_result(state, "write_file", {"result": "ok"}, {}, mission_id=2)
+        cm.on_mission_complete(state, mission_id=2)
+
+
 class TestCompactReplacesOldEviction:
     """compact() calls on_tool_result for large results + enforces sliding window."""
 

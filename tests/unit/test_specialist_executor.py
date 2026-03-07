@@ -50,6 +50,8 @@ def test_executor_state_fields() -> None:
         "result",
         "tokens_used",
         "status",
+        "mission_goal",
+        "prior_results_summary",
     }
     assert set(ExecutorState.__annotations__) == expected
 

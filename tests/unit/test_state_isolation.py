@@ -41,7 +41,7 @@ def test_evaluator_state_no_key_overlap_with_run_state() -> None:
 
 
 def test_executor_state_has_required_fields() -> None:
-    """ExecutorState must have exactly the 11 specified fields (no more, no less)."""
+    """ExecutorState must have exactly the 13 specified fields (no more, no less)."""
     expected = {
         "task_id",
         "specialist",
@@ -54,6 +54,8 @@ def test_executor_state_has_required_fields() -> None:
         "result",
         "tokens_used",
         "status",
+        "mission_goal",
+        "prior_results_summary",
     }
     actual = set(ExecutorState.__annotations__)
     assert actual == expected, (
@@ -62,7 +64,7 @@ def test_executor_state_has_required_fields() -> None:
 
 
 def test_evaluator_state_has_required_fields() -> None:
-    """EvaluatorState must have exactly the 10 specified fields (no more, no less)."""
+    """EvaluatorState must have exactly the 12 specified fields (no more, no less)."""
     expected = {
         "task_id",
         "specialist",
@@ -74,6 +76,8 @@ def test_evaluator_state_has_required_fields() -> None:
         "eval_audit_report",
         "tokens_used",
         "status",
+        "mission_goal",
+        "prior_results_summary",
     }
     actual = set(EvaluatorState.__annotations__)
     assert actual == expected, (

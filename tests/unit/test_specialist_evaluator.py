@@ -145,6 +145,8 @@ def test_evaluator_state_fields() -> None:
         "eval_audit_report",
         "tokens_used",
         "status",
+        "mission_goal",
+        "prior_results_summary",
     }
     actual = set(EvaluatorState.__annotations__)
     assert actual == expected, (
