@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 07.1-02-PLAN.md
-last_updated: "2026-03-07T14:29:30.256Z"
+stopped_at: Completed 07.1-04-PLAN.md
+last_updated: "2026-03-07T14:36:24.247Z"
 last_activity: 2026-03-07 — ContextManager eviction + graph.py wiring + old code removal
 progress:
   total_phases: 8
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 26
-  completed_plans: 26
+  completed_plans: 27
   percent: 100
 ---
 
@@ -26,15 +26,15 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 ## Current Position
 
 Phase: 7.1 (Context Manipulation for Better Sub-Agent Multi-Task Handling)
-Plan: 3 of 4 in current phase (07.1-01, 07.1-02, 07.1-03 DONE)
-Status: Plan 02 complete — event-driven eviction system wired into graph.py, old eviction removed.
-Last activity: 2026-03-07 — ContextManager eviction + graph.py wiring + old code removal
+Plan: 4 of 4 in current phase (07.1-01, 07.1-02, 07.1-03, 07.1-04 DONE)
+Status: Phase 7.1 COMPLETE — ContextManager lifecycle fully integrated into graph.py.
+Last activity: 2026-03-07 — ContextManager lifecycle hooks wired, 657 tests passing
 
-Progress: [██████████] 100% (26/26 plans complete, Phase 7.1 plan 03/04 done)
+Progress: [██████████] 100% (27/27 plans complete, Phase 7.1 04/04 done)
 
 ## Test Status
 
-- **523 unit tests pass + 4 skipped** (Postgres tests) on `p7-production-persistence-and-ci`
+- **657 tests pass** (all context manager lifecycle hooks wired, parallel plan regressions fixed)
 - 3 pre-existing unit test failures (test_run_bash_python_guard, 2x write_file shebang tests) -- unrelated to Phase 7
 - ruff check: clean (pre-existing UP035 in app.py noted)
 - Branch: `p7-production-persistence-and-ci`
@@ -57,6 +57,7 @@ Progress: [██████████] 100% (26/26 plans complete, Phase 7.1
 | 06-fastapi-service-layer | 3/3 | 16 min | 5 min |
 | 07-production-persistence-and-ci | 4/4 | 26 min | 7 min |
 | Phase 07.1 P02 | 5min | 2 tasks | 5 files |
+| Phase 07.1 P04 | 4min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -102,6 +103,7 @@ Recent decisions affecting current work:
 - [Phase 07.1]: Fallback to state["missions"] list when mission_contexts entry missing for specialist goal lookup
 - [Phase 07.1]: All eviction injected messages use role=user with [Orchestrator] prefix, never role=system
 - [Phase 07.1]: ContextManager is single source of truth for message lifecycle -- removed competing compaction from ensure_state_defaults
+- [Phase 07.1]: ContextManager lifecycle calls wrapped in try/except for graceful degradation
 
 ### Roadmap Evolution
 
@@ -131,6 +133,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-03-07T14:29:30.253Z
-Stopped at: Completed 07.1-02-PLAN.md
+Last session: 2026-03-07T14:36:24.243Z
+Stopped at: Completed 07.1-04-PLAN.md
 Resume file: None
