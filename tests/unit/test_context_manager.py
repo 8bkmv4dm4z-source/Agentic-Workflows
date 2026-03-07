@@ -210,3 +210,110 @@ class TestContextManager:
         # Mission 1 should see no prior artifacts
         artifacts_m1 = cm.get_artifacts_for_mission(state, mission_id=1)
         assert artifacts_m1 == []
+
+
+# ── Specialist enrichment tests ─────────────────────────────────────
+
+
+class TestSpecialistEnrichment:
+    """Tests for ContextManager.build_specialist_context() — specialist enrichment."""
+
+    def _make_state(self, contexts: dict[str, dict]) -> dict:
+        """Helper: build a minimal state dict with mission_contexts and missions."""
+        missions = []
+        for mid_str in sorted(contexts, key=lambda k: int(k)):
+            missions.append(contexts[mid_str].get("goal", ""))
+        return {"mission_contexts": contexts, "missions": missions}
+
+    def test_specialist_enrichment(self):
+        """build_specialist_context() returns dict with mission_goal and prior_results_summary."""
+        cm = ContextManager()
+        ctx1 = MissionContext(mission_id=1, goal="Sort an array").model_dump()
+        state = self._make_state({"1": ctx1})
+        result = cm.build_specialist_context(state, mission_id=1)
+        assert "mission_goal" in result
+        assert "prior_results_summary" in result
+        assert result["mission_goal"] == "Sort an array"
+
+    def test_specialist_enrichment_no_prior(self):
+        """When no prior missions completed, prior_results_summary is empty string."""
+        cm = ContextManager()
+        ctx1 = MissionContext(mission_id=1, goal="First mission").model_dump()
+        state = self._make_state({"1": ctx1})
+        result = cm.build_specialist_context(state, mission_id=1)
+        assert result["prior_results_summary"] == ""
+
+    def test_specialist_enrichment_with_prior(self):
+        """When missions 1,2 completed, context for mission 3 contains summaries of 1 and 2."""
+        cm = ContextManager()
+        ctx1 = MissionContext(
+            mission_id=1, goal="Analyze data", status="completed",
+            tools_used=["data_analysis"], key_results={"mean": "42.0"},
+        ).model_dump()
+        ctx2 = MissionContext(
+            mission_id=2, goal="Sort results", status="completed",
+            tools_used=["sort_array"], key_results={"sorted": "[1,2,3]"},
+        ).model_dump()
+        ctx3 = MissionContext(mission_id=3, goal="Write file").model_dump()
+        state = self._make_state({"1": ctx1, "2": ctx2, "3": ctx3})
+
+        result = cm.build_specialist_context(state, mission_id=3)
+        assert "Mission 1" in result["prior_results_summary"]
+        assert "Mission 2" in result["prior_results_summary"]
+        assert "Analyze data" in result["prior_results_summary"]
+        assert "Sort results" in result["prior_results_summary"]
+
+    def test_specialist_enrichment_includes_artifacts(self):
+        """prior_results_summary includes artifact information from prior missions."""
+        cm = ContextManager()
+        ctx1 = MissionContext(
+            mission_id=1, goal="Write output", status="completed",
+            tools_used=["write_file"],
+            artifacts=[
+                ArtifactRecord(
+                    key="file_path", value="/tmp/out.txt",
+                    source_tool="write_file", source_mission_id=1,
+                )
+            ],
+        ).model_dump()
+        ctx2 = MissionContext(mission_id=2, goal="Read output").model_dump()
+        state = self._make_state({"1": ctx1, "2": ctx2})
+
+        result = cm.build_specialist_context(state, mission_id=2)
+        assert "file_path" in result["prior_results_summary"]
+        assert "/tmp/out.txt" in result["prior_results_summary"]
+
+    def test_specialist_enrichment_uses_same_summary_format(self):
+        """prior_results_summary uses same format as MissionContext.build_summary()."""
+        cm = ContextManager()
+        ctx1 = MissionContext(
+            mission_id=1, goal="Analyze data", status="completed",
+            tools_used=["data_analysis"], key_results={"mean": "42.0"},
+        )
+        ctx1_dump = ctx1.model_dump()
+        ctx2 = MissionContext(mission_id=2, goal="Next step").model_dump()
+        state = self._make_state({"1": ctx1_dump, "2": ctx2})
+
+        result = cm.build_specialist_context(state, mission_id=2)
+        # The summary for mission 1 in prior_results_summary should match build_summary()
+        expected_summary = ctx1.build_summary()
+        assert expected_summary in result["prior_results_summary"]
+
+    def test_specialist_enrichment_goal_fallback_to_missions(self):
+        """When mission_contexts has no entry, fall back to state['missions'] list."""
+        cm = ContextManager()
+        state = {"mission_contexts": {}, "missions": ["First goal", "Second goal"]}
+        result = cm.build_specialist_context(state, mission_id=2)
+        assert result["mission_goal"] == "Second goal"
+
+    def test_executor_state_has_enrichment_fields(self):
+        """ExecutorState TypedDict includes mission_goal and prior_results_summary."""
+        from agentic_workflows.orchestration.langgraph.specialist_executor import ExecutorState
+        assert "mission_goal" in ExecutorState.__annotations__
+        assert "prior_results_summary" in ExecutorState.__annotations__
+
+    def test_evaluator_state_has_enrichment_fields(self):
+        """EvaluatorState TypedDict includes mission_goal and prior_results_summary."""
+        from agentic_workflows.orchestration.langgraph.specialist_evaluator import EvaluatorState
+        assert "mission_goal" in EvaluatorState.__annotations__
+        assert "prior_results_summary" in EvaluatorState.__annotations__
