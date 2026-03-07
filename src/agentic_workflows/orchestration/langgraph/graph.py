@@ -28,6 +28,7 @@ from agentic_workflows.orchestration.langgraph import (
     text_extractor,
 )
 from agentic_workflows.orchestration.langgraph.checkpoint_store import SQLiteCheckpointStore
+from agentic_workflows.orchestration.langgraph.context_manager import ContextManager
 from agentic_workflows.orchestration.langgraph.handoff import create_handoff, create_handoff_result
 from agentic_workflows.orchestration.langgraph.memo_store import SQLiteMemoStore
 from agentic_workflows.orchestration.langgraph.mission_auditor import audit_run
@@ -151,6 +152,7 @@ class LangGraphOrchestrator:
         self.max_duplicate_tool_retries = max_duplicate_tool_retries
         self.max_finish_rejections = max_finish_rejections
         self._on_specialist_route = on_specialist_route
+        self.context_manager = ContextManager()
         self.strict_single_action_mode = self._env_bool("P1_STRICT_SINGLE_ACTION", False)
         self.tools: dict[str, Tool] = build_tool_registry(
             self.memo_store, checkpoint_store=self.checkpoint_store
@@ -1427,6 +1429,12 @@ class LangGraphOrchestrator:
             # _execute_action() is still called for its full pre-processing pipeline
             # (arg normalization, duplicate detection, auto-memo-lookup, content validation,
             # mission attribution) — the approaches are complementary, not redundant.
+
+            # Get enriched context from ContextManager
+            specialist_ctx = self.context_manager.build_specialist_context(
+                state, max(0, int(mission_id or 0))
+            )
+
             exec_state: dict[str, Any] = {
                 "task_id": task_id,
                 "specialist": "executor",
@@ -1443,6 +1451,8 @@ class LangGraphOrchestrator:
                 "result": {},
                 "tokens_used": 0,
                 "status": "success",
+                "mission_goal": specialist_ctx.get("mission_goal", ""),
+                "prior_results_summary": specialist_ctx.get("prior_results_summary", ""),
             }
             # Invoke the compiled subgraph — this records real subgraph node transitions.
             self._executor_subgraph.invoke(exec_state, config={"callbacks": self._active_callbacks})
