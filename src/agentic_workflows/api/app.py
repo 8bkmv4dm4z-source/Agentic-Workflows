@@ -29,6 +29,10 @@ log = structlog.get_logger()
 @asynccontextmanager
 async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     """Compile the graph once and initialise storage at startup."""
+    from agentic_workflows.logger import setup_dual_logging as _setup_logging
+    _log_dir = os.environ.get("GSD_LOG_DIR", ".tmp")
+    _setup_logging(log_dir=_log_dir)
+
     log.info("api.startup", status="compiling_graph")
 
     db_url = os.environ.get("DATABASE_URL")
