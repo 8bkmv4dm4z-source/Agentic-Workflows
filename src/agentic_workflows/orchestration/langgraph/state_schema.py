@@ -108,6 +108,10 @@ class RunState(TypedDict):
     # Token budget tracking.
     token_budget_remaining: int
     token_budget_used: int
+    # Mission context for cross-mission artifact sharing (Phase 7.1).
+    # Stored as dict[str, Any] (not MissionContext) for checkpointer serialization safety.
+    # Keys are str(mission_id) for JSON serialization.
+    mission_contexts: dict[str, Any]
 
 
 def utc_now_iso() -> str:
@@ -168,6 +172,7 @@ def new_run_state(system_prompt: str, user_input: str, run_id: str | None = None
         "active_specialist": "supervisor",
         "token_budget_remaining": 100_000,
         "token_budget_used": 0,
+        "mission_contexts": {},
     }
 
 
@@ -233,6 +238,8 @@ def ensure_state_defaults(state: RunState | dict[str, Any], *, system_prompt: st
         state_dict["token_budget_remaining"] = 100_000
     if "token_budget_used" not in state_dict:
         state_dict["token_budget_used"] = 0
+    if "mission_contexts" not in state_dict:
+        state_dict["mission_contexts"] = {}
 
     retry_counts = state_dict["retry_counts"]
     retry_counts.setdefault("invalid_json", 0)
