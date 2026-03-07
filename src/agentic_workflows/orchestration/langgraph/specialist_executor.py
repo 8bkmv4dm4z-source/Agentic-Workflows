@@ -27,6 +27,8 @@ class ExecutorState(TypedDict):
     result: dict[str, Any]
     tokens_used: int
     status: Literal["success", "error", "timeout"]
+    mission_goal: str
+    prior_results_summary: str
 
 
 def _ensure_executor_defaults(state: ExecutorState) -> None:  # type: ignore[type-arg]

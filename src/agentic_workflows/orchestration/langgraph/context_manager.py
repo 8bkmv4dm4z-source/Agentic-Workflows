@@ -246,3 +246,46 @@ class ContextManager:
                 artifacts.extend(ctx.artifacts)
 
         return artifacts
+
+    def build_specialist_context(
+        self, state: dict[str, Any], mission_id: int
+    ) -> dict[str, str]:
+        """Build enriched context dict for specialist invocation.
+
+        Returns a dict with:
+        - ``mission_goal``: goal string for the given mission_id
+        - ``prior_results_summary``: formatted summaries of all completed
+          missions with id < mission_id, using the same ``build_summary()``
+          format as ``MissionContext``.
+        """
+        mission_contexts: dict[str, Any] = state.get("mission_contexts", {})
+
+        # Resolve mission goal
+        goal = ""
+        mid_str = str(mission_id)
+        if mid_str in mission_contexts:
+            ctx = MissionContext.model_validate(mission_contexts[mid_str])
+            goal = ctx.goal
+        else:
+            # Fallback to state["missions"] list (0-indexed)
+            missions_list: list[str] = state.get("missions", [])
+            idx = mission_id - 1
+            if 0 <= idx < len(missions_list):
+                goal = missions_list[idx]
+
+        # Build prior results summary from completed missions with id < mission_id
+        prior_parts: list[str] = []
+        for mid_key in sorted(mission_contexts.keys(), key=lambda k: int(k)):
+            mid = int(mid_key)
+            if mid >= mission_id:
+                continue
+            ctx = MissionContext.model_validate(mission_contexts[mid_key])
+            if ctx.status == "completed":
+                prior_parts.append(ctx.build_summary())
+
+        prior_results_summary = "\n".join(prior_parts)
+
+        return {
+            "mission_goal": goal,
+            "prior_results_summary": prior_results_summary,
+        }

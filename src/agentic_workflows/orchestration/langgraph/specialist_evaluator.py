@@ -28,6 +28,8 @@ class EvaluatorState(TypedDict):
     eval_audit_report: dict[str, Any] | None
     tokens_used: int
     status: Literal["success", "error", "timeout"]
+    mission_goal: str
+    prior_results_summary: str
 
 
 def _ensure_evaluator_defaults(state: EvaluatorState) -> None:  # type: ignore[type-arg]
