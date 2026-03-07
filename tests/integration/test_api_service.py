@@ -7,6 +7,7 @@ All tests use httpx AsyncClient with ASGITransport against the real FastAPI app.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import tempfile
 from typing import Any
@@ -64,10 +65,8 @@ def _parse_sse_events(response_text: str) -> list[dict[str, Any]]:
         if line.startswith("data:"):
             data_str = line[len("data:"):].strip()
             if data_str:
-                try:
+                with contextlib.suppress(json.JSONDecodeError):
                     events.append(json.loads(data_str))
-                except json.JSONDecodeError:
-                    pass
     return events
 
 

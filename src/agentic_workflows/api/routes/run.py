@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import time
@@ -76,11 +77,11 @@ async def post_run(body: RunRequest, request: Request) -> EventSourceResponse:
         try:
             def _run_streaming() -> dict[str, Any]:
                 """Stream node transitions and return final result."""
+                from agentic_workflows.orchestration.langgraph.mission_parser import parse_missions
                 from agentic_workflows.orchestration.langgraph.state_schema import (
                     ensure_state_defaults,
                     new_run_state,
                 )
-                from agentic_workflows.orchestration.langgraph.mission_parser import parse_missions
 
                 # Build state (mirror run() logic)
                 state = new_run_state(orchestrator.system_prompt, user_input, run_id=run_id)
@@ -202,15 +203,11 @@ async def post_run(body: RunRequest, request: Request) -> EventSourceResponse:
 
         except Exception as exc:
             log.error("run.producer_error", run_id=run_id, error=str(exc))
-            try:
+            with contextlib.suppress(Exception):
                 await run_store.update_run(run_id, status="failed")
-            except Exception:
-                pass
             error_evt = make_error(run_id, str(exc))
-            try:
+            with contextlib.suppress(Exception):
                 await send_stream.send(error_evt)
-            except Exception:
-                pass
         finally:
             await send_stream.aclose()
             request.app.state.active_streams.pop(run_id, None)

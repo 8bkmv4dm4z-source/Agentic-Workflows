@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import os
 import secrets
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 import structlog
 import uvicorn
@@ -51,7 +51,28 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
             open=False,
             kwargs={"autocommit": True, "prepare_threshold": 0},
         )
-        pool.open(wait=True)
+
+        # Retry opening the pool so startup survives Postgres coming up
+        # slightly after uvicorn (common when auto-started locally).
+        _pg_retries = int(os.environ.get("PG_CONNECT_RETRIES", "10"))
+        _pg_delay = float(os.environ.get("PG_CONNECT_RETRY_DELAY", "2.0"))
+        for _attempt in range(1, _pg_retries + 1):
+            try:
+                pool.open(wait=True, timeout=10)
+                break
+            except Exception as _exc:
+                if _attempt == _pg_retries:
+                    raise RuntimeError(
+                        f"Postgres unavailable after {_pg_retries} attempts: {_exc}"
+                    ) from _exc
+                log.warning(
+                    "api.postgres_not_ready",
+                    attempt=_attempt,
+                    retries=_pg_retries,
+                    error=str(_exc),
+                )
+                import time as _time
+                _time.sleep(_pg_delay)
 
         run_store = PostgresRunStore(pool)
         checkpoint_store = PostgresCheckpointStore(pool)

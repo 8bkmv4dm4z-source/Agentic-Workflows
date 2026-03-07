@@ -22,7 +22,7 @@ services:
       - pgdata:/var/lib/postgresql/data
       - ./db/migrations:/docker-entrypoint-initdb.d
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "agentic"]
+      test: ["CMD", "pg_isready", "-U", "agentic", "-d", "agentic_workflows"]
       interval: 5s
       timeout: 5s
       retries: 5

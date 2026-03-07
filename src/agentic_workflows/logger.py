@@ -84,3 +84,16 @@ def setup_dual_logging(log_dir: str = ".tmp") -> None:
     admin_handler.setFormatter(fmt)
     admin_handler.addFilter(AdminFilter())
     root.addHandler(admin_handler)
+
+    # Server: INFO+ from all loggers → server_logs.txt
+    server_handler = logging.FileHandler(log_path / "server_logs.txt")
+    server_handler.setLevel(logging.INFO)
+    server_handler.setFormatter(fmt)
+    root.addHandler(server_handler)
+
+    # Provider: ERROR+ from provider logger → provider_logs.txt
+    provider_handler = logging.FileHandler(log_path / "provider_logs.txt")
+    provider_handler.setLevel(logging.ERROR)
+    provider_handler.setFormatter(fmt)
+    logging.getLogger("langgraph.provider").addHandler(provider_handler)
+    logging.getLogger("langgraph.provider").propagate = True

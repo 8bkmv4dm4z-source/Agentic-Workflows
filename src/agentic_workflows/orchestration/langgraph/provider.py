@@ -17,8 +17,11 @@ from dotenv import load_dotenv
 from groq import Groq
 from openai import OpenAI
 
+from agentic_workflows.logger import get_logger
 from agentic_workflows.observability import observe
 from agentic_workflows.orchestration.langgraph.state_schema import AgentMessage
+
+_LOG = get_logger("langgraph.provider")
 
 # Phase 1 standardizes all provider/runtime config via repo-level .env.
 ROOT_DIR = Path(__file__).resolve().parents[4]
@@ -141,7 +144,15 @@ class _RetryingProviderBase:
                 last_exc = exc
                 if attempt >= attempts:
                     break
+                _LOG.warning(
+                    "PROVIDER RETRY attempt=%d/%d error=%s",
+                    attempt, attempts, exc,
+                )
                 time.sleep(self.retry_backoff_seconds * attempt)
+        _LOG.error(
+            "PROVIDER TIMEOUT after %d attempts: %s",
+            attempts, str(last_exc) if last_exc else "unknown",
+        )
         raise ProviderTimeoutError(
             f"provider timeout after {attempts} attempts: {str(last_exc) if last_exc else 'unknown timeout'}"
         ) from last_exc

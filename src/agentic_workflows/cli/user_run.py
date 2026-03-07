@@ -198,32 +198,31 @@ async def stream_run(
     run_id = ""
     answer = ""
     last_result: dict[str, Any] = {}
-    async with httpx.AsyncClient(base_url=API_BASE_URL, timeout=300.0) as client:
-        async with client.stream("POST", "/run", json=payload, headers=headers) as resp:
-            if resp.status_code != 200:
-                body = await resp.aread()
-                console.print(f"[bold red]Server error {resp.status_code}: {body.decode()[:500]}[/]")
-                return "", ""
+    async with httpx.AsyncClient(base_url=API_BASE_URL, timeout=300.0) as client, client.stream("POST", "/run", json=payload, headers=headers) as resp:
+        if resp.status_code != 200:
+            body = await resp.aread()
+            console.print(f"[bold red]Server error {resp.status_code}: {body.decode()[:500]}[/]")
+            return "", ""
 
-            async for line in resp.aiter_lines():
-                line = line.strip()
-                if not line.startswith("data:"):
-                    continue
-                data_str = line[len("data:"):].strip()
-                if not data_str:
-                    continue
-                try:
-                    event = json.loads(data_str)
-                except json.JSONDecodeError:
-                    continue
+        async for line in resp.aiter_lines():
+            line = line.strip()
+            if not line.startswith("data:"):
+                continue
+            data_str = line[len("data:"):].strip()
+            if not data_str:
+                continue
+            try:
+                event = json.loads(data_str)
+            except json.JSONDecodeError:
+                continue
 
-                if not run_id and "run_id" in event:
-                    run_id = event["run_id"]
-                if event.get("type") == "run_complete":
-                    last_result = event.get("result", {})
-                    answer = last_result.get("answer", "")
+            if not run_id and "run_id" in event:
+                run_id = event["run_id"]
+            if event.get("type") == "run_complete":
+                last_result = event.get("result", {})
+                answer = last_result.get("answer", "")
 
-                _render_event(event)
+            _render_event(event)
 
     if run_id and last_result:
         _write_run_report(run_id, last_result)

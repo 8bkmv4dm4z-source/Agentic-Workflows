@@ -1,8 +1,20 @@
+import re as _re
 import subprocess
 from typing import Any
 
 from agentic_workflows.tools._security import check_bash_command, validate_path_within_sandbox
 from agentic_workflows.tools.base import Tool
+
+_PYTHON_BARE_RE = _re.compile(r"(?<![\w/])(python2?)(?:\s|$)")
+
+
+def _check_python_guard(command: str) -> dict[str, Any] | None:
+    if _PYTHON_BARE_RE.search(command):
+        return {
+            "error": "run_bash_guardrail: bare 'python'/'python2' is not allowed; use 'python3'",
+            "hint": "Replace 'python' with 'python3' in your command.",
+        }
+    return None
 
 _DEFAULT_TIMEOUT = 30
 _MAX_TIMEOUT = 120
@@ -25,6 +37,11 @@ class RunBashTool(Tool):
 
         if not command or not command.strip():
             return {"error": "command is required"}
+
+        # Security: bare python/python2 guard
+        py_err = _check_python_guard(command)
+        if py_err is not None:
+            return py_err
 
         # Security: command denylist/allowlist filtering
         cmd_err = check_bash_command(command)

@@ -14,7 +14,6 @@ from agentic_workflows.orchestration.langgraph.graph import LangGraphOrchestrato
 from agentic_workflows.storage.sqlite import SQLiteRunStore
 from tests.conftest import ScriptedProvider
 
-
 # ---------------------------------------------------------------------------
 # ScriptedProvider response sequences
 # ---------------------------------------------------------------------------

@@ -5,6 +5,15 @@ from agentic_workflows.tools._security import check_content_size, validate_path_
 from agentic_workflows.tools.base import Tool
 
 
+def _check_shebang_guard(path: str, content: str) -> dict[str, Any] | None:
+    if path.endswith((".sh", ".bash")) and not content.lstrip().startswith("#!"):
+        return {
+            "error": "write_file_guardrail: shell scripts (.sh/.bash) must start with a shebang (#!)",
+            "hint": "Add '#!/bin/bash' or '#!/bin/sh' as the first line.",
+        }
+    return None
+
+
 class WriteFileTool(Tool):
     name = "write_file"
     description = "Writes content to a file. Overwrites if exists."
@@ -27,6 +36,11 @@ class WriteFileTool(Tool):
         sandbox_err = validate_path_within_sandbox(path)
         if sandbox_err is not None:
             return sandbox_err
+
+        # Security: shell scripts must have a shebang
+        shebang_err = _check_shebang_guard(path, content)
+        if shebang_err is not None:
+            return shebang_err
 
         target_path = path
         artifact_dir = str(os.getenv("P1_RUN_ARTIFACT_DIR", "")).strip()
