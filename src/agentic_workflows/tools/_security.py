@@ -16,8 +16,25 @@ from urllib.parse import urlparse
 # Path validation
 # ---------------------------------------------------------------------------
 
+def effective_root() -> Path:
+    """Return the effective working-directory root for file tools.
+
+    Priority:
+    1. ``AGENT_ROOT`` — explicit root covering all readable paths (e.g. /app)
+    2. ``AGENT_WORKDIR`` — host-mounted workspace (e.g. /app/workspace)
+    3. process cwd
+    """
+    agent_root = os.getenv("AGENT_ROOT", "").strip()
+    if agent_root:
+        return Path(agent_root).resolve()
+    agent_workdir = os.getenv("AGENT_WORKDIR", "").strip()
+    if agent_workdir:
+        return Path(agent_workdir).resolve()
+    return Path.cwd().resolve()
+
+
 def validate_path_within_cwd(path_str: str) -> tuple[Path, dict[str, Any] | None]:
-    """Resolve *path_str* and verify it sits under the current working directory.
+    """Resolve *path_str* and verify it sits under the effective working directory.
 
     Returns ``(resolved_path, None)`` on success, or
     ``(Path(), {"error": ...})`` when the path is invalid or escapes cwd.
@@ -25,7 +42,7 @@ def validate_path_within_cwd(path_str: str) -> tuple[Path, dict[str, Any] | None
     if not path_str:
         return Path(), {"error": "path is required"}
 
-    cwd = Path.cwd().resolve()
+    cwd = effective_root()
     try:
         target = Path(path_str).resolve()
     except Exception:

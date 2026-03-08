@@ -1,19 +1,13 @@
-# Shared Plan — Run 6c0e9034-c815-41ec-97d4-23daab1ee756
+# Shared Plan — Run a43da8bf-c4ef-4e49-a3a6-c6e0c45c37e6
 
-**Parsing method:** structured
-**Total missions:** 3
-**Completed:** 3/3
+**Parsing method:** regex_fallback
+**Total missions:** 1
+**Completed:** 0/1
 
 ## Mission Tree
 
-- [x] **Task 1:** say first  — IMPLEMENTED
-- [x] **Task 2:** say second  — IMPLEMENTED
-  - Dependencies: 1
-- [x] **Task 3:** say third  — IMPLEMENTED
-  - Dependencies: 2
+- [ ] **Task 1:** Primary mission  — PENDING
 
 ## Flat Missions (backward-compat)
 
-1. [x] Task 1: say first  — IMPLEMENTED
-2. [x] Task 2: say second  — IMPLEMENTED
-3. [x] Task 3: say third  — IMPLEMENTED
+1. [ ] Primary mission  — PENDING

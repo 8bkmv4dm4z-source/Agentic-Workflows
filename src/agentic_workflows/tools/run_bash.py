@@ -38,7 +38,7 @@ class RunBashTool(Tool):
 
         command: str = args.get("command", "")
         timeout: int = min(int(args.get("timeout", _DEFAULT_TIMEOUT)), _MAX_TIMEOUT)
-        cwd: str | None = args.get("cwd") or None
+        cwd: str | None = args.get("cwd") or os.environ.get("AGENT_WORKDIR") or None
 
         if not command or not command.strip():
             return {"error": "command is required"}
