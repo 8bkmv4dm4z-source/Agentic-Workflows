@@ -14,10 +14,14 @@ from __future__ import annotations
 import hashlib
 from typing import TYPE_CHECKING, TypedDict
 
+from agentic_workflows.logger import get_logger
+
 if TYPE_CHECKING:
     from psycopg_pool import ConnectionPool
 
     from agentic_workflows.context.embedding_provider import EmbeddingProvider
+
+_logger = get_logger("artifact_store")
 
 
 def _sha256_key(key: str) -> str:
@@ -70,6 +74,7 @@ class ArtifactStore:
         On conflict (run_id, mission_id, key), updates value, source_tool, and embedding.
         """
         if self._pool is None:
+            _logger.debug("ARTIFACT STORE upsert skipped pool=None")
             return
 
         key_hash = _sha256_key(key)
@@ -90,6 +95,7 @@ class ArtifactStore:
                 sql,
                 (run_id, mission_id, key, value, source_tool, key_hash, embedding_str),
             )
+        _logger.info("ARTIFACT STORE upsert key_hash=%s run_id=%s", key_hash[:12], run_id)
 
     def search(
         self,
@@ -103,11 +109,15 @@ class ArtifactStore:
         Optionally filter by run_id for within-run artifact lookups.
         """
         if self._pool is None:
+            _logger.debug("ARTIFACT STORE search skipped pool=None")
             return []
 
         try:
-            return self._search(embedding, limit, run_id)
-        except Exception:
+            results = self._search(embedding, limit, run_id)
+            _logger.info("ARTIFACT STORE search top_k=%d results=%d", limit, len(results))
+            return results
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("ARTIFACT STORE error op=search error=%s", exc)
             return []
 
     def _search(

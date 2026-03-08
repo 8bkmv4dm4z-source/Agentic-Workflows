@@ -16,6 +16,10 @@ import os
 import random
 from typing import Protocol, runtime_checkable
 
+from agentic_workflows.logger import get_logger
+
+_logger = get_logger("embedding_provider")
+
 
 @runtime_checkable
 class EmbeddingProvider(Protocol):
@@ -44,13 +48,18 @@ class MockEmbeddingProvider:
 
     dimensions: int = 384
 
+    def __init__(self) -> None:
+        _logger.info("EMBED INIT provider=mock dim=%d", self.dimensions)
+
     def embed_sync(self, text: str) -> list[float]:
         """Embed a single text to a deterministic 384-dim unit-norm vector."""
         seed = int.from_bytes(hashlib.sha256(text.encode()).digest(), "big")
         rng = random.Random(seed)
         vec = [rng.gauss(0, 1) for _ in range(self.dimensions)]
         norm = sum(v * v for v in vec) ** 0.5
-        return [v / norm for v in vec] if norm > 0 else vec
+        result = [v / norm for v in vec] if norm > 0 else vec
+        _logger.debug("EMBED GEN provider=mock text_len=%d dim=%d", len(text), self.dimensions)
+        return result
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         """Embed a batch of texts."""
@@ -70,17 +79,21 @@ class FastEmbedProvider:
         try:
             from fastembed import TextEmbedding  # type: ignore[import]
         except ImportError as exc:
+            _logger.warning("EMBED INIT provider=fastembed status=unavailable")
             raise ImportError(
                 "fastembed is required for FastEmbedProvider. "
                 "Install it: pip install 'agentic-workflows[context]' or pip install fastembed>=0.3"
             ) from exc
         self._model = TextEmbedding(model_name)
         self._model_name = model_name
+        _logger.info("EMBED INIT provider=fastembed model=%s dim=%d", model_name, self.dimensions)
 
     def embed_sync(self, text: str) -> list[float]:
         """Embed a single text. Wraps fastembed generator."""
         results = list(self._model.embed([text]))
-        return [float(v) for v in results[0]]
+        result = [float(v) for v in results[0]]
+        _logger.debug("EMBED GEN provider=fastembed text_len=%d dim=%d", len(text), self.dimensions)
+        return result
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         """Embed a batch of texts."""

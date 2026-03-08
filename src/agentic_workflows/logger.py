@@ -22,6 +22,11 @@ _ADMIN_PREFIXES: tuple[str, ...] = (
     "SPECIALIST OUTPUT",
     "TOOL EXEC",
     "TOOL RESULT",
+    "CONTEXT INJECT",
+    "CASCADE QUERY",
+    "CASCADE UPSERT",
+    "EMBED INIT",
+    "ARTIFACT STORE",
 )
 
 _setup_done: bool = False
