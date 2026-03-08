@@ -1,0 +1,147 @@
+"""Unit tests for Phase 7.3 ContextManager extensions.
+
+Tests the new optional params (mission_context_store, embedding_provider),
+_persist_mission_context() behavior, and cross-run injection in
+build_planner_context_injection().
+
+Does NOT test Postgres -- uses MagicMock for the store.
+"""
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from agentic_workflows.orchestration.langgraph.context_manager import ContextManager
+from agentic_workflows.storage.mission_context_store import MissionContextResult
+
+
+def _make_result(goal: str, summary: str) -> MissionContextResult:
+    return MissionContextResult(
+        id=1,
+        run_id="prev-run",
+        mission_id="m-1",
+        goal=goal,
+        summary=summary,
+        tools_used=["write_file"],
+        score=0.9,
+    )
+
+
+class TestContextManagerBackwardCompat:
+    def test_zero_args_instantiation(self):
+        cm = ContextManager()
+        assert cm is not None
+        assert cm._store is None
+        assert cm._embedding_provider is None
+
+    def test_none_params_equivalent_to_zero_args(self):
+        cm = ContextManager(mission_context_store=None, embedding_provider=None)
+        assert cm._store is None
+        assert cm._embedding_provider is None
+
+    def test_build_injection_no_store(self):
+        cm = ContextManager()
+        # Should not raise; returns str (possibly empty)
+        state: dict = {"missions": [], "mission_contexts": {}, "messages": []}
+        result = cm.build_planner_context_injection(state)
+        assert isinstance(result, str)
+
+
+class TestPersistMissionContext:
+    def test_no_op_when_store_is_none(self):
+        cm = ContextManager(mission_context_store=None)
+        # Should not raise
+        cm._persist_mission_context({
+            "goal": "test goal",
+            "summary": "test summary",
+            "used_tools": ["write_file"],
+            "key_results": {},
+            "run_id": "r1",
+            "mission_id": "m1",
+        })
+
+    def test_calls_store_upsert_when_store_provided(self):
+        mock_store = MagicMock()
+        cm = ContextManager(mission_context_store=mock_store)
+        cm._persist_mission_context({
+            "goal": "Compute fibonacci",
+            "summary": "Computed fib(50)",
+            "used_tools": ["math_stats"],
+            "key_results": {"result": 12586269025},
+            "run_id": "run-abc",
+            "mission_id": "mission-1",
+        })
+        mock_store.upsert.assert_called_once()
+        call_kwargs = mock_store.upsert.call_args.kwargs
+        assert call_kwargs["goal"] == "Compute fibonacci"
+        assert call_kwargs["run_id"] == "run-abc"
+
+    def test_embed_sync_called_when_provider_provided(self):
+        mock_store = MagicMock()
+        mock_provider = MagicMock()
+        mock_provider.embed_sync.return_value = [0.1] * 384
+        cm = ContextManager(
+            mission_context_store=mock_store,
+            embedding_provider=mock_provider,
+        )
+        cm._persist_mission_context({
+            "goal": "test goal",
+            "summary": "summary",
+            "used_tools": [],
+            "key_results": {},
+            "run_id": "r1",
+            "mission_id": "m1",
+        })
+        mock_provider.embed_sync.assert_called_once_with("test goal")
+
+    def test_graceful_on_store_exception(self):
+        mock_store = MagicMock()
+        mock_store.upsert.side_effect = RuntimeError("DB connection failed")
+        cm = ContextManager(mission_context_store=mock_store)
+        # Must not raise -- graceful degradation
+        cm._persist_mission_context({
+            "goal": "test",
+            "summary": "s",
+            "used_tools": [],
+            "key_results": {},
+            "run_id": "r1",
+            "mission_id": "m1",
+        })
+
+
+class TestCrossRunInjection:
+    def test_cross_run_hits_formatted_correctly(self):
+        mock_store = MagicMock()
+        mock_store.query_cascade.return_value = [
+            _make_result("Sort numbers ascending", "Sorted 100 numbers using sort_array"),
+        ]
+        cm = ContextManager(mission_context_store=mock_store)
+        state: dict = {"missions": ["Sort the array"], "mission_contexts": {}, "messages": []}
+        result = cm.build_planner_context_injection(state)
+        assert "[Cross-run] Similar:" in result
+
+    def test_output_capped_at_1500_chars(self):
+        mock_store = MagicMock()
+        # Return hits with very long summaries
+        long_summary = "x" * 600
+        mock_store.query_cascade.return_value = [
+            _make_result(f"goal {i}", long_summary) for i in range(3)
+        ]
+        cm = ContextManager(mission_context_store=mock_store)
+        state: dict = {"missions": ["test mission"], "mission_contexts": {}, "messages": []}
+        result = cm.build_planner_context_injection(state)
+        assert len(result) <= 1500
+
+    def test_no_cross_run_when_store_none(self):
+        cm = ContextManager(mission_context_store=None)
+        state: dict = {"missions": ["test"], "mission_contexts": {}, "messages": []}
+        result = cm.build_planner_context_injection(state)
+        assert "[Cross-run] Similar:" not in result
+
+    def test_graceful_on_store_query_exception(self):
+        mock_store = MagicMock()
+        mock_store.query_cascade.side_effect = RuntimeError("connection refused")
+        cm = ContextManager(mission_context_store=mock_store)
+        state: dict = {"missions": ["test"], "mission_contexts": {}, "messages": []}
+        # Must not raise
+        result = cm.build_planner_context_injection(state)
+        assert isinstance(result, str)
