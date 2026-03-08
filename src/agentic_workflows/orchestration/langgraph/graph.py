@@ -229,7 +229,6 @@ class LangGraphOrchestrator:
             '- string_ops: {"text":"<string>", "operation":"uppercase|lowercase|reverse|length|trim|replace|split|count_words|startswith|endswith|contains"}\n'
             '- math_stats: {"operation":"...", "a":<number>, "b":<number>} or {"operation":"...", "numbers":[...]}\n'
             '- write_file: {"path":"<filepath>", "content":"<string>"}\n'
-            '- memoize: {"key":"<key>", "value":<json>, "run_id":"<run_id>", "namespace":"run(optional)"}\n'
             '- retrieve_memo: {"key":"<key>", "run_id":"<run_id>", "namespace":"run(optional)"}\n'
             '- task_list_parser: {"text":"<string>"}\n'
             '- text_analysis: {"text":"<string>", "operation":"word_count|sentence_count|char_count|key_terms|complexity_score|paragraph_count|avg_word_length|unique_words|full_report"}\n'
@@ -251,9 +250,8 @@ class LangGraphOrchestrator:
             '- update_file_section: {"path":"<filepath>", "marker":"<## Section heading>", "content":"<new section content>"}\n'
             f'- search_files: {{"pattern":"<glob e.g. *.py>", "path":"{cwd}(default)", "max_results":<int optional>}}\n\n'
             "Memoization policy:\n"
-            "- For heavy deterministic writes, memoize result before continuing.\n"
-            '- Use tool "memoize" with args: key, value, run_id, optional namespace.\n'
-            '- Use "retrieve_memo" only when explicitly needed for task context.\n'
+            "- Memoization is automatic — write_file results are cached without any explicit memoize call.\n"
+            '- Use "retrieve_memo" only when explicitly needed to look up prior cached values.\n'
             "- For write_file tasks, the orchestrator auto-checks memo keys before writing.\n"
             "- For recurring write tasks, the orchestrator may auto-reuse cached write inputs from prior runs.\n"
             "- Do not emit extra planning subtasks; output the next concrete tool call only.\n"
