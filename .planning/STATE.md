@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: in-progress
-stopped_at: Completed 07.2-02-PLAN.md
-last_updated: "2026-03-08T00:59:51Z"
-last_activity: 2026-03-08 — Wave 2 critical bottleneck fixes (persistent connection, set conversion, list caps)
+stopped_at: Completed 07.2-03-PLAN.md
+last_updated: "2026-03-08T01:07:53Z"
+last_activity: 2026-03-08 — Wave 3 structural improvements (auto-derived fields, prepare_state extraction)
 progress:
   total_phases: 9
   completed_phases: 7
-  total_plans: 31
-  completed_plans: 30
+  total_plans: 32
+  completed_plans: 31
   percent: 97
 ---
 
@@ -26,15 +26,15 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 ## Current Position
 
 Phase: 7.2 (Architecture Review Implementation: Critical Bug Fixes and Systemic Hardening)
-Plan: 3 of 5 in current phase (07.2-00, 07.2-01, 07.2-02 DONE; 07.2-03 through 07.2-04 pending)
-Status: Plan 02 complete — Wave 2 critical bottlenecks fixed (persistent WAL connection, set dedup, list caps).
-Last activity: 2026-03-08 — Wave 2 critical bottleneck fixes (persistent connection, set conversion, list caps)
+Plan: 4 of 5 in current phase (07.2-00, 07.2-01, 07.2-02, 07.2-03 DONE; 07.2-04 pending)
+Status: Plan 03 complete — Wave 3 structural improvements (auto-derived annotated fields, prepare_state single source of truth).
+Last activity: 2026-03-08 — Wave 3 structural improvements (auto-derived fields, prepare_state extraction)
 
-Progress: [█████████░] 97% (30/31 plans complete, Phase 7.2 03/05 done)
+Progress: [█████████░] 97% (31/32 plans complete, Phase 7.2 04/05 done)
 
 ## Test Status
 
-- **662 unit tests pass** (excluding test_tool_contracts pre-existing failures); 8 new tests added in Plan 02 (4 in Plan 01)
+- **672 unit+integration tests pass** (excluding test_tool_contracts pre-existing failures); 6 new tests added in Plan 03 (2 auto-derivation, 4 prepare_state)
 - 144 pre-existing test_tool_contracts failures (empty-args parametrized stubs from Plan 00 scaffold)
 - 3 pre-existing unit test failures (test_run_bash_python_guard, 2x write_file shebang tests) -- unrelated to Phase 7
 - ruff check: clean (pre-existing UP035 in app.py noted)
@@ -62,6 +62,7 @@ Progress: [█████████░] 97% (30/31 plans complete, Phase 7.2 
 | Phase 07.2 P00 | 1min | 1 task | 1 file |
 | Phase 07.2 P01 | 4min | 3 tasks | 4 files |
 | Phase 07.2 P02 | 6min | 3 tasks | 6 files |
+| Phase 07.2 P03 | 5min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -116,6 +117,9 @@ Recent decisions affecting current work:
 - [Phase 07.2]: seen_tool_signatures as set[str] with list-to-set conversion in ensure_state_defaults for checkpoint safety
 - [Phase 07.2]: Local _PIPELINE_TRACE_CAP in context_manager.py to avoid circular import with graph.py
 - [Phase 07.2]: Cap constants at module level (_PIPELINE_TRACE_CAP=500, _HANDOFF_QUEUE_CAP=50, _HANDOFF_RESULTS_CAP=50)
+- [Phase 07.2]: Auto-derive _ANNOTATED_LIST_FIELDS via typing.get_type_hints(RunState, include_extras=True) at import time
+- [Phase 07.2]: prepare_state() public method on LangGraphOrchestrator as single source of truth for state initialization
+- [Phase 07.2]: Callback setup (ContextVar) remains in callers since it is per-request, not per-state
 
 ### Roadmap Evolution
 
@@ -141,6 +145,7 @@ Recent decisions affecting current work:
 | 7.2 | Tool contract test scaffold: 144 parametrized stubs for 36 tools | Test | 2026-03-08 | e4c7c33 | ✓ Complete |
 | 7.2 | Wave 1: dual-execution removal + ContextVar callback isolation | Fix | 2026-03-08 | b6a42df | ✓ Complete |
 | 7.2 | Wave 2: persistent WAL connection + set dedup + bounded list caps | Fix | 2026-03-08 | 55e1922 | ✓ Complete |
+| 7.2 | Wave 3: auto-derived annotated fields + prepare_state single source of truth | Refactor | 2026-03-08 | 6ed752b | ✓ Complete |
 
 ### Blockers/Concerns
 
@@ -150,6 +155,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-03-08T00:59:51Z
-Stopped at: Completed 07.2-02-PLAN.md
+Last session: 2026-03-08T01:07:53Z
+Stopped at: Completed 07.2-03-PLAN.md
 Resume file: None
