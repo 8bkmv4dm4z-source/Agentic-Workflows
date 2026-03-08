@@ -420,19 +420,20 @@ class LangGraphOrchestrator:
 
         return builder.compile()
 
-    @observe("langgraph.orchestrator.run")
-    def run(
+    def prepare_state(
         self,
         user_input: str,
         run_id: str | None = None,
         *,
-        rerun_context: dict[str, Any] | None = None,
         prior_context: list[AgentMessage] | None = None,
-    ) -> RunResult:
-        """Execute one end-to-end run and return audit-friendly artifacts."""
-        # W1-2: Set per-run callbacks via ContextVar for thread-level isolation.
-        _handler = get_langfuse_callback_handler()
-        _active_callbacks_var.set([_handler] if _handler else [])
+        rerun_context: dict[str, Any] | None = None,
+    ) -> RunState:
+        """Single source of truth for run state initialization.
+
+        Called by both run() and the SSE route handler. Encapsulates:
+        new_run_state + prior_context merge + ensure_state_defaults +
+        mission parsing + _write_shared_plan + initial checkpoint.save.
+        """
         state = new_run_state(self.system_prompt, user_input, run_id=run_id)
         if prior_context:
             # Merge prior-context system content into the main system prompt
@@ -472,6 +473,27 @@ class LangGraphOrchestrator:
             step=state["step"],
             node_name="init",
             state=state,
+        )
+        return state
+
+    @observe("langgraph.orchestrator.run")
+    def run(
+        self,
+        user_input: str,
+        run_id: str | None = None,
+        *,
+        rerun_context: dict[str, Any] | None = None,
+        prior_context: list[AgentMessage] | None = None,
+    ) -> RunResult:
+        """Execute one end-to-end run and return audit-friendly artifacts."""
+        # W1-2: Set per-run callbacks via ContextVar for thread-level isolation.
+        _handler = get_langfuse_callback_handler()
+        _active_callbacks_var.set([_handler] if _handler else [])
+        state = self.prepare_state(
+            user_input,
+            run_id=run_id,
+            prior_context=prior_context,
+            rerun_context=rerun_context,
         )
         final_state = self._compiled.invoke(
             state,
