@@ -2,8 +2,12 @@
 
 Phase 07.3 Plan 06 — SCS-12: Verify that the two new optional keyword-only params
 are forwarded from LangGraphOrchestrator.__init__ to ContextManager.
+
+SC-2 (Phase 07.5 Plan 02): artifact_store constructor wiring tests.
 """
 from unittest.mock import MagicMock
+
+import pytest
 
 from agentic_workflows.orchestration.langgraph.graph import LangGraphOrchestrator
 
@@ -55,3 +59,22 @@ class TestLangGraphOrchestratorWiring:
         )
         assert o._embedding_provider is mock_provider
         assert o._mission_context_store is mock_store
+
+
+# ---------------------------------------------------------------------------
+# SC-2: artifact_store wiring (RED stubs — added in Phase 07.5 Plan 02)
+# These tests fail RED before Task 2 adds artifact_store param to __init__.
+# ---------------------------------------------------------------------------
+
+
+def test_orchestrator_accepts_artifact_store_none():
+    """LangGraphOrchestrator(artifact_store=None) must not raise (backward compat)."""
+    orchestrator = LangGraphOrchestrator(artifact_store=None)
+    assert orchestrator.context_manager._artifact_store is None
+
+
+def test_orchestrator_forwards_artifact_store():
+    """artifact_store passed to orchestrator must reach context_manager._artifact_store."""
+    mock_store = MagicMock()
+    orchestrator = LangGraphOrchestrator(artifact_store=mock_store)
+    assert orchestrator.context_manager._artifact_store is mock_store
