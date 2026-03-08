@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from agentic_workflows.context.embedding_provider import EmbeddingProvider
+    from agentic_workflows.storage.artifact_store import ArtifactStore
     from agentic_workflows.storage.mission_context_store import MissionContextStore
 
 from agentic_workflows.logger import get_logger
@@ -168,6 +169,7 @@ class LangGraphOrchestrator:
         on_specialist_route: Any = None,
         embedding_provider: EmbeddingProvider | None = None,
         mission_context_store: MissionContextStore | None = None,
+        artifact_store: ArtifactStore | None = None,
     ) -> None:
         self.provider = provider or build_provider()
         self._router = ModelRouter(
@@ -192,9 +194,11 @@ class LangGraphOrchestrator:
         self._on_specialist_route = on_specialist_route
         self._embedding_provider = embedding_provider
         self._mission_context_store = mission_context_store
+        self._artifact_store = artifact_store
         self.context_manager = ContextManager(
             mission_context_store=mission_context_store,
             embedding_provider=embedding_provider,
+            artifact_store=artifact_store,
         )
         self.strict_single_action_mode = self._env_bool("P1_STRICT_SINGLE_ACTION", False)
         self.tools: dict[str, Tool] = build_tool_registry(
