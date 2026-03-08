@@ -1042,3 +1042,87 @@ print(provider.dimensions)      # 384
 - `docker/docker-compose.stress.yml` -- Multi-replica stress topology
 - `scripts/stress_test.py` -- Concurrent load test script
 - Cormack, G. V., Clarke, C. L. A., & Buettcher, S. (2009). Reciprocal Rank Fusion outperforms Condorcet and individual Rank Learning Methods. *SIGIR 2009*.
+
+---
+
+## Phase 7.5 — Artifact Persistence: Closing the Dead-Store Gap
+
+Phase 7.3 created `ArtifactStore` and the `mission_artifacts` table, but the store was never wired
+into the live execution path. `application.state.artifact_store` existed in `app.py` but was never
+passed to `LangGraphOrchestrator`. Phase 7.5 closes that gap.
+
+### What Changed
+
+| File | Change |
+|------|--------|
+| `context_manager.py` | `ContextManager.__init__` accepts `artifact_store: ArtifactStore \| None = None`; `_persist_mission_context()` iterates `mission_context["artifacts"]` and calls `artifact_store.upsert()` for each |
+| `graph.py` | `LangGraphOrchestrator.__init__` accepts `artifact_store: ArtifactStore \| None = None`; forwards it to `ContextManager` |
+| `run.py` | `_build_orchestrator()` creates `ArtifactStore(pool=pool)` inside the `DATABASE_URL` block and passes it to the orchestrator |
+| `user_run.py` | `UserSession.__post_init__()` creates `ArtifactStore(pool=self._pg_pool)` inside the `DATABASE_URL` block and passes it to the orchestrator |
+| `app.py` | `LangGraphOrchestrator(...)` now receives `artifact_store=artifact_store` (the store was already created at `application.state.artifact_store` but not forwarded) |
+
+### The Wiring Chain
+
+```
+Tool execution (e.g. write_file)
+    → ContextManager.on_tool_result()
+        → extract_artifacts() populates ctx.artifacts (list[ArtifactRecord])
+    → ContextManager.on_mission_complete()
+        → _persist_mission_context(persist_ctx)  # persist_ctx includes "artifacts" list
+            → for art in artifacts:
+                → self._artifact_store.upsert(run_id, mission_id, key, value, source_tool, embedding)
+                    → INSERT INTO mission_artifacts ON CONFLICT DO UPDATE
+```
+
+### Backward Compatibility
+
+Every new parameter uses `artifact_store: ArtifactStore | None = None` with a `None` default.
+All existing code that constructs `LangGraphOrchestrator()` or `ContextManager()` without this
+parameter continues to work unchanged. When `artifact_store=None`, the upsert call is guarded:
+
+```python
+if self._artifact_store is not None:
+    for art in artifacts:
+        ...
+        self._artifact_store.upsert(...)
+```
+
+### Pool=None No-Op
+
+`ArtifactStore` already implements a graceful `pool=None` no-op in `ArtifactStore.upsert()`:
+
+```python
+def upsert(self, ...) -> None:
+    if self._pool is None:
+        _logger.debug("ARTIFACT STORE upsert skipped pool=None")
+        return
+```
+
+This means the store is safe to instantiate in SQLite/CI environments where `DATABASE_URL` is not
+set. In those cases, `pool=None` is passed and all upserts silently skip.
+
+### Artifact Embedding
+
+Each artifact is embedded using `self._embedding_provider.embed_sync(art["value"][:200])` (the
+same provider already injected into `ContextManager` for mission context embeddings). When no
+embedding provider is configured, the fallback is a zero vector `[0.0] * 384`, which stores the
+artifact without semantic search capability but preserves all structured fields.
+
+### Integration Test
+
+`tests/integration/test_artifact_store_runtime.py` verifies SC-1 end-to-end:
+
+```python
+cm.on_tool_result(state, "write_file", result=..., args=..., mission_id=1)
+cm.on_mission_complete(state, mission_id=1)
+
+with pg_pool.connection() as conn:
+    rows = conn.execute(
+        "SELECT key, source_tool FROM mission_artifacts WHERE run_id = %s", (run_id,)
+    ).fetchall()
+
+assert "file_path" in [r[0] for r in rows]
+```
+
+The test uses `pg_pool` + `clean_pg` fixtures from `conftest.py` (session pool, per-test TRUNCATE)
+and is skipped automatically when `DATABASE_URL` is not set — CI-safe.
