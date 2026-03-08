@@ -9,6 +9,7 @@ from agentic_workflows.orchestration.langgraph.context_manager import (
     ContextManager,
     MissionContext,
     SubMissionContext,
+    _CACHE_MAX_SIZE,
     extract_artifacts,
     extract_summary_from_result,
 )
@@ -859,3 +860,55 @@ class TestCascadeTimeout:
         cm = ContextManager(mission_context_store=mock_store)
         result = cm.build_planner_context_injection(self._make_state())
         assert "[Cross-run] Similar:" in result
+
+
+# ── TestBoundedCache (Phase 7.4 Plan 03) ─────────────────────────────
+
+
+class TestBoundedCache:
+    """_cache_put() ensures _cascade_cache and _embed_cache never exceed _CACHE_MAX_SIZE entries."""
+
+    def test_cascade_cache_bounded_at_200(self):
+        mock_store = MagicMock()
+        mock_store.query_cascade.return_value = []
+        cm = ContextManager(mission_context_store=mock_store)
+        for i in range(300):
+            state = {
+                "missions": [f"goal-{i}"],
+                "mission_contexts": {}, "messages": [],
+                "run_id": f"run-{i}", "step": 1,
+            }
+            cm.build_planner_context_injection(state)
+        assert len(cm._cascade_cache) <= _CACHE_MAX_SIZE
+
+    def test_embed_cache_bounded_at_200(self):
+        mock_store = MagicMock()
+        mock_store.query_cascade.return_value = []
+        mock_provider = MagicMock()
+        mock_provider.embed_sync.return_value = [0.1] * 384
+        cm = ContextManager(mission_context_store=mock_store, embedding_provider=mock_provider)
+        for i in range(300):
+            state = {
+                "missions": [f"goal-{i}"],
+                "mission_contexts": {}, "messages": [],
+                "run_id": f"run-{i}", "step": 1,
+            }
+            cm.build_planner_context_injection(state)
+        assert len(cm._embed_cache) <= _CACHE_MAX_SIZE
+
+    def test_cache_put_truncates_oldest_half(self):
+        cm = ContextManager()
+        # Fill to exactly _CACHE_MAX_SIZE
+        for i in range(_CACHE_MAX_SIZE):
+            cm._cache_put(cm._cascade_cache, f"key-{i}", [])
+        assert len(cm._cascade_cache) == _CACHE_MAX_SIZE
+        # One more should trigger truncation
+        cm._cache_put(cm._cascade_cache, "key-new", [])
+        assert len(cm._cascade_cache) == _CACHE_MAX_SIZE // 2 + 1
+        assert "key-new" in cm._cascade_cache
+
+    def test_cache_put_empty_dict_no_truncation(self):
+        cm = ContextManager()
+        cm._cache_put(cm._cascade_cache, "k1", ["v"])
+        assert len(cm._cascade_cache) == 1
+        assert cm._cascade_cache["k1"] == ["v"]

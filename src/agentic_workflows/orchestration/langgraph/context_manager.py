@@ -32,6 +32,11 @@ _PIPELINE_TRACE_CAP: int = 500
 # from blocking the planner indefinitely.
 _CASCADE_TIMEOUT_SECONDS: float = 2.0
 
+# Maximum number of entries in _cascade_cache / _embed_cache.  Prevents unbounded
+# memory growth in long-lived processes (e.g. FastAPI workers with many unique goals).
+# When the limit is reached, the oldest half is evicted (FIFO).
+_CACHE_MAX_SIZE: int = 200
+
 
 # ── Models ───────────────────────────────────────────────────────────
 
@@ -255,6 +260,25 @@ class ContextManager:
         self._embed_cache: dict[str, list[float]] = {}  # cache_key → embedding
         # Phase 7.4: dedup set — tracks keys already injected as [Cross-run] this run
         self._injected_cross_run_keys: set[str] = set()
+
+    # ── Cache helpers ──────────────────────────────────────────────────
+
+    def _cache_put(self, cache: dict, key: str, value: object) -> None:
+        """Insert *value* at *key* in *cache*; evict oldest half on overflow.
+
+        Uses FIFO eviction: when ``len(cache) >= _CACHE_MAX_SIZE``, the oldest
+        ``_CACHE_MAX_SIZE // 2`` entries (insertion-order) are deleted before
+        the new entry is added.  This bounds cache memory in long-lived
+        processes that see many distinct ``run_id:goal`` combinations.
+
+        The ``list(cache.keys())[:n]`` snapshot is taken before iteration to
+        avoid a RuntimeError from mutating the dict during a keys-view loop.
+        """
+        if len(cache) >= _CACHE_MAX_SIZE:
+            remove_count = _CACHE_MAX_SIZE // 2
+            for k in list(cache.keys())[:remove_count]:
+                del cache[k]
+        cache[key] = value
 
     # ── Phase 7.3: cross-run persistence helpers ───────────────────────
 
@@ -589,7 +613,7 @@ class ContextManager:
                 # Cache embedding to avoid re-embedding same goal 10-25× per run
                 if self._embedding_provider is not None:
                     if cache_key not in self._embed_cache:
-                        self._embed_cache[cache_key] = self._embedding_provider.embed_sync(goal_text)
+                        self._cache_put(self._embed_cache, cache_key, self._embedding_provider.embed_sync(goal_text))
                     self._logger.debug(
                         "EMBED GEN context cached=%s goal_len=%d",
                         cache_key in self._embed_cache and cache_key in self._embed_cache,
@@ -611,20 +635,20 @@ class ContextManager:
                                 top_k=3,
                             )
                             hits_result = future.result(timeout=_CASCADE_TIMEOUT_SECONDS)
-                            self._cascade_cache[cache_key] = hits_result
+                            self._cache_put(self._cascade_cache, cache_key, hits_result)
                         except TimeoutError:
                             self._logger.warning(
                                 "query_cascade timeout after %.1fs — falling back to []",
                                 _CASCADE_TIMEOUT_SECONDS,
                             )
-                            self._cascade_cache[cache_key] = []
+                            self._cache_put(self._cascade_cache, cache_key, [])
                         finally:
                             executor.shutdown(wait=False)
                     except Exception as exc:  # noqa: BLE001
                         self._logger.debug(
                             "cross-run cascade query failed (non-fatal): %s", exc
                         )
-                        self._cascade_cache[cache_key] = []
+                        self._cache_put(self._cascade_cache, cache_key, [])
                 hits = self._cascade_cache[cache_key]
 
                 for hit in hits:
