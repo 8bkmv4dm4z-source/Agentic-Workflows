@@ -163,10 +163,23 @@ Plans:
 - [ ] 07.1-03-PLAN.md — Specialist context enrichment: ExecutorState/EvaluatorState fields + build_specialist_context + graph.py wiring (CTX-07, CTX-09)
 - [ ] 07.1-04-PLAN.md — Full lifecycle wiring (on_tool_result, on_mission_complete) + integration test + regression verification (CTX-12)
 
+### Phase 07.3: Hybrid Deterministic + Semantic Context System (INSERTED)
+
+**Goal:** Add persistent cross-run mission context with 5-layer cascade retrieval (SHA-256 exact hash → tool bitmask → BM25 → binary vector → float32 cosine), fused via Reciprocal Rank Fusion. Local ONNX embeddings via fastembed (BAAI/bge-small-en-v1.5, 384-dim), no paid APIs. MockEmbeddingProvider for CI. Cross-run artifact store. Multi-replica stress test harness.
+**Depends on:** Phase 7.2
+**Requirements**: (context enhancement, no external requirement IDs)
+**Success Criteria** (what must be TRUE):
+  1. `mission_contexts` Postgres table stores completed mission context with SHA-256 hash, tool bitmask, tsvector, binary embedding, and float32 vector indexed by HNSW
+  2. `MissionContextStore.query_cascade()` runs the 5-layer cascade: L0 exact hit short-circuits, L1 bitmask short-circuits, L2+L4 fuse via RRF
+  3. `MockEmbeddingProvider` returns deterministic 384-dim vectors with no model download; `EMBEDDING_PROVIDER=fastembed` loads fastembed ONNX
+  4. `ContextManager.build_planner_context_injection()` injects top-3 cross-run similar missions (formatted as `[Cross-run] Similar: ...`) up to 1500 chars total
+  5. All 823+ existing tests pass unchanged; new unit tests cover each cascade layer independently; coverage ≥ 80%
+**Plans**: TBD
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7 → 7.1 → 7.2
+Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7 → 7.1 → 7.2 → 7.3
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -179,3 +192,4 @@ Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7 → 7.1 → 7.2
 | 7. Production Persistence and CI | 4/4 | Complete   | 2026-03-06 |
 | 7.1. Context Manipulation (INSERTED) | 3/4 | In Progress|  |
 | 7.2. Architecture Review - Critical Bug Fixes (INSERTED) | 5/5 | Complete   | 2026-03-08 |
+| 7.3. Hybrid Deterministic + Semantic Context System (INSERTED) | 0/TBD | Planning |  |
