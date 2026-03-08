@@ -21,6 +21,7 @@ def _make_result(goal: str, summary: str) -> MissionContextResult:
         summary=summary,
         tools_used=["write_file"],
         score=0.9,
+        source_layer="L0",   # was missing — caused attribution log to emit "?"
     )
 
 
@@ -143,6 +144,25 @@ class TestCrossRunInjection:
         # Must not raise
         result = cm.build_planner_context_injection(state)
         assert isinstance(result, str)
+
+    def test_attribution_shows_real_source_layer(self, caplog):
+        import logging
+        mock_store = MagicMock()
+        mock_store.query_cascade.return_value = [
+            _make_result("Sort numbers ascending", "Sorted 100 numbers using sort_array"),
+        ]
+        cm = ContextManager(mission_context_store=mock_store)
+        state: dict = {
+            "missions": ["Sort the array"], "mission_contexts": {}, "messages": [],
+            "run_id": "run-attr-test", "step": 1,
+        }
+        with caplog.at_level(logging.INFO, logger="context_manager"):
+            result = cm.build_planner_context_injection(state)
+        # Result must contain [Cross-run] (confirms hit was processed)
+        assert "[Cross-run] Similar:" in result
+        # Attribution in log must show real layer (L0:0.90), not placeholder (?)
+        assert "L0:0.90" in caplog.text, f"Attribution not found in log: {caplog.text}"
+        assert "?:0.90" not in caplog.text, "Source_layer missing — attribution shows '?'"
 
 
 class TestGoalCache:
