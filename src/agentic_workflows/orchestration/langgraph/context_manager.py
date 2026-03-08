@@ -20,6 +20,7 @@ from agentic_workflows.logger import get_logger
 
 if TYPE_CHECKING:
     from agentic_workflows.context.embedding_provider import EmbeddingProvider
+    from agentic_workflows.storage.artifact_store import ArtifactStore
     from agentic_workflows.storage.mission_context_store import MissionContextStore
 
 _logger = get_logger("context_manager")
@@ -248,12 +249,14 @@ class ContextManager:
         step_threshold: int = 10,
         mission_context_store: MissionContextStore | None = None,
         embedding_provider: EmbeddingProvider | None = None,
+        artifact_store: ArtifactStore | None = None,
     ) -> None:
         self.large_result_threshold = large_result_threshold
         self.sliding_window_cap = sliding_window_cap
         self.step_threshold = step_threshold
         self._store = mission_context_store
         self._embedding_provider = embedding_provider
+        self._artifact_store = artifact_store
         self._logger = _logger
         # Per-run caches keyed by f"{run_id}:{goal_text}" to prevent cross-run contamination
         self._cascade_cache: dict[str, list] = {}   # cache_key → cached hits
@@ -283,12 +286,12 @@ class ContextManager:
     # ── Phase 7.3: cross-run persistence helpers ───────────────────────
 
     def _persist_mission_context(self, mission_context: dict) -> None:  # type: ignore[type-arg]
-        """Persist a completed mission context to Postgres via MissionContextStore.
+        """Persist a completed mission context to Postgres via MissionContextStore and ArtifactStore.
 
-        No-op if self._store is None (SQLite/CI environments).
+        No-op if both self._store and self._artifact_store are None (SQLite/CI environments).
         Gracefully swallows all exceptions to avoid breaking the main graph flow.
         """
-        if self._store is None:
+        if self._store is None and self._artifact_store is None:
             return
         try:
             goal = mission_context.get("goal", "") or ""
@@ -305,16 +308,38 @@ class ContextManager:
                 # Fallback zero vector if no provider — still stores without semantic search
                 embedding = [0.0] * 384
 
-            self._store.upsert(
-                run_id=run_id,
-                mission_id=mission_id,
-                goal=goal,
-                status="completed",
-                summary=summary,
-                tools_used=list(tools_used),
-                key_results=dict(key_results),
-                embedding=embedding,
-            )
+            if self._store is not None:
+                self._store.upsert(
+                    run_id=run_id,
+                    mission_id=mission_id,
+                    goal=goal,
+                    status="completed",
+                    summary=summary,
+                    tools_used=list(tools_used),
+                    key_results=dict(key_results),
+                    embedding=embedding,
+                )
+
+            # Phase 7.5: Persist artifacts to ArtifactStore (no-op if _artifact_store is None)
+            if self._artifact_store is not None:
+                artifacts = mission_context.get("artifacts", [])
+                for art in artifacts:
+                    try:
+                        art_emb = (
+                            self._embedding_provider.embed_sync(art["value"][:200])
+                            if self._embedding_provider is not None
+                            else [0.0] * 384
+                        )
+                        self._artifact_store.upsert(
+                            run_id=run_id,
+                            mission_id=mission_id,
+                            key=art["key"],
+                            value=art["value"],
+                            source_tool=art["source_tool"],
+                            embedding=art_emb,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        self._logger.warning("artifact upsert failed (non-fatal): %s", exc)
         except Exception as exc:  # noqa: BLE001
             self._logger.warning("_persist_mission_context failed (non-fatal): %s", exc)
 
@@ -465,6 +490,7 @@ class ContextManager:
         )
 
         # Phase 7.3: persist to cross-run store (no-op if store=None)
+        # Phase 7.5: include artifacts for ArtifactStore upsert wiring
         persist_ctx: dict[str, Any] = {
             "goal": ctx.goal,
             "summary": ctx.summary,
@@ -472,6 +498,7 @@ class ContextManager:
             "key_results": ctx.key_results,
             "run_id": state.get("run_id", "unknown"),
             "mission_id": str(mission_id),
+            "artifacts": [a.model_dump() for a in ctx.artifacts],
         }
         try:
             self._persist_mission_context(persist_ctx)
