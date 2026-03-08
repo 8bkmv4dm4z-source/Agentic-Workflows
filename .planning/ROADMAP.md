@@ -244,4 +244,4 @@ Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7 → 7.1 → 7.2
 | 7.2. Architecture Review - Critical Bug Fixes (INSERTED) | 5/5 | Complete   | 2026-03-08 |
 | 7.3. Hybrid Deterministic + Semantic Context System (INSERTED) | 10/10 | Complete    | 2026-03-08 |
 | 7.4. Context Injection Dedup and Runtime Safety (INSERTED) | 4/4 | Complete   | 2026-03-08 |
-| 7.5. Wire ArtifactStore to Runtime (INSERTED) | 0/5 | Planned | |
+| 7.5. Wire ArtifactStore to Runtime (INSERTED) | 2/5 | In Progress|  |
