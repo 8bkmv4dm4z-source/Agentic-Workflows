@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: in-progress
-stopped_at: Completed 07.2-03-PLAN.md
-last_updated: "2026-03-08T01:07:53Z"
-last_activity: 2026-03-08 — Wave 3 structural improvements (auto-derived fields, prepare_state extraction)
+stopped_at: Completed 07.2-04-PLAN.md
+last_updated: "2026-03-08T01:14:48Z"
+last_activity: 2026-03-08 — Wave 3 final improvements (P1_BASH_ENABLED guard, memoize prompt removal, tool contract tests)
 progress:
   total_phases: 9
   completed_phases: 7
   total_plans: 32
-  completed_plans: 31
-  percent: 97
+  completed_plans: 32
+  percent: 100
 ---
 
 # Project State
@@ -26,18 +26,17 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 ## Current Position
 
 Phase: 7.2 (Architecture Review Implementation: Critical Bug Fixes and Systemic Hardening)
-Plan: 4 of 5 in current phase (07.2-00, 07.2-01, 07.2-02, 07.2-03 DONE; 07.2-04 pending)
-Status: Plan 03 complete — Wave 3 structural improvements (auto-derived annotated fields, prepare_state single source of truth).
-Last activity: 2026-03-08 — Wave 3 structural improvements (auto-derived fields, prepare_state extraction)
+Plan: 5 of 5 in current phase (07.2-00, 07.2-01, 07.2-02, 07.2-03, 07.2-04 DONE; 07.2-05 pending)
+Status: Plan 04 complete — Wave 3 final improvements (P1_BASH_ENABLED guard, memoize prompt removal, 144 tool contract tests).
+Last activity: 2026-03-08 — Wave 3 final improvements (P1_BASH_ENABLED guard, memoize prompt removal, tool contract tests)
 
-Progress: [█████████░] 97% (31/32 plans complete, Phase 7.2 04/05 done)
+Progress: [██████████] 100% (32/32 plans complete, Phase 7.2 05/05 done)
 
 ## Test Status
 
-- **672 unit+integration tests pass** (excluding test_tool_contracts pre-existing failures); 6 new tests added in Plan 03 (2 auto-derivation, 4 prepare_state)
-- 144 pre-existing test_tool_contracts failures (empty-args parametrized stubs from Plan 00 scaffold)
-- 3 pre-existing unit test failures (test_run_bash_python_guard, 2x write_file shebang tests) -- unrelated to Phase 7
-- ruff check: clean (pre-existing UP035 in app.py noted)
+- **823 unit+integration tests pass** (all passing, 0 failures); 144 tool contract stubs replaced with real assertions in Plan 04
+- 0 pre-existing test_tool_contracts failures (stubs replaced); 0 test_tool_security failures (P1_BASH_ENABLED added)
+- ruff check: clean on all modified files (pre-existing UP035 in app.py, B039 in graph.py, I001/B009 in test_run_helpers.py noted)
 - Branch: `phase-7.2-arch-review`
 
 ## Performance Metrics
@@ -63,6 +62,7 @@ Progress: [█████████░] 97% (31/32 plans complete, Phase 7.2 
 | Phase 07.2 P01 | 4min | 3 tasks | 4 files |
 | Phase 07.2 P02 | 6min | 3 tasks | 6 files |
 | Phase 07.2 P03 | 5min | 2 tasks | 4 files |
+| Phase 07.2 P04 | 4min | 4 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -120,6 +120,9 @@ Recent decisions affecting current work:
 - [Phase 07.2]: Auto-derive _ANNOTATED_LIST_FIELDS via typing.get_type_hints(RunState, include_extras=True) at import time
 - [Phase 07.2]: prepare_state() public method on LangGraphOrchestrator as single source of truth for state initialization
 - [Phase 07.2]: Callback setup (ContextVar) remains in callers since it is per-request, not per-state
+- [Phase 07.2]: P1_BASH_ENABLED guard uses != 'true' pattern (ruff SIM201 compliant) at top of run_bash.execute()
+- [Phase 07.2]: Memoize tool kept in registry for internal auto-memoize use, only removed from planner prompt's tool arg reference
+- [Phase 07.2]: Tool contract test accepts KeyError/ValueError/TypeError as valid responses to empty args
 
 ### Roadmap Evolution
 
@@ -146,6 +149,7 @@ Recent decisions affecting current work:
 | 7.2 | Wave 1: dual-execution removal + ContextVar callback isolation | Fix | 2026-03-08 | b6a42df | ✓ Complete |
 | 7.2 | Wave 2: persistent WAL connection + set dedup + bounded list caps | Fix | 2026-03-08 | 55e1922 | ✓ Complete |
 | 7.2 | Wave 3: auto-derived annotated fields + prepare_state single source of truth | Refactor | 2026-03-08 | 6ed752b | ✓ Complete |
+| 7.2 | Wave 3 final: P1_BASH_ENABLED guard, memoize prompt removal, 144 tool contract tests | Security+Test | 2026-03-08 | e3f3214 | ✓ Complete |
 
 ### Blockers/Concerns
 
@@ -155,6 +159,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-03-08T01:07:53Z
-Stopped at: Completed 07.2-03-PLAN.md
+Last session: 2026-03-08T01:14:48Z
+Stopped at: Completed 07.2-04-PLAN.md
 Resume file: None
