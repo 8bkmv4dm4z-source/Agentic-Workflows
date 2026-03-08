@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 07.1-04-PLAN.md
-last_updated: "2026-03-07T15:00:00.000Z"
-last_activity: 2026-03-07 — Data-access visibility added to user_run.py (quick task 3, phase 7.1)
+stopped_at: Completed 07.2-00-PLAN.md
+last_updated: "2026-03-08T00:48:31.075Z"
+last_activity: 2026-03-08 — Tool contract test scaffold (144 parametrized stubs)
 progress:
-  total_phases: 8
+  total_phases: 9
   completed_phases: 7
-  total_plans: 26
-  completed_plans: 27
-  percent: 100
+  total_plans: 31
+  completed_plans: 28
+  percent: 90
 ---
 
 # Project State
@@ -21,23 +21,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-02)
 
 **Core value:** A specialist-routing multi-agent system that reliably executes multi-mission workloads end-to-end — with the architecture understood deeply enough to stress test, evolve, and deploy with confidence.
-**Current focus:** Phase 7.1 — Context Manipulation for Better Sub-Agent Multi-Task Handling
+**Current focus:** Phase 7.2 — Architecture Review Implementation: Critical Bug Fixes and Systemic Hardening
 
 ## Current Position
 
-Phase: 7.1 (Context Manipulation for Better Sub-Agent Multi-Task Handling)
-Plan: 4 of 4 in current phase (07.1-01, 07.1-02, 07.1-03, 07.1-04 DONE)
-Status: Phase 7.1 COMPLETE — ContextManager lifecycle fully integrated into graph.py.
-Last activity: 2026-03-07 — ContextManager lifecycle hooks wired, 657 tests passing
+Phase: 7.2 (Architecture Review Implementation: Critical Bug Fixes and Systemic Hardening)
+Plan: 1 of 5 in current phase (07.2-00 DONE, 07.2-01 through 07.2-04 pending)
+Status: Plan 00 complete — test scaffold with 144 parametrized stubs created.
+Last activity: 2026-03-08 — Tool contract test scaffold (144 parametrized stubs)
 
-Progress: [██████████] 100% (27/27 plans complete, Phase 7.1 04/04 done)
+Progress: [█████████░] 90% (28/31 plans complete, Phase 7.2 01/05 done)
 
 ## Test Status
 
 - **657 tests pass** (all context manager lifecycle hooks wired, parallel plan regressions fixed)
 - 3 pre-existing unit test failures (test_run_bash_python_guard, 2x write_file shebang tests) -- unrelated to Phase 7
 - ruff check: clean (pre-existing UP035 in app.py noted)
-- Branch: `p7-production-persistence-and-ci`
+- Branch: `phase-7.2-arch-review`
 
 ## Performance Metrics
 
@@ -58,6 +58,7 @@ Progress: [██████████] 100% (27/27 plans complete, Phase 7.1
 | 07-production-persistence-and-ci | 4/4 | 26 min | 7 min |
 | Phase 07.1 P02 | 5min | 2 tasks | 5 files |
 | Phase 07.1 P04 | 4min | 2 tasks | 6 files |
+| Phase 07.2 P00 | 1min | 1 task | 1 file |
 
 ## Accumulated Context
 
@@ -104,6 +105,7 @@ Recent decisions affecting current work:
 - [Phase 07.1]: All eviction injected messages use role=user with [Orchestrator] prefix, never role=system
 - [Phase 07.1]: ContextManager is single source of truth for message lifecycle -- removed competing compaction from ensure_state_defaults
 - [Phase 07.1]: ContextManager lifecycle calls wrapped in try/except for graceful degradation
+- [Phase 07.2]: Module-level _build_all_tools() with in-memory stores for parametrized test scaffold
 
 ### Roadmap Evolution
 
@@ -126,6 +128,7 @@ Recent decisions affecting current work:
 | 7 | Docker containerization + CI with sqlite/postgres matrix, 80% coverage | Infra | 2026-03-06 | 3fb6923 | ✓ Complete |
 | 7 | WALKTHROUGH_PHASE7.md: Docker, Postgres, CI architecture walkthrough | Docs | 2026-03-06 | 1fdf29d | ✓ Complete |
 | 7.1 | Data-access log visibility in user_run.py: _DATA_ACCESS_TOOLS panel + run log section | Enhance | 2026-03-07 | (quick-3) | ✓ Complete |
+| 7.2 | Tool contract test scaffold: 144 parametrized stubs for 36 tools | Test | 2026-03-08 | e4c7c33 | ✓ Complete |
 
 ### Blockers/Concerns
 
@@ -135,6 +138,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-03-07 (quick task 3)
-Stopped at: quick-3 data-access visibility
+Last session: 2026-03-08T00:48:31.073Z
+Stopped at: Completed 07.2-00-PLAN.md
 Resume file: None

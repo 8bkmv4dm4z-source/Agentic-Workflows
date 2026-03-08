@@ -134,7 +134,7 @@ Plans:
 **Goal:** Fix 2 correctness bugs (dual tool execution, _active_callbacks data race), 5 critical bottlenecks (SQLite WAL, seen_tool_signatures set conversion, pipeline_trace/handoff caps), and 3 structural/safety improvements (_ANNOTATED_LIST_FIELDS auto-derivation, prepare_state() extraction, run_bash guard, memoize prompt removal, tool contract tests). All changes are internal — no observable behavior change.
 **Requirements**: (internal fixes, no external requirement IDs)
 **Depends on:** Phase 7.1
-**Plans:** 5 plans
+**Plans:** 1/5 plans executed
 
 Plans:
 - [ ] 07.2-00-PLAN.md — Wave 0: Create test_tool_contracts.py stub with failing parametrized test baseline
