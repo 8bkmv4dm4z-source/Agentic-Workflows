@@ -19,7 +19,7 @@ Starting from a working single-agent LangGraph foundation (208 tests green, 4-no
 - [x] **Phase 6: Production Service Layer** - FastAPI HTTP service with POST /run, GET /run/{id}, and SSE streaming endpoint (completed 2026-03-04)
 - [x] **Phase 7: Production Persistence and CI** - Postgres persistence replacing SQLite, Dockerfile + docker-compose, GitHub Actions CI pipeline (completed 2026-03-06)
 - [ ] **Phase 7.1: Context Manipulation for Better Sub-Agent Multi-Task Handling** (INSERTED) - MissionContext model, event-driven eviction, specialist enrichment, provider-agnostic context management
-- [x] **Phase 07.2: Architecture Review Implementation - Critical Bug Fixes and Systemic Hardening** (INSERTED) - Fix 2 correctness bugs, 5 critical bottlenecks, 3 structural/safety improvements + Docker agent root fix (AGENT_ROOT/AGENT_WORKDIR separation) (completed 2026-03-08)
+- [x] **Phase 07.2: Architecture Review Implementation - Critical Bug Fixes and Systemic Hardening** (INSERTED) - Fix 2 correctness bugs, 5 critical bottlenecks, 3 structural/safety improvements + Docker agent root fix + read_file_chunk + outline_code + context rules + ruff fully clean (merged to main 2026-03-08)
 
 ## Phase Details
 

@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 07.2-05-PLAN.md
-last_updated: "2026-03-08T02:00:00.000Z"
-last_activity: 2026-03-08 — Docker agent root fix: AGENT_ROOT for reads, AGENT_WORKDIR for writes
+stopped_at: Completed 07.2-06-ruff-fix + context tooling
+last_updated: "2026-03-08T03:00:00.000Z"
+last_activity: 2026-03-08 — ruff clean (B039/E741), read_file_chunk, outline_code + context rules merged to main
 progress:
   total_phases: 9
   completed_phases: 8
@@ -64,6 +64,7 @@ Progress: [██████████] 100% (32/32 plans complete, Phase 7.2
 | Phase 07.2 P03 | 5min | 2 tasks | 4 files |
 | Phase 07.2 P04 | 4min | 4 tasks | 6 files |
 | Phase 07.2 P05 | 2min | 2 tasks | 3 files |
+| Phase 07.2 P06 | 1min | ruff fix + context tooling | 5 files |
 
 ## Accumulated Context
 
@@ -126,6 +127,12 @@ Recent decisions affecting current work:
 - [Phase 07.2]: Tool contract test accepts KeyError/ValueError/TypeError as valid responses to empty args
 - [Phase 07.2-05]: _build_system_prompt() uses AGENT_ROOT for readable context and AGENT_WORKDIR for write workspace; shown separately in prompt when they differ
 - [Phase 07.2-05]: update_file_section.py adds AGENT_WORKDIR fallback after P1_RUN_ARTIFACT_DIR (matches write_file.py pattern)
+- [Phase 07.2-06]: read_file_chunk tool (150-line chunks, has_more/next_offset) added for context-safe large file processing
+- [Phase 07.2-06]: outline_code (renamed from parse_code_structure) caps results at 30 items per category with truncation hint
+- [Phase 07.2-06]: Context management rules added to system prompt and executor.md directive
+- [Phase 07.2-06]: _active_callbacks_var ContextVar default=[] removed (B039); .get([]) used at call sites — ruff now fully clean
+- [Phase 07.2-06]: E741 ambiguous variable l renamed to line in _build_codebase_context — ruff now fully clean
+- [Phase 07.2-06]: Phase 7.2 merged to main; all 839 tests passing, ruff clean
 
 ### Roadmap Evolution
 
