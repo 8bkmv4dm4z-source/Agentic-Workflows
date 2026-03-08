@@ -177,5 +177,52 @@ class TestReviewerHelpers(unittest.TestCase):
         self.assertEqual(selected.action, "rerun")
 
 
+class TestActiveCallbacksContextVar(unittest.TestCase):
+    """W1-2: _active_callbacks_var must be a ContextVar with thread-level isolation."""
+
+    def test_contextvar_exists_at_module_level(self) -> None:
+        """_active_callbacks_var must be importable from graph module."""
+        from agentic_workflows.orchestration.langgraph.graph import _active_callbacks_var
+        import contextvars
+        self.assertIsInstance(_active_callbacks_var, contextvars.ContextVar)
+
+    def test_contextvar_default_is_empty_list(self) -> None:
+        """Default value of _active_callbacks_var must be []."""
+        from agentic_workflows.orchestration.langgraph.graph import _active_callbacks_var
+        # Get default in a fresh context to avoid pollution
+        import contextvars
+        ctx = contextvars.copy_context()
+        val = ctx.run(_active_callbacks_var.get)
+        self.assertEqual(val, [])
+
+    def test_contextvar_isolation_across_threads(self) -> None:
+        """Setting _active_callbacks_var in one thread must not affect another thread."""
+        from agentic_workflows.orchestration.langgraph.graph import _active_callbacks_var
+        import threading
+
+        mock_handler = object()
+        _active_callbacks_var.set([mock_handler])
+
+        # Capture value from a different thread
+        other_thread_value: list = []
+        error_holder: list = []
+
+        def _check_in_thread() -> None:
+            try:
+                other_thread_value.append(_active_callbacks_var.get())
+            except Exception as exc:
+                error_holder.append(exc)
+
+        t = threading.Thread(target=_check_in_thread)
+        t.start()
+        t.join(timeout=2.0)
+
+        self.assertEqual(len(error_holder), 0, f"Thread raised: {error_holder}")
+        self.assertEqual(len(other_thread_value), 1, "Thread did not capture a value")
+        # The other thread should see the default [] (empty), not [mock_handler]
+        self.assertEqual(other_thread_value[0], [],
+                         f"Expected [] in other thread, got {other_thread_value[0]}")
+
+
 if __name__ == "__main__":
     unittest.main()
