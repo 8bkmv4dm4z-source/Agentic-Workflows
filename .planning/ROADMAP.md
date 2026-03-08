@@ -19,7 +19,7 @@ Starting from a working single-agent LangGraph foundation (208 tests green, 4-no
 - [x] **Phase 6: Production Service Layer** - FastAPI HTTP service with POST /run, GET /run/{id}, and SSE streaming endpoint (completed 2026-03-04)
 - [x] **Phase 7: Production Persistence and CI** - Postgres persistence replacing SQLite, Dockerfile + docker-compose, GitHub Actions CI pipeline (completed 2026-03-06)
 - [ ] **Phase 7.1: Context Manipulation for Better Sub-Agent Multi-Task Handling** (INSERTED) - MissionContext model, event-driven eviction, specialist enrichment, provider-agnostic context management
-- [ ] **Phase 07.2: Architecture Review Implementation - Critical Bug Fixes and Systemic Hardening** (INSERTED) - Fix 2 correctness bugs, 5 critical bottlenecks, 3 structural/safety improvements
+- [x] **Phase 07.2: Architecture Review Implementation - Critical Bug Fixes and Systemic Hardening** (INSERTED) - Fix 2 correctness bugs, 5 critical bottlenecks, 3 structural/safety improvements (completed 2026-03-08)
 
 ## Phase Details
 
@@ -134,7 +134,7 @@ Plans:
 **Goal:** Fix 2 correctness bugs (dual tool execution, _active_callbacks data race), 5 critical bottlenecks (SQLite WAL, seen_tool_signatures set conversion, pipeline_trace/handoff caps), and 3 structural/safety improvements (_ANNOTATED_LIST_FIELDS auto-derivation, prepare_state() extraction, run_bash guard, memoize prompt removal, tool contract tests). All changes are internal — no observable behavior change.
 **Requirements**: (internal fixes, no external requirement IDs)
 **Depends on:** Phase 7.1
-**Plans:** 4/5 plans executed
+**Plans:** 5/5 plans complete
 
 Plans:
 - [ ] 07.2-00-PLAN.md — Wave 0: Create test_tool_contracts.py stub with failing parametrized test baseline
