@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: in-progress
-stopped_at: Completed 07.2-01-PLAN.md
-last_updated: "2026-03-08T00:50:36Z"
-last_activity: 2026-03-08 — Wave 1 critical bug fixes (dual-execution removal + ContextVar callback isolation)
+stopped_at: Completed 07.2-02-PLAN.md
+last_updated: "2026-03-08T00:59:51Z"
+last_activity: 2026-03-08 — Wave 2 critical bottleneck fixes (persistent connection, set conversion, list caps)
 progress:
   total_phases: 9
   completed_phases: 7
   total_plans: 31
-  completed_plans: 29
-  percent: 94
+  completed_plans: 30
+  percent: 97
 ---
 
 # Project State
@@ -26,15 +26,15 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 ## Current Position
 
 Phase: 7.2 (Architecture Review Implementation: Critical Bug Fixes and Systemic Hardening)
-Plan: 2 of 5 in current phase (07.2-00, 07.2-01 DONE; 07.2-02 through 07.2-04 pending)
-Status: Plan 01 complete — Wave 1 dual-execution + callback isolation bugs fixed.
-Last activity: 2026-03-08 — Wave 1 critical bug fixes (dual-execution removal + ContextVar callback isolation)
+Plan: 3 of 5 in current phase (07.2-00, 07.2-01, 07.2-02 DONE; 07.2-03 through 07.2-04 pending)
+Status: Plan 02 complete — Wave 2 critical bottlenecks fixed (persistent WAL connection, set dedup, list caps).
+Last activity: 2026-03-08 — Wave 2 critical bottleneck fixes (persistent connection, set conversion, list caps)
 
-Progress: [█████████░] 94% (29/31 plans complete, Phase 7.2 02/05 done)
+Progress: [█████████░] 97% (30/31 plans complete, Phase 7.2 03/05 done)
 
 ## Test Status
 
-- **596 unit tests pass** (excluding test_tool_contracts pre-existing failures); 4 new tests added in Plan 01
+- **662 unit tests pass** (excluding test_tool_contracts pre-existing failures); 8 new tests added in Plan 02 (4 in Plan 01)
 - 144 pre-existing test_tool_contracts failures (empty-args parametrized stubs from Plan 00 scaffold)
 - 3 pre-existing unit test failures (test_run_bash_python_guard, 2x write_file shebang tests) -- unrelated to Phase 7
 - ruff check: clean (pre-existing UP035 in app.py noted)
@@ -61,6 +61,7 @@ Progress: [█████████░] 94% (29/31 plans complete, Phase 7.2 
 | Phase 07.1 P04 | 4min | 2 tasks | 6 files |
 | Phase 07.2 P00 | 1min | 1 task | 1 file |
 | Phase 07.2 P01 | 4min | 3 tasks | 4 files |
+| Phase 07.2 P02 | 6min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -111,6 +112,10 @@ Recent decisions affecting current work:
 - [Phase 07.2]: Removed _executor_subgraph.invoke() from _route_to_specialist -- eliminated dual tool execution side effects
 - [Phase 07.2]: _active_callbacks_var ContextVar at module level replaces self._active_callbacks instance field -- thread-isolated Langfuse callbacks
 - [Phase 07.2]: SSE streaming path (routes/run.py) uses _active_callbacks_var.set() not orchestrator._active_callbacks mutation
+- [Phase 07.2]: SQLiteCheckpointStore persistent connection + WAL mode — matches SQLiteRunStore pattern
+- [Phase 07.2]: seen_tool_signatures as set[str] with list-to-set conversion in ensure_state_defaults for checkpoint safety
+- [Phase 07.2]: Local _PIPELINE_TRACE_CAP in context_manager.py to avoid circular import with graph.py
+- [Phase 07.2]: Cap constants at module level (_PIPELINE_TRACE_CAP=500, _HANDOFF_QUEUE_CAP=50, _HANDOFF_RESULTS_CAP=50)
 
 ### Roadmap Evolution
 
@@ -135,6 +140,7 @@ Recent decisions affecting current work:
 | 7.1 | Data-access log visibility in user_run.py: _DATA_ACCESS_TOOLS panel + run log section | Enhance | 2026-03-07 | (quick-3) | ✓ Complete |
 | 7.2 | Tool contract test scaffold: 144 parametrized stubs for 36 tools | Test | 2026-03-08 | e4c7c33 | ✓ Complete |
 | 7.2 | Wave 1: dual-execution removal + ContextVar callback isolation | Fix | 2026-03-08 | b6a42df | ✓ Complete |
+| 7.2 | Wave 2: persistent WAL connection + set dedup + bounded list caps | Fix | 2026-03-08 | 55e1922 | ✓ Complete |
 
 ### Blockers/Concerns
 
@@ -144,6 +150,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-03-08T00:50:36Z
-Stopped at: Completed 07.2-01-PLAN.md
+Last session: 2026-03-08T00:59:51Z
+Stopped at: Completed 07.2-02-PLAN.md
 Resume file: None
