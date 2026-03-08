@@ -145,3 +145,89 @@ class TestCrossRunInjection:
         # Must not raise
         result = cm.build_planner_context_injection(state)
         assert isinstance(result, str)
+
+
+class TestGoalCache:
+    """Cache correctness: embedding and cascade called once per unique goal per run."""
+
+    def _make_state(self, goal: str, run_id: str = "run-1") -> dict:
+        return {
+            "missions": [goal],
+            "mission_contexts": {},
+            "messages": [],
+            "run_id": run_id,
+        }
+
+    def test_embed_sync_called_once_for_repeated_goal(self):
+        mock_store = MagicMock()
+        mock_store.query_cascade.return_value = []
+        mock_provider = MagicMock()
+        mock_provider.embed_sync.return_value = [0.1] * 384
+
+        cm = ContextManager(mission_context_store=mock_store, embedding_provider=mock_provider)
+        state = self._make_state("Sort the array", run_id="run-abc")
+
+        # Call 5 times with the same goal and run_id
+        for _ in range(5):
+            cm.build_planner_context_injection(state)
+
+        # embed_sync must be called exactly once (cached after first call)
+        assert mock_provider.embed_sync.call_count == 1
+
+    def test_cascade_query_called_once_for_repeated_goal(self):
+        mock_store = MagicMock()
+        mock_store.query_cascade.return_value = []
+        mock_provider = MagicMock()
+        mock_provider.embed_sync.return_value = [0.1] * 384
+
+        cm = ContextManager(mission_context_store=mock_store, embedding_provider=mock_provider)
+        state = self._make_state("Compute fibonacci", run_id="run-xyz")
+
+        for _ in range(5):
+            cm.build_planner_context_injection(state)
+
+        assert mock_store.query_cascade.call_count == 1
+
+    def test_empty_goal_skips_cascade_entirely(self):
+        mock_store = MagicMock()
+        mock_store.query_cascade.return_value = []
+
+        cm = ContextManager(mission_context_store=mock_store)
+        # State with no missions → goal_text = ""
+        state: dict = {"missions": [], "mission_contexts": {}, "messages": [], "run_id": "run-1"}
+
+        cm.build_planner_context_injection(state)
+
+        # query_cascade must never be called for empty goal
+        mock_store.query_cascade.assert_not_called()
+
+    def test_different_run_ids_produce_separate_cache_entries(self):
+        mock_store = MagicMock()
+        mock_store.query_cascade.return_value = []
+        mock_provider = MagicMock()
+        mock_provider.embed_sync.return_value = [0.1] * 384
+
+        cm = ContextManager(mission_context_store=mock_store, embedding_provider=mock_provider)
+        goal = "Analyze data"
+
+        # Call twice with different run_ids
+        cm.build_planner_context_injection(self._make_state(goal, run_id="run-1"))
+        cm.build_planner_context_injection(self._make_state(goal, run_id="run-2"))
+
+        # Each unique run_id:goal pair → separate cache entry → embed_sync called twice
+        assert mock_provider.embed_sync.call_count == 2
+        assert mock_store.query_cascade.call_count == 2
+
+    def test_same_run_different_goals_separate_cache_entries(self):
+        mock_store = MagicMock()
+        mock_store.query_cascade.return_value = []
+        mock_provider = MagicMock()
+        mock_provider.embed_sync.return_value = [0.1] * 384
+
+        cm = ContextManager(mission_context_store=mock_store, embedding_provider=mock_provider)
+
+        cm.build_planner_context_injection(self._make_state("Goal A", run_id="run-1"))
+        cm.build_planner_context_injection(self._make_state("Goal B", run_id="run-1"))
+
+        # Different goals → different cache entries
+        assert mock_provider.embed_sync.call_count == 2

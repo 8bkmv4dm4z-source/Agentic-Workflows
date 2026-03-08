@@ -88,3 +88,47 @@ class TestMissionContextStoreFallback:
             key_results={},
             embedding=[0.0] * 384,
         )
+
+
+class TestL2EarlyExit:
+    """L2 early-exit: if BM25 returns >= top_k results, L4 HNSW is never called."""
+
+    def _make_fake_row(self, id_: int) -> tuple:
+        """Minimal DB row tuple matching the SELECT column order."""
+        return (id_, "run-1", "m-1", f"goal {id_}", f"summary {id_}", ["write_file"], 0.9)
+
+    def test_l4_skipped_when_l2_has_enough(self):
+        """L4 query (embedding branch) must not execute when L2 >= top_k."""
+        from unittest.mock import MagicMock, call
+
+        store = MissionContextStore(pool=None)
+
+        # Patch _cascade to observe internal behaviour via a real implementation
+        # We test the logic by verifying that with top_k=3 and 3 L2 rows,
+        # the method returns without touching L4 (embedding=None guard bypassed).
+        # Strategy: mock the pool so we can control what each conn.execute returns.
+        mock_conn = MagicMock()
+        mock_pool = MagicMock()
+        mock_pool.connection.return_value.__enter__ = MagicMock(return_value=mock_conn)
+        mock_pool.connection.return_value.__exit__ = MagicMock(return_value=False)
+
+        # L0 exact hit → None (no short-circuit)
+        # L2 returns 3 rows (== top_k=3) → triggers early-exit
+        l2_rows = [self._make_fake_row(i) for i in range(3)]
+
+        execute_returns = [
+            MagicMock(fetchone=MagicMock(return_value=None)),   # L0
+            MagicMock(fetchall=MagicMock(return_value=l2_rows)),  # L2
+            # L4 must NOT be called — any call here would be a test failure
+        ]
+        mock_conn.execute.side_effect = execute_returns
+
+        store._pool = mock_pool
+        embedding = [0.1] * 384  # provide embedding to prove L4 is skipped, not missing
+        results = store._cascade("sort the list", [], embedding, top_k=3)
+
+        # L4 execute must not have been called (only L0 + L2 = 2 calls)
+        assert mock_conn.execute.call_count == 2, (
+            f"Expected 2 DB calls (L0+L2), got {mock_conn.execute.call_count}"
+        )
+        assert len(results) == 3

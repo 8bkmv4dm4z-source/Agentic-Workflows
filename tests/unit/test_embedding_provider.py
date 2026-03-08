@@ -1,6 +1,7 @@
 """Tests for EmbeddingProvider Protocol, MockEmbeddingProvider, FastEmbedProvider, get_embedding_provider().
 Covers SCS-01, SCS-02 from VALIDATION.md.
 """
+import logging
 import math
 import os
 
@@ -55,6 +56,27 @@ class TestFastEmbedProvider:
             pass
         with pytest.raises(ImportError, match="fastembed"):
             FastEmbedProvider()
+
+
+class TestMockEmbeddingProviderLogging:
+    def test_init_emits_embed_init_info(self, caplog):
+        with caplog.at_level(logging.INFO, logger="embedding_provider"):
+            MockEmbeddingProvider()
+        assert any("EMBED INIT" in r.message and "provider=mock" in r.message for r in caplog.records)
+
+    def test_embed_sync_emits_embed_gen_debug(self, caplog):
+        provider = MockEmbeddingProvider()
+        with caplog.at_level(logging.DEBUG, logger="embedding_provider"):
+            provider.embed_sync("hello world")
+        assert any("EMBED GEN" in r.message and "provider=mock" in r.message for r in caplog.records)
+
+    def test_embed_gen_contains_dim(self, caplog):
+        provider = MockEmbeddingProvider()
+        with caplog.at_level(logging.DEBUG, logger="embedding_provider"):
+            provider.embed_sync("test text")
+        gen_records = [r for r in caplog.records if "EMBED GEN" in r.message]
+        assert gen_records, "Expected EMBED GEN log record"
+        assert "dim=384" in gen_records[0].message
 
 
 class TestGetEmbeddingProvider:
