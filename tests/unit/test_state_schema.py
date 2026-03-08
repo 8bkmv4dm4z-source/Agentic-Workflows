@@ -149,7 +149,7 @@ def test_derive_annotated_list_fields_auto_detects_new_fields():
         _derive_annotated_list_fields,
     )
     # _ANNOTATED_LIST_FIELDS must equal the result of calling _derive_annotated_list_fields()
-    assert _ANNOTATED_LIST_FIELDS == _derive_annotated_list_fields()
+    assert _derive_annotated_list_fields() == _ANNOTATED_LIST_FIELDS
 
 
 def test_annotated_list_fields_synchronized():

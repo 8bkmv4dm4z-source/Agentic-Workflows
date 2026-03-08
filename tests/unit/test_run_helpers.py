@@ -182,22 +182,25 @@ class TestActiveCallbacksContextVar(unittest.TestCase):
 
     def test_contextvar_exists_at_module_level(self) -> None:
         """_active_callbacks_var must be importable from graph module."""
-        from agentic_workflows.orchestration.langgraph.graph import _active_callbacks_var
         import contextvars
+
+        from agentic_workflows.orchestration.langgraph.graph import _active_callbacks_var
         self.assertIsInstance(_active_callbacks_var, contextvars.ContextVar)
 
     def test_contextvar_default_is_empty_list(self) -> None:
         """Calling .get([]) on _active_callbacks_var in a fresh context returns []."""
-        from agentic_workflows.orchestration.langgraph.graph import _active_callbacks_var
         import contextvars
+
+        from agentic_workflows.orchestration.langgraph.graph import _active_callbacks_var
         ctx = contextvars.copy_context()
         val = ctx.run(_active_callbacks_var.get, [])
         self.assertEqual(val, [])
 
     def test_contextvar_isolation_across_threads(self) -> None:
         """Setting _active_callbacks_var in one thread must not affect another thread."""
-        from agentic_workflows.orchestration.langgraph.graph import _active_callbacks_var
         import threading
+
+        from agentic_workflows.orchestration.langgraph.graph import _active_callbacks_var
 
         mock_handler = object()
         _active_callbacks_var.set([mock_handler])
@@ -228,11 +231,12 @@ class TestPipelineTraceCap(unittest.TestCase):
 
     def test_pipeline_trace_cap(self) -> None:
         """After exceeding _PIPELINE_TRACE_CAP, oldest entries are evicted."""
+        from unittest.mock import MagicMock
+
         from agentic_workflows.orchestration.langgraph.graph import (
             _PIPELINE_TRACE_CAP,
             LangGraphOrchestrator,
         )
-        from unittest.mock import MagicMock
 
         # Build a state with a pipeline_trace already at cap
         trace = [{"stage": f"s{i}", "step": i} for i in range(_PIPELINE_TRACE_CAP)]
@@ -253,8 +257,9 @@ class TestPipelineTraceCap(unittest.TestCase):
 
     def test_pipeline_trace_below_cap_not_trimmed(self) -> None:
         """Trace below cap should not be trimmed."""
-        from agentic_workflows.orchestration.langgraph.graph import LangGraphOrchestrator
         from unittest.mock import MagicMock
+
+        from agentic_workflows.orchestration.langgraph.graph import LangGraphOrchestrator
 
         state = {"policy_flags": {"pipeline_trace": []}, "step": 0}
         orch = MagicMock(spec=LangGraphOrchestrator)
@@ -301,7 +306,7 @@ class TestPrepareStateMethod(unittest.TestCase):
             "LangGraphOrchestrator must have a prepare_state method",
         )
         self.assertTrue(
-            callable(getattr(LangGraphOrchestrator, "prepare_state")),
+            callable(LangGraphOrchestrator.prepare_state),
             "prepare_state must be callable",
         )
 
