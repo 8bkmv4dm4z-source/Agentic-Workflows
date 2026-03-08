@@ -48,20 +48,22 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         from agentic_workflows.orchestration.langgraph.memo_postgres import PostgresMemoStore
         from agentic_workflows.storage.postgres import PostgresRunStore
 
-        pool = PgConnectionPool(
-            conninfo=db_url,
-            min_size=2,
-            max_size=10,
-            open=False,
-            kwargs={"autocommit": True, "prepare_threshold": 0},
-        )
-
         # Retry opening the pool so startup survives Postgres coming up
         # slightly after uvicorn (common when auto-started locally).
+        # Pool must be recreated each attempt — psycopg_pool raises
+        # "pool has already been opened/closed" if open() is retried on the same object.
         _pg_retries = int(os.environ.get("PG_CONNECT_RETRIES", "10"))
         _pg_delay = float(os.environ.get("PG_CONNECT_RETRY_DELAY", "2.0"))
+        pool = None
         for _attempt in range(1, _pg_retries + 1):
             try:
+                pool = PgConnectionPool(
+                    conninfo=db_url,
+                    min_size=2,
+                    max_size=10,
+                    open=False,
+                    kwargs={"autocommit": True, "prepare_threshold": 0},
+                )
                 pool.open(wait=True, timeout=10)
                 break
             except Exception as _exc:
@@ -94,8 +96,27 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         memo_store = SQLiteMemoStore()
         log.info("api.startup", storage="sqlite")
 
+    # -- Semantic context layer (Phase 7.3) --
+    # Active when DATABASE_URL is set; gracefully disabled (pool=None) otherwise.
+    from agentic_workflows.context.embedding_provider import get_embedding_provider
+    from agentic_workflows.storage.artifact_store import ArtifactStore
+    from agentic_workflows.storage.mission_context_store import MissionContextStore
+
+    embedding_provider = get_embedding_provider()  # reads EMBEDDING_PROVIDER env var
+    mission_context_store = MissionContextStore(pool=pool, embedding_provider=embedding_provider)
+    artifact_store = ArtifactStore(pool=pool, embedding_provider=embedding_provider)
+    application.state.artifact_store = artifact_store
+    log.info(
+        "api.startup",
+        semantic_layer="enabled" if pool is not None else "disabled(sqlite)",
+        embedding_provider=type(embedding_provider).__name__,
+    )
+
     orchestrator = LangGraphOrchestrator(
-        memo_store=memo_store, checkpoint_store=checkpoint_store
+        memo_store=memo_store,
+        checkpoint_store=checkpoint_store,
+        embedding_provider=embedding_provider,
+        mission_context_store=mission_context_store,
     )
     application.state.orchestrator = orchestrator
     application.state.run_store = run_store
