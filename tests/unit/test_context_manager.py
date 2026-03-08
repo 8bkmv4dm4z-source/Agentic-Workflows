@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from agentic_workflows.orchestration.langgraph.context_manager import (
     ArtifactRecord,
     ContextManager,
@@ -12,7 +10,6 @@ from agentic_workflows.orchestration.langgraph.context_manager import (
     extract_artifacts,
     extract_summary_from_result,
 )
-
 
 # ── Model tests ──────────────────────────────────────────────────────
 

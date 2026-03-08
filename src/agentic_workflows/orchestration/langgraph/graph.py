@@ -62,7 +62,7 @@ try:
 except ImportError:  # pragma: no cover
     END = "__end__"
     START = "__start__"
-    StateGraph = None
+    StateGraph: Any = None
 
 try:
     from langchain_core.tools import StructuredTool
