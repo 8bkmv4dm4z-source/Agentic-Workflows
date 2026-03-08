@@ -117,6 +117,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         checkpoint_store=checkpoint_store,
         embedding_provider=embedding_provider,
         mission_context_store=mission_context_store,
+        artifact_store=artifact_store,  # NEW — was created above, now forwarded
     )
     application.state.orchestrator = orchestrator
     application.state.run_store = run_store
