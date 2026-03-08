@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
 status: completed
-stopped_at: Completed 07.3-01-PLAN.md
-last_updated: "2026-03-08T16:33:52.237Z"
+stopped_at: Completed 07.3-02-PLAN.md
+last_updated: "2026-03-08T16:37:19.864Z"
 last_activity: 2026-03-08 — Wave 3 final improvements (P1_BASH_ENABLED guard, memoize prompt removal, tool contract tests)
 progress:
   total_phases: 10
   completed_phases: 8
   total_plans: 41
-  completed_plans: 34
+  completed_plans: 35
   percent: 100
 ---
 
@@ -67,6 +67,7 @@ Progress: [██████████] 100% (32/32 plans complete, Phase 7.2
 | Phase 07.2 P06 | 1min | ruff fix + context tooling | 5 files |
 | Phase 07.3 P00 | 2min | 2 tasks | 4 files |
 | Phase 07.3 P01 | 78s | 2 tasks | 3 files |
+| Phase 07.3 P02 | 2min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -140,6 +141,9 @@ Recent decisions affecting current work:
 - [Phase 07.3]: vector(384) dimension matches BAAI/bge-small-en-v1.5 — all three tables updated
 - [Phase 07.3]: HNSW index chosen for mission_contexts.embedding over IVFFlat — no training needed on empty table
 - [Phase 07.3]: DO migration guard uses USING NULL::vector(384) — safe because file_chunks/solved_tasks columns never written
+- [Phase 07.3]: SHA-256 seed into random.Random for MockEmbeddingProvider — deterministic unit-norm 384-dim vectors, CI-safe
+- [Phase 07.3]: fastembed import deferred to FastEmbedProvider.__init__ body — context package importable in CI without optional dep
+- [Phase 07.3]: fastembed placed in [context] optional dep group (not [dev]) — production opt-in without polluting base install
 
 ### Roadmap Evolution
 
@@ -176,6 +180,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-03-08T16:33:47.289Z
-Stopped at: Completed 07.3-01-PLAN.md
+Last session: 2026-03-08T16:37:19.861Z
+Stopped at: Completed 07.3-02-PLAN.md
 Resume file: None
