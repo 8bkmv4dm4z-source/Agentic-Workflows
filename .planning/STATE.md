@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
-stopped_at: Completed 07.2-00-PLAN.md
-last_updated: "2026-03-08T00:48:31.075Z"
-last_activity: 2026-03-08 — Tool contract test scaffold (144 parametrized stubs)
+status: in-progress
+stopped_at: Completed 07.2-01-PLAN.md
+last_updated: "2026-03-08T00:50:36Z"
+last_activity: 2026-03-08 — Wave 1 critical bug fixes (dual-execution removal + ContextVar callback isolation)
 progress:
   total_phases: 9
   completed_phases: 7
   total_plans: 31
-  completed_plans: 28
-  percent: 90
+  completed_plans: 29
+  percent: 94
 ---
 
 # Project State
@@ -26,15 +26,16 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 ## Current Position
 
 Phase: 7.2 (Architecture Review Implementation: Critical Bug Fixes and Systemic Hardening)
-Plan: 1 of 5 in current phase (07.2-00 DONE, 07.2-01 through 07.2-04 pending)
-Status: Plan 00 complete — test scaffold with 144 parametrized stubs created.
-Last activity: 2026-03-08 — Tool contract test scaffold (144 parametrized stubs)
+Plan: 2 of 5 in current phase (07.2-00, 07.2-01 DONE; 07.2-02 through 07.2-04 pending)
+Status: Plan 01 complete — Wave 1 dual-execution + callback isolation bugs fixed.
+Last activity: 2026-03-08 — Wave 1 critical bug fixes (dual-execution removal + ContextVar callback isolation)
 
-Progress: [█████████░] 90% (28/31 plans complete, Phase 7.2 01/05 done)
+Progress: [█████████░] 94% (29/31 plans complete, Phase 7.2 02/05 done)
 
 ## Test Status
 
-- **657 tests pass** (all context manager lifecycle hooks wired, parallel plan regressions fixed)
+- **596 unit tests pass** (excluding test_tool_contracts pre-existing failures); 4 new tests added in Plan 01
+- 144 pre-existing test_tool_contracts failures (empty-args parametrized stubs from Plan 00 scaffold)
 - 3 pre-existing unit test failures (test_run_bash_python_guard, 2x write_file shebang tests) -- unrelated to Phase 7
 - ruff check: clean (pre-existing UP035 in app.py noted)
 - Branch: `phase-7.2-arch-review`
@@ -59,6 +60,7 @@ Progress: [█████████░] 90% (28/31 plans complete, Phase 7.2 
 | Phase 07.1 P02 | 5min | 2 tasks | 5 files |
 | Phase 07.1 P04 | 4min | 2 tasks | 6 files |
 | Phase 07.2 P00 | 1min | 1 task | 1 file |
+| Phase 07.2 P01 | 4min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -106,6 +108,9 @@ Recent decisions affecting current work:
 - [Phase 07.1]: ContextManager is single source of truth for message lifecycle -- removed competing compaction from ensure_state_defaults
 - [Phase 07.1]: ContextManager lifecycle calls wrapped in try/except for graceful degradation
 - [Phase 07.2]: Module-level _build_all_tools() with in-memory stores for parametrized test scaffold
+- [Phase 07.2]: Removed _executor_subgraph.invoke() from _route_to_specialist -- eliminated dual tool execution side effects
+- [Phase 07.2]: _active_callbacks_var ContextVar at module level replaces self._active_callbacks instance field -- thread-isolated Langfuse callbacks
+- [Phase 07.2]: SSE streaming path (routes/run.py) uses _active_callbacks_var.set() not orchestrator._active_callbacks mutation
 
 ### Roadmap Evolution
 
@@ -129,6 +134,7 @@ Recent decisions affecting current work:
 | 7 | WALKTHROUGH_PHASE7.md: Docker, Postgres, CI architecture walkthrough | Docs | 2026-03-06 | 1fdf29d | ✓ Complete |
 | 7.1 | Data-access log visibility in user_run.py: _DATA_ACCESS_TOOLS panel + run log section | Enhance | 2026-03-07 | (quick-3) | ✓ Complete |
 | 7.2 | Tool contract test scaffold: 144 parametrized stubs for 36 tools | Test | 2026-03-08 | e4c7c33 | ✓ Complete |
+| 7.2 | Wave 1: dual-execution removal + ContextVar callback isolation | Fix | 2026-03-08 | b6a42df | ✓ Complete |
 
 ### Blockers/Concerns
 
@@ -138,6 +144,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-03-08T00:48:31.073Z
-Stopped at: Completed 07.2-00-PLAN.md
+Last session: 2026-03-08T00:50:36Z
+Stopped at: Completed 07.2-01-PLAN.md
 Resume file: None
