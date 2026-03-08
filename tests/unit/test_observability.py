@@ -3,9 +3,12 @@ from __future__ import annotations
 
 import inspect
 
+import pytest
+
 
 def test_langfuse_available_with_3x():
     """langfuse 3.x dual-path import sets _langfuse_available=True."""
+    pytest.importorskip("langfuse")
     from agentic_workflows import observability
 
     assert observability._langfuse_available is True, (
