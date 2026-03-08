@@ -200,7 +200,7 @@ Plans:
   4. `_make_result()` in `test_context_manager_7_3.py` includes `source_layer` — attribution logs show a real layer label (`L0`, `L1`, etc.) instead of `?` in unit tests
   5. All existing 1198+ tests pass unchanged
 
-**Plans:** 2/4 plans executed
+**Plans:** 3/4 plans executed
 Plans:
 - [ ] 07.4-01-PLAN.md — Add `_injected_cross_run_keys: set[str]` to ContextManager; guard injection; regression test for once-per-run behavior
 - [ ] 07.4-02-PLAN.md — Wrap `query_cascade()` in ThreadPoolExecutor with 2s timeout; fallback to `[]`; test for timeout path
