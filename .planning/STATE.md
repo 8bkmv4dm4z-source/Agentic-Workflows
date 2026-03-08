@@ -108,6 +108,7 @@ Recent decisions affecting current work:
 ### Roadmap Evolution
 
 - Phase 7.1 inserted after Phase 7: context manipulation for better sub-agent multi-task handling (URGENT)
+- Phase 7.2 inserted after Phase 7.1: Architecture Review Implementation - Critical Bug Fixes and Systemic Hardening (URGENT)
 
 ### Pending Todos
 
