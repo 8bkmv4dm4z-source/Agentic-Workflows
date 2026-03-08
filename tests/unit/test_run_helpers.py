@@ -187,12 +187,11 @@ class TestActiveCallbacksContextVar(unittest.TestCase):
         self.assertIsInstance(_active_callbacks_var, contextvars.ContextVar)
 
     def test_contextvar_default_is_empty_list(self) -> None:
-        """Default value of _active_callbacks_var must be []."""
+        """Calling .get([]) on _active_callbacks_var in a fresh context returns []."""
         from agentic_workflows.orchestration.langgraph.graph import _active_callbacks_var
-        # Get default in a fresh context to avoid pollution
         import contextvars
         ctx = contextvars.copy_context()
-        val = ctx.run(_active_callbacks_var.get)
+        val = ctx.run(_active_callbacks_var.get, [])
         self.assertEqual(val, [])
 
     def test_contextvar_isolation_across_threads(self) -> None:
@@ -209,7 +208,7 @@ class TestActiveCallbacksContextVar(unittest.TestCase):
 
         def _check_in_thread() -> None:
             try:
-                other_thread_value.append(_active_callbacks_var.get())
+                other_thread_value.append(_active_callbacks_var.get([]))
             except Exception as exc:
                 error_holder.append(exc)
 

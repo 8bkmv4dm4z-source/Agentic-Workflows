@@ -115,7 +115,7 @@ _HANDOFF_RESULTS_CAP: int = 50
 # different threads each see their own value (ContextVar provides this
 # automatically). Default is [] (no callbacks when credentials absent).
 _active_callbacks_var: contextvars.ContextVar[list] = contextvars.ContextVar(
-    "_active_callbacks", default=[]
+    "_active_callbacks"
 )
 
 
@@ -212,13 +212,13 @@ class LangGraphOrchestrator:
                     # Extract only lines between ## 2. Architecture and the next ## section
                     arch_lines: list[str] = []
                     in_arch = False
-                    for l in text.splitlines():
-                        if l.startswith("## 2.") or (not in_arch and "Architecture" in l and l.startswith("#")):
+                    for line in text.splitlines():
+                        if line.startswith("## 2.") or (not in_arch and "Architecture" in line and line.startswith("#")):
                             in_arch = True
-                        elif in_arch and l.startswith("## "):
+                        elif in_arch and line.startswith("## "):
                             break
-                        if in_arch and l.strip():
-                            arch_lines.append(l.rstrip())
+                        if in_arch and line.strip():
+                            arch_lines.append(line.rstrip())
                     if arch_lines:
                         lines.extend(arch_lines[:12])
                     break
@@ -523,7 +523,7 @@ class LangGraphOrchestrator:
         )
         final_state = self._compiled.invoke(
             state,
-            config={"recursion_limit": self.max_steps * 9, "callbacks": _active_callbacks_var.get()},
+            config={"recursion_limit": self.max_steps * 9, "callbacks": _active_callbacks_var.get([])},
         )
         final_state = ensure_state_defaults(final_state, system_prompt=self.system_prompt)
         memo_entries = self.memo_store.list_entries(run_id=final_state["run_id"])
