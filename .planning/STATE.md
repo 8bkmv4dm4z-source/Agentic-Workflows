@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
 status: completed
-stopped_at: Completed 07.4-01-PLAN.md
-last_updated: "2026-03-08T21:48:03.021Z"
+stopped_at: Completed 07.4-04-PLAN.md
+last_updated: "2026-03-08T21:50:08.356Z"
 last_activity: 2026-03-08 — Wave 3 final improvements (P1_BASH_ENABLED guard, memoize prompt removal, tool contract tests)
 progress:
   total_phases: 12
   completed_phases: 9
   total_plans: 45
-  completed_plans: 43
+  completed_plans: 44
   percent: 100
 ---
 
@@ -76,6 +76,7 @@ Progress: [██████████] 100% (32/32 plans complete, Phase 7.2
 | Phase 07.3 P07 | 4min | 1 tasks | 2 files |
 | Phase 07.3 P09 | 4 | 1 tasks | 1 files |
 | Phase 07.4-01 P01 | 4min | 2 tasks | 2 files |
+| Phase 07.4 P04 | 2min | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -165,6 +166,8 @@ Recent decisions affecting current work:
 - [Phase 07.3]: WALKTHROUGH_PHASE7.3.md written covering 5-layer cascade, RRF fusion, fastembed embedding stack, BIT(384) quantization, HNSW index choice, and ContextManager integration — portfolio knowledge artifact
 - [Phase 07.4]: Guard in build_planner_context_injection() added after hits loop — only fires when cross_run_lines non-empty; empty cascade results do NOT mark key as injected
 - [Phase 07.4]: _injected_cross_run_keys is instance attribute (not class variable) — no cross-test or cross-run contamination
+- [Phase 07.4]: Used caplog pytest fixture to capture CONTEXT INJECT log output for attribution assertion — most direct approach without mocking internal logic
+- [Phase 07.4]: source_layer='L0' added to _make_result() test fixture so attribution log emits real layer label instead of '?' placeholder
 
 ### Roadmap Evolution
 
@@ -201,6 +204,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-03-08T21:48:03.019Z
-Stopped at: Completed 07.4-01-PLAN.md
+Last session: 2026-03-08T21:50:08.353Z
+Stopped at: Completed 07.4-04-PLAN.md
 Resume file: None
