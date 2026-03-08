@@ -248,6 +248,8 @@ class ContextManager:
         # Per-run caches keyed by f"{run_id}:{goal_text}" to prevent cross-run contamination
         self._cascade_cache: dict[str, list] = {}   # cache_key → cached hits
         self._embed_cache: dict[str, list[float]] = {}  # cache_key → embedding
+        # Phase 7.4: dedup set — tracks keys already injected as [Cross-run] this run
+        self._injected_cross_run_keys: set[str] = set()
 
     # ── Phase 7.3: cross-run persistence helpers ───────────────────────
 
@@ -604,6 +606,20 @@ class ContextManager:
                 for hit in hits:
                     line = f'[Cross-run] Similar: "{hit["goal"]}" \u2192 {hit["summary"]}'
                     cross_run_lines.append(line)
+
+                # Phase 7.4: suppress duplicate injection for the same run+goal key
+                if cross_run_lines:
+                    if cache_key in self._injected_cross_run_keys:
+                        # Already injected for this run+goal — return base content only
+                        result = base_result[:_CONTEXT_CAP] if base_result else base_result
+                        self._logger.debug("cross-run dedup skip key=%s", cache_key)
+                        self._logger.info(
+                            "CONTEXT INJECT missions=%d cross_run_hits=%d chars=%d cached=%s hits=[%s]",
+                            len(summaries), 0, len(result), True, "-",
+                        )
+                        return result
+                    self._injected_cross_run_keys.add(cache_key)
+
             except Exception as exc:  # noqa: BLE001
                 self._logger.debug("cross-run cascade query failed (non-fatal): %s", exc)
 
