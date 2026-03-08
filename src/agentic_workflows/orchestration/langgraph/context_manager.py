@@ -11,11 +11,15 @@ Phase 7.1 — CTX-01, CTX-02, CTX-03, CTX-04, CTX-05, CTX-06, CTX-08, CTX-09, CT
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
 
 from agentic_workflows.logger import get_logger
+
+if TYPE_CHECKING:
+    from agentic_workflows.context.embedding_provider import EmbeddingProvider
+    from agentic_workflows.storage.mission_context_store import MissionContextStore
 
 _logger = get_logger("context_manager")
 
@@ -232,10 +236,66 @@ class ContextManager:
         large_result_threshold: int = 4000,
         sliding_window_cap: int = 30,
         step_threshold: int = 10,
+        mission_context_store: MissionContextStore | None = None,
+        embedding_provider: EmbeddingProvider | None = None,
     ) -> None:
         self.large_result_threshold = large_result_threshold
         self.sliding_window_cap = sliding_window_cap
         self.step_threshold = step_threshold
+        self._store = mission_context_store
+        self._embedding_provider = embedding_provider
+        self._logger = _logger
+
+    # ── Phase 7.3: cross-run persistence helpers ───────────────────────
+
+    def _persist_mission_context(self, mission_context: dict) -> None:  # type: ignore[type-arg]
+        """Persist a completed mission context to Postgres via MissionContextStore.
+
+        No-op if self._store is None (SQLite/CI environments).
+        Gracefully swallows all exceptions to avoid breaking the main graph flow.
+        """
+        if self._store is None:
+            return
+        try:
+            goal = mission_context.get("goal", "") or ""
+            summary = mission_context.get("summary", "") or ""
+            tools_used = mission_context.get("used_tools", []) or []
+            key_results = mission_context.get("key_results", {}) or {}
+            run_id = str(mission_context.get("run_id", "unknown"))
+            mission_id = str(mission_context.get("mission_id", "unknown"))
+
+            # Generate embedding for the goal text
+            if self._embedding_provider is not None:
+                embedding = self._embedding_provider.embed_sync(goal)
+            else:
+                # Fallback zero vector if no provider — still stores without semantic search
+                embedding = [0.0] * 384
+
+            self._store.upsert(
+                run_id=run_id,
+                mission_id=mission_id,
+                goal=goal,
+                status="completed",
+                summary=summary,
+                tools_used=list(tools_used),
+                key_results=dict(key_results),
+                embedding=embedding,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._logger.warning("_persist_mission_context failed (non-fatal): %s", exc)
+
+    def _get_current_goal_text(self, state: dict[str, Any]) -> str:
+        """Extract goal text from the first pending or active mission in state."""
+        missions = state.get("missions") or []
+        if missions:
+            return str(missions[0]) if isinstance(missions[0], str) else str(missions[0].get("goal", ""))
+        mission_contexts = state.get("mission_contexts") or {}
+        for ctx in mission_contexts.values():
+            if isinstance(ctx, dict):
+                goal = ctx.get("goal", "")
+                if goal:
+                    return str(goal)
+        return ""
 
     def get_artifacts_for_mission(
         self, state: dict[str, Any], mission_id: int
@@ -363,6 +423,20 @@ class ContextManager:
             summary_injected=summary,
         )
 
+        # Phase 7.3: persist to cross-run store (no-op if store=None)
+        persist_ctx: dict[str, Any] = {
+            "goal": ctx.goal,
+            "summary": ctx.summary,
+            "used_tools": ctx.tools_used,
+            "key_results": ctx.key_results,
+            "run_id": state.get("run_id", "unknown"),
+            "mission_id": str(mission_id),
+        }
+        try:
+            self._persist_mission_context(persist_ctx)
+        except Exception as exc:  # noqa: BLE001
+            self._logger.warning("on_mission_complete persist failed (non-fatal): %s", exc)
+
     def on_tool_result(
         self,
         state: dict[str, Any],
@@ -467,12 +541,44 @@ class ContextManager:
                     all_artifacts.append(f"{a.key}={a.value}")
 
         if not summaries:
-            return ""
+            base_result = ""
+        else:
+            parts = [f"[Orchestrator] Prior missions: {'; '.join(summaries)}"]
+            if all_artifacts:
+                parts.append(f"Available artifacts: {', '.join(all_artifacts)}")
+            base_result = ". ".join(parts)
 
-        parts = [f"[Orchestrator] Prior missions: {'; '.join(summaries)}"]
-        if all_artifacts:
-            parts.append(f"Available artifacts: {', '.join(all_artifacts)}")
-        return ". ".join(parts)
+        # Phase 7.3: append cross-run similar missions from cascade store
+        _CONTEXT_CAP = 1500  # total chars across all injected content
+        cross_run_lines: list[str] = []
+        if self._store is not None:
+            try:
+                goal_text = self._get_current_goal_text(state)
+                embedding = None
+                if self._embedding_provider is not None and goal_text:
+                    embedding = self._embedding_provider.embed_sync(goal_text)
+                hits = self._store.query_cascade(
+                    goal_text or "",
+                    embedding=embedding,
+                    top_k=3,
+                )
+                for hit in hits:
+                    line = f'[Cross-run] Similar: "{hit["goal"]}" \u2192 {hit["summary"]}'
+                    cross_run_lines.append(line)
+            except Exception as exc:  # noqa: BLE001
+                self._logger.debug("cross-run cascade query failed (non-fatal): %s", exc)
+
+        if not cross_run_lines:
+            return base_result[:_CONTEXT_CAP] if base_result else base_result
+
+        # Combine: existing content takes priority, cross-run hits fill remaining capacity
+        remaining = _CONTEXT_CAP - len(base_result)
+        cross_run_text = "\n".join(cross_run_lines)
+        if remaining <= 0:
+            return base_result[:_CONTEXT_CAP]
+
+        combined = base_result + ("\n" if base_result else "") + cross_run_text
+        return combined[:_CONTEXT_CAP]
 
     def _emit_eviction_event(
         self,
