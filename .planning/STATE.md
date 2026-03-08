@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
 status: completed
-stopped_at: Completed 07.4-02-PLAN.md
-last_updated: "2026-03-08T21:53:53.562Z"
+stopped_at: Completed 07.4-03-PLAN.md
+last_updated: "2026-03-08T21:56:56.683Z"
 last_activity: 2026-03-08 — Wave 3 final improvements (P1_BASH_ENABLED guard, memoize prompt removal, tool contract tests)
 progress:
   total_phases: 12
-  completed_phases: 9
+  completed_phases: 10
   total_plans: 45
-  completed_plans: 45
+  completed_plans: 46
   percent: 100
 ---
 
@@ -78,6 +78,7 @@ Progress: [██████████] 100% (32/32 plans complete, Phase 7.2
 | Phase 07.4-01 P01 | 4min | 2 tasks | 2 files |
 | Phase 07.4 P04 | 2min | 2 tasks | 1 files |
 | Phase 07.4 P02 | 5min | 2 tasks | 2 files |
+| Phase 07.4 P03 | 2min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -171,6 +172,7 @@ Recent decisions affecting current work:
 - [Phase 07.4]: source_layer='L0' added to _make_result() test fixture so attribution log emits real layer label instead of '?' placeholder
 - [Phase 07.4]: shutdown(wait=False) instead of context manager with ThreadPoolExecutor — prevents blocking __exit__ when thread still sleeping after timeout
 - [Phase 07.4]: _CASCADE_TIMEOUT_SECONDS = 2.0 as module constant, plain TimeoutError catch (not alias) in Python 3.12
+- [Phase 07.4]: _CACHE_MAX_SIZE=200 + _cache_put() FIFO half-eviction bounds both caches; list(cache.keys())[:n] snapshot pattern avoids RuntimeError on dict mutation
 
 ### Roadmap Evolution
 
@@ -207,6 +209,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-03-08T21:53:53.559Z
-Stopped at: Completed 07.4-02-PLAN.md
+Last session: 2026-03-08T21:56:56.680Z
+Stopped at: Completed 07.4-03-PLAN.md
 Resume file: None
