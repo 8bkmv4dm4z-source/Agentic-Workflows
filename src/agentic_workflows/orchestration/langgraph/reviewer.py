@@ -15,6 +15,7 @@ class ReviewDecision:
     rerun_mission_ids: list[int]
     weighted_score: float | None
     changed_files: list[str]
+    unmet_requirements: dict[int, dict[str, list[str]]] | None = None
 
 
 class Reviewer(Protocol):

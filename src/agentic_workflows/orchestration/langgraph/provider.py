@@ -435,6 +435,62 @@ class OllamaChatProvider(_RetryingProviderBase):
         return custom_name
 
 
+class LlamaCppChatProvider(_RetryingProviderBase):
+    """Local llama-server (SYCL/CPU) provider via its OpenAI-compatible endpoint."""
+
+    def __init__(self, model: str | None = None, base_url: str | None = None) -> None:
+        super().__init__()
+        llama_cpp_timeout = _env_float("LLAMA_CPP_TIMEOUT", 0.0)
+        if llama_cpp_timeout > 0:
+            self.timeout_seconds = llama_cpp_timeout
+        self.model = model or os.getenv("LLAMA_CPP_MODEL", "local")
+        resolved_base_url = base_url or os.getenv(
+            "LLAMA_CPP_BASE_URL", "http://127.0.0.1:8080/v1"
+        )
+        self.client = OpenAI(
+            api_key="llama-cpp",
+            base_url=resolved_base_url,
+            timeout=self.timeout_seconds,
+        )
+
+    @observe(name="provider.generate")
+    def generate(self, messages: Sequence[AgentMessage]) -> str:
+        enable_thinking = os.getenv("LLAMA_CPP_THINKING", "").strip().lower() in ("1", "true", "yes")
+        extra: dict = {"enable_thinking": True} if enable_thinking else {}
+
+        def _request_json_mode() -> object:
+            return self.client.chat.completions.create(
+                model=self.model,
+                messages=list(messages),
+                response_format={"type": "json_object"},
+                timeout=self.timeout_seconds,
+                **({"extra_body": extra} if extra else {}),
+            )
+
+        def _request_plain_mode() -> object:
+            return self.client.chat.completions.create(
+                model=self.model,
+                messages=list(messages),
+                timeout=self.timeout_seconds,
+                **({"extra_body": extra} if extra else {}),
+            )
+
+        try:
+            response = self._request_with_retries(_request_json_mode)
+        except Exception:
+            response = self._request_with_retries(_request_plain_mode)
+        content = response.choices[0].message.content
+        if content is None:
+            raise ValueError("Model returned empty content.")
+        if not content:
+            try:
+                response = self._request_with_retries(_request_plain_mode)
+                content = response.choices[0].message.content or ""
+            except Exception:
+                pass
+        return content
+
+
 def build_provider(preferred: str | None = None) -> ChatProvider:
     """Build provider from explicit argument or `P1_PROVIDER` env setting."""
 
@@ -447,12 +503,18 @@ def build_provider(preferred: str | None = None) -> ChatProvider:
             return OllamaChatProvider()
         if preferred_normalized == "openai":
             return OpenAIChatProvider()
+        if preferred_normalized == "llama-cpp":
+            return LlamaCppChatProvider()
         raise ValueError(
             f"Unsupported provider '{explicit_provider}'. "
-            "Set P1_PROVIDER to one of: ollama, groq, openai."
+            "Set P1_PROVIDER to one of: ollama, groq, openai, llama-cpp."
         )
 
-    for provider_cls in (OllamaChatProvider, OpenAIChatProvider, GroqChatProvider):
+    fallback_classes: list[type] = [OllamaChatProvider, OpenAIChatProvider, GroqChatProvider]
+    if os.getenv("LLAMA_CPP_BASE_URL"):
+        fallback_classes.append(LlamaCppChatProvider)
+
+    for provider_cls in fallback_classes:
         try:
             return provider_cls()
         except ValueError:
@@ -460,5 +522,6 @@ def build_provider(preferred: str | None = None) -> ChatProvider:
 
     raise ValueError(
         "No provider is configured. Set P1_PROVIDER plus required env vars "
-        "(OLLAMA_BASE_URL/OLLAMA_MODEL, OPENAI_API_KEY, or GROQ_API_KEY)."
+        "(OLLAMA_BASE_URL/OLLAMA_MODEL, OPENAI_API_KEY, GROQ_API_KEY, "
+        "or LLAMA_CPP_BASE_URL)."
     )

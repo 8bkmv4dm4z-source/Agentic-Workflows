@@ -43,10 +43,28 @@ class WriteFileTool(Tool):
             return shebang_err
 
         target_path = path
+        # Priority: P1_RUN_ARTIFACT_DIR > AGENT_WORKDIR > cwd
+        # AGENT_WORKDIR is set by docker-compose to the host-mounted workspace
+        # directory so that files written by the agent appear on the host.
         artifact_dir = str(os.getenv("P1_RUN_ARTIFACT_DIR", "")).strip()
-        if artifact_dir and not os.path.isabs(path) and not os.path.dirname(path):
-            os.makedirs(artifact_dir, exist_ok=True)
-            target_path = os.path.join(artifact_dir, path)
+        if not artifact_dir:
+            artifact_dir = str(os.getenv("AGENT_WORKDIR", "")).strip()
+        if artifact_dir:
+            container_cwd = os.path.realpath(os.getcwd())
+            abs_artifact_dir = os.path.realpath(artifact_dir)
+            if not os.path.isabs(path):
+                # Relative path (bare or with subdirs): place under workspace
+                target_path = os.path.join(artifact_dir, path)
+            elif os.path.realpath(path).startswith(abs_artifact_dir + os.sep) or os.path.realpath(path) == abs_artifact_dir:
+                # Already inside the workspace — leave as-is to avoid double-nesting
+                target_path = path
+            elif path.startswith(container_cwd + os.sep) or path == container_cwd:
+                # Absolute path under the container cwd (e.g. /app/fib.py):
+                # redirect to workspace so files land on the host mount.
+                rel = os.path.relpath(path, container_cwd)
+                target_path = os.path.join(artifact_dir, rel)
+            # else: explicit absolute path outside workspace — leave as-is
+            os.makedirs(os.path.dirname(target_path) or artifact_dir, exist_ok=True)
         else:
             parent = os.path.dirname(target_path)
             if parent:
