@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
 status: completed
-stopped_at: Completed 07.5-03-PLAN.md
-last_updated: "2026-03-08T22:40:08.084Z"
+stopped_at: Completed 07.5-05-PLAN.md
+last_updated: "2026-03-08T22:43:01.562Z"
 last_activity: 2026-03-08 — Wave 3 final improvements (P1_BASH_ENABLED guard, memoize prompt removal, tool contract tests)
 progress:
   total_phases: 12
-  completed_phases: 10
+  completed_phases: 11
   total_plans: 50
-  completed_plans: 50
+  completed_plans: 51
   percent: 100
 ---
 
@@ -83,6 +83,7 @@ Progress: [██████████] 100% (32/32 plans complete, Phase 7.2
 | Phase 07.5-wire-artifactstore-to-runtime P02 | 5min | 3 tasks | 3 files |
 | Phase 07.5-wire-artifactstore-to-runtime P04 | 2 | 2 tasks | 1 files |
 | Phase 07.5-wire-artifactstore-to-runtime P03 | 2 | 2 tasks | 2 files |
+| Phase 07.5-wire-artifactstore-to-runtime P05 | 2min | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -185,6 +186,7 @@ Recent decisions affecting current work:
 - [Phase 07.5-04]: TDD RED stubs use NotImplementedError to force explicit failure; GREEN replaces with real assertions
 - [Phase 07.5-04]: Tests query mission_artifacts directly via pg_pool — no mocking, pure end-to-end DB verification
 - [Phase 07.5-03]: ArtifactStore lazy import inside try block alongside MissionContextStore in run.py and user_run.py — consistent with existing pattern, avoids SQLite-only import errors
+- [Phase 07.5-wire-artifactstore-to-runtime]: [Phase 07.5-05]: Appended Phase 7.5 section to WALKTHROUGH_PHASE7.3.md rather than creating a separate file — keeps artifact-persistence documentation in one place
 
 ### Roadmap Evolution
 
@@ -221,6 +223,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-03-08T22:40:08.081Z
-Stopped at: Completed 07.5-03-PLAN.md
+Last session: 2026-03-08T22:43:01.559Z
+Stopped at: Completed 07.5-05-PLAN.md
 Resume file: None

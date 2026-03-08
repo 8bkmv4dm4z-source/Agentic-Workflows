@@ -218,7 +218,7 @@ Plans:
   3. `run.py` and `user_run.py` instantiate `ArtifactStore(pool=pg_pool)` when `DATABASE_URL` is set and pass it to the orchestrator
   4. All existing 1198+ tests pass unchanged
 
-**Plans:** 4/5 plans executed
+**Plans:** 5/5 plans complete
 Plans:
 - [ ] 07.5-01-PLAN.md — Add `artifact_store` param to `ContextManager.__init__`; wire `_persist_mission_context()` to call `artifact_store.upsert()` for each artifact
 - [ ] 07.5-02-PLAN.md — Add `artifact_store` param to `LangGraphOrchestrator.__init__`; forward to `ContextManager`
