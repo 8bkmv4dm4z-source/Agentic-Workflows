@@ -77,10 +77,10 @@ def pg_pool():
     )
     pool.open(wait=True)
 
-    # Apply migrations (idempotent CREATE IF NOT EXISTS)
-    migration_path = Path(__file__).resolve().parent.parent / "db" / "migrations" / "001_init.sql"
-    if migration_path.exists():
-        sql = migration_path.read_text()
+    # Apply all migrations in order (idempotent CREATE IF NOT EXISTS)
+    migrations_dir = Path(__file__).resolve().parent.parent / "db" / "migrations"
+    for migration_file in sorted(migrations_dir.glob("*.sql")):
+        sql = migration_file.read_text()
         with pool.connection() as conn:
             conn.execute(sql, prepare=False)
 
