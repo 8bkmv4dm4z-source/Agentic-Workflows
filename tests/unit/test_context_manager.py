@@ -912,3 +912,60 @@ class TestBoundedCache:
         cm._cache_put(cm._cascade_cache, "k1", ["v"])
         assert len(cm._cascade_cache) == 1
         assert cm._cascade_cache["k1"] == ["v"]
+
+
+# ── TestContextManagerArtifactStore (Phase 07.5 Plan 01) ─────────────
+
+
+class TestContextManagerArtifactStore:
+    """SC-3: artifact_store param backward compat and upsert wiring."""
+
+    def _make_state(self, run_id: str = "test-run-01") -> dict:
+        return {
+            "run_id": run_id,
+            "messages": [{"role": "system", "content": "sys"}],
+            "mission_contexts": {
+                "1": MissionContext(
+                    mission_id=1,
+                    goal="Write data to file",
+                    status="pending",
+                    step_range=(1, 3),
+                ).model_dump()
+            },
+            "mission_reports": [],
+            "current_step": 3,
+        }
+
+    def test_context_manager_no_artifact_store_no_error(self):
+        cm = ContextManager()
+        assert cm._artifact_store is None
+
+    def test_artifact_store_not_called_when_none(self):
+        cm = ContextManager(artifact_store=None)
+        state = self._make_state()
+        # Should not raise
+        cm.on_tool_result(
+            state, "write_file",
+            result={"result": "Successfully wrote 5 characters to /tmp/x.txt"},
+            args={"path": "/tmp/x.txt"},
+            mission_id=1,
+        )
+        cm.on_mission_complete(state, mission_id=1)
+
+    def test_artifact_store_upsert_called_on_complete(self):
+        mock_store = MagicMock()
+        cm = ContextManager(artifact_store=mock_store)
+        state = self._make_state()
+        cm.on_tool_result(
+            state, "write_file",
+            result={"result": "Successfully wrote 10 characters to /tmp/out.txt"},
+            args={"path": "/tmp/out.txt"},
+            mission_id=1,
+        )
+        cm.on_mission_complete(state, mission_id=1)
+        # write_file produces a file_path artifact
+        assert mock_store.upsert.called
+        call_kwargs = mock_store.upsert.call_args_list[0][1]
+        assert call_kwargs["key"] == "file_path"
+        assert call_kwargs["source_tool"] == "write_file"
+        assert call_kwargs["run_id"] == "test-run-01"
