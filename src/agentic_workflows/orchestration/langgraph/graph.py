@@ -8,6 +8,7 @@ run/mission reports using only local state for final snapshots.
 """
 
 import contextlib
+import contextvars
 import json
 import os
 import queue
@@ -86,6 +87,14 @@ _ANNOTATED_LIST_FIELDS: frozenset[str] = frozenset(
     {"tool_history", "memo_events", "seen_tool_signatures", "mission_reports"}
 )
 
+# W1-2: Per-run callback isolation via ContextVar.
+# Each run()/streaming call sets its own callback list; concurrent runs in
+# different threads each see their own value (ContextVar provides this
+# automatically). Default is [] (no callbacks when credentials absent).
+_active_callbacks_var: contextvars.ContextVar[list] = contextvars.ContextVar(
+    "_active_callbacks", default=[]
+)
+
 
 def _sequential_node(fn):  # type: ignore[no-untyped-def]
     """Wrap a sequential LangGraph node so Annotated list fields return [] (empty delta).
@@ -159,7 +168,6 @@ class LangGraphOrchestrator:
         )
         self._executor_subgraph = build_executor_subgraph(memo_store=self.memo_store)
         self._evaluator_subgraph = build_evaluator_subgraph()
-        self._active_callbacks: list[Any] = []  # populated at run() start; empty = no-op
         self._invalidate_known_poisoned_cache_entries()
         self.system_prompt = self._build_system_prompt()
         self._compiled = self._compile_graph()
@@ -399,11 +407,9 @@ class LangGraphOrchestrator:
         prior_context: list[AgentMessage] | None = None,
     ) -> RunResult:
         """Execute one end-to-end run and return audit-friendly artifacts."""
-        # Build callback list once per run. Empty list when credentials absent (no console noise).
-        self._active_callbacks: list[Any] = []
+        # W1-2: Set per-run callbacks via ContextVar for thread-level isolation.
         _handler = get_langfuse_callback_handler()
-        if _handler is not None:
-            self._active_callbacks = [_handler]
+        _active_callbacks_var.set([_handler] if _handler else [])
         state = new_run_state(self.system_prompt, user_input, run_id=run_id)
         if prior_context:
             # Merge prior-context system content into the main system prompt
@@ -446,7 +452,7 @@ class LangGraphOrchestrator:
         )
         final_state = self._compiled.invoke(
             state,
-            config={"recursion_limit": self.max_steps * 9, "callbacks": self._active_callbacks},
+            config={"recursion_limit": self.max_steps * 9, "callbacks": _active_callbacks_var.get()},
         )
         final_state = ensure_state_defaults(final_state, system_prompt=self.system_prompt)
         memo_entries = self.memo_store.list_entries(run_id=final_state["run_id"])

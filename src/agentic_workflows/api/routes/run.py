@@ -117,12 +117,11 @@ async def post_run(body: RunRequest, request: Request) -> EventSourceResponse:
                 state["active_mission_index"] = -1
                 state["active_mission_id"] = 0
 
-                # Setup callbacks
+                # Setup callbacks via ContextVar (W1-2: per-request isolation)
                 from agentic_workflows.observability import get_langfuse_callback_handler
-                orchestrator._active_callbacks = []
+                from agentic_workflows.orchestration.langgraph.graph import _active_callbacks_var
                 handler = get_langfuse_callback_handler()
-                if handler is not None:
-                    orchestrator._active_callbacks = [handler]
+                _active_callbacks_var.set([handler] if handler else [])
 
                 orchestrator._write_shared_plan(state)
                 orchestrator.checkpoint_store.save(
@@ -134,7 +133,7 @@ async def post_run(body: RunRequest, request: Request) -> EventSourceResponse:
 
                 config = {
                     "recursion_limit": orchestrator.max_steps * 9,
-                    "callbacks": orchestrator._active_callbacks,
+                    "callbacks": _active_callbacks_var.get(),
                 }
 
                 # Stream graph execution, emitting SSE events for each node.
