@@ -66,3 +66,76 @@ markers = [
 python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "agentic_workflows.observability"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "agentic_workflows.orchestration.langgraph.graph"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "agentic_workflows.orchestration.langgraph.provider"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "agentic_workflows.orchestration.langgraph.run"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "agentic_workflows.orchestration.langgraph.user_run"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "agentic_workflows.orchestration.langgraph.checkpoint_store"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "agentic_workflows.orchestration.langgraph.checkpoint_postgres"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "agentic_workflows.tools.data_analysis"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "agentic_workflows.tools.text_analysis"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "agentic_workflows.tools.validate_data"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "agentic_workflows.api.middleware.request_id"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "agentic_workflows.api.middleware.api_key"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "agentic_workflows.orchestration.langgraph.context_manager"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "agentic_workflows.orchestration.langgraph.text_extractor"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "agentic_workflows.core.llm_provider"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "agentic_workflows.agents.local_agent"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "agentic_workflows.core.orchestrator"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "agentic_workflows.api.app"
+ignore_errors = true

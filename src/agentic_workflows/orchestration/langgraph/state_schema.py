@@ -11,7 +11,7 @@ import json
 import operator
 from datetime import UTC, datetime
 from hashlib import sha256
-from typing import Annotated, Any, Literal, TypedDict, cast
+from typing import Annotated, Any, Literal, NotRequired, TypedDict, cast
 from uuid import uuid4
 
 
@@ -25,6 +25,7 @@ class ToolRecord(TypedDict):
     tool: str
     args: dict[str, Any]
     result: dict[str, Any]
+    via_subgraph: NotRequired[bool]
 
 
 class MemoEvent(TypedDict):
