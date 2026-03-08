@@ -799,3 +799,63 @@ class TestCrossRunDedup:
         assert "[Cross-run] Similar:" in result, (
             "Expected injection after empty-hit call, but key was incorrectly marked as injected"
         )
+
+
+# ── TestCascadeTimeout ────────────────────────────────────────────────
+
+
+class TestCascadeTimeout:
+    def _make_state(self, goal: str = "Sort array", run_id: str = "run-1") -> dict:
+        return {
+            "missions": [goal],
+            "mission_contexts": {},
+            "messages": [],
+            "run_id": run_id,
+            "step": 1,
+        }
+
+    def test_slow_cascade_completes_within_timeout(self):
+        import time
+
+        mock_store = MagicMock()
+
+        def slow(*a, **kw):
+            time.sleep(5)
+            return []
+
+        mock_store.query_cascade.side_effect = slow
+        cm = ContextManager(mission_context_store=mock_store)
+        state = self._make_state()
+        start = time.monotonic()
+        result = cm.build_planner_context_injection(state)
+        elapsed = time.monotonic() - start
+        assert isinstance(result, str)
+        assert elapsed < 3.0, f"Took {elapsed:.1f}s — timeout not enforced"
+
+    def test_slow_cascade_returns_empty_cross_run(self):
+        mock_store = MagicMock()
+        mock_store.query_cascade.side_effect = lambda *a, **kw: (
+            __import__("time").sleep(5),
+            [],
+        )[1]
+        cm = ContextManager(mission_context_store=mock_store)
+        result = cm.build_planner_context_injection(self._make_state())
+        assert "[Cross-run] Similar:" not in result
+
+    def test_fast_cascade_still_works(self):
+        mock_store = MagicMock()
+        mock_store.query_cascade.return_value = [
+            MissionContextResult(
+                id=1,
+                run_id="r",
+                mission_id="m",
+                goal="g",
+                summary="s",
+                tools_used=[],
+                score=0.9,
+                source_layer="L0",
+            )
+        ]
+        cm = ContextManager(mission_context_store=mock_store)
+        result = cm.build_planner_context_injection(self._make_state())
+        assert "[Cross-run] Similar:" in result

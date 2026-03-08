@@ -11,6 +11,7 @@ Phase 7.1 — CTX-01, CTX-02, CTX-03, CTX-04, CTX-05, CTX-06, CTX-08, CTX-09, CT
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
@@ -26,6 +27,10 @@ _logger = get_logger("context_manager")
 # W2-5: Cap for pipeline_trace entries (matches graph.py _PIPELINE_TRACE_CAP).
 # Defined locally to avoid circular import with graph.py.
 _PIPELINE_TRACE_CAP: int = 500
+
+# Timeout for cross-run cascade queries — prevents a slow/hung Postgres connection
+# from blocking the planner indefinitely.
+_CASCADE_TIMEOUT_SECONDS: float = 2.0
 
 
 # ── Models ───────────────────────────────────────────────────────────
@@ -596,11 +601,30 @@ class ContextManager:
 
                 # Cache cascade result to avoid re-running SQL 10-25× per run
                 if cache_key not in self._cascade_cache:
-                    self._cascade_cache[cache_key] = self._store.query_cascade(
-                        goal_text,
-                        embedding=embedding,
-                        top_k=3,
-                    )
+                    try:
+                        executor = ThreadPoolExecutor(max_workers=1)
+                        try:
+                            future = executor.submit(
+                                self._store.query_cascade,
+                                goal_text,
+                                embedding=embedding,
+                                top_k=3,
+                            )
+                            hits_result = future.result(timeout=_CASCADE_TIMEOUT_SECONDS)
+                            self._cascade_cache[cache_key] = hits_result
+                        except TimeoutError:
+                            self._logger.warning(
+                                "query_cascade timeout after %.1fs — falling back to []",
+                                _CASCADE_TIMEOUT_SECONDS,
+                            )
+                            self._cascade_cache[cache_key] = []
+                        finally:
+                            executor.shutdown(wait=False)
+                    except Exception as exc:  # noqa: BLE001
+                        self._logger.debug(
+                            "cross-run cascade query failed (non-fatal): %s", exc
+                        )
+                        self._cascade_cache[cache_key] = []
                 hits = self._cascade_cache[cache_key]
 
                 for hit in hits:
