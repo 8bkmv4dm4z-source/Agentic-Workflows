@@ -359,5 +359,45 @@ class TestPrepareStateMethod(unittest.TestCase):
         self.assertTrue(any("previous question" in c for c in user_contents))
 
 
+class TestSystemPromptMemoizeRemoval(unittest.TestCase):
+    """W3-9: memoize must not appear as a callable tool in the planner system prompt."""
+
+    def test_system_prompt_excludes_memoize_tool(self) -> None:
+        """The planner system prompt must not list '- memoize:' as a tool."""
+        from agentic_workflows.orchestration.langgraph.graph import LangGraphOrchestrator
+        from tests.conftest import ScriptedProvider
+
+        provider = ScriptedProvider(responses=[{"action": "finish", "answer": "done"}])
+        orch = LangGraphOrchestrator(provider=provider, max_steps=5)
+        prompt = orch.system_prompt
+
+        self.assertNotIn("- memoize:", prompt,
+                         "System prompt must not list memoize as a callable tool")
+
+    def test_system_prompt_still_contains_retrieve_memo(self) -> None:
+        """retrieve_memo must remain in the system prompt (model needs it)."""
+        from agentic_workflows.orchestration.langgraph.graph import LangGraphOrchestrator
+        from tests.conftest import ScriptedProvider
+
+        provider = ScriptedProvider(responses=[{"action": "finish", "answer": "done"}])
+        orch = LangGraphOrchestrator(provider=provider, max_steps=5)
+        prompt = orch.system_prompt
+
+        self.assertIn("retrieve_memo", prompt,
+                       "System prompt must still list retrieve_memo")
+
+    def test_system_prompt_memoization_automatic(self) -> None:
+        """Memoization policy must mention automatic memoization."""
+        from agentic_workflows.orchestration.langgraph.graph import LangGraphOrchestrator
+        from tests.conftest import ScriptedProvider
+
+        provider = ScriptedProvider(responses=[{"action": "finish", "answer": "done"}])
+        orch = LangGraphOrchestrator(provider=provider, max_steps=5)
+        prompt = orch.system_prompt
+
+        self.assertIn("automatic", prompt.lower(),
+                       "System prompt must mention automatic memoization")
+
+
 if __name__ == "__main__":
     unittest.main()
