@@ -30,6 +30,16 @@ Deterministic tool execution, argument normalization, file I/O, and result recor
 7. **Memo policy compliance**: If a memoize action is pending, execute it before any other queued action.
 8. **Idempotency awareness**: write_file and memoize are not idempotent — duplicate calls with different content must be detected and flagged.
 
+## Context Management Rules
+
+Large file handling is the primary cause of context overflow failures. Follow these rules:
+
+1. **Inspect before reading**: Call `outline_code` on any `.py` file before `read_file`. This gives you functions/classes/line numbers without filling context.
+2. **Chunk large files**: For any file over ~200 lines, use `read_file_chunk` with `limit=150`. Use `next_offset` from the result to fetch the next chunk.
+3. **Write incrementally**: When reviewing or summarizing a large file, write partial output after each chunk (`write_file` or `update_file_section`), then continue reading the next chunk.
+4. **Never use read_file on unknown files**: If you don't know the file size, call `outline_code` or `list_directory` first.
+5. **Context is windowed**: Between missions, the system evicts old message history and injects summaries automatically. You do not need to manage this — focus on chunking within a single mission.
+
 ## Usage in This Repo
 
 - Implemented primarily by:

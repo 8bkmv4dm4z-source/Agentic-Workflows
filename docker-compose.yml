@@ -31,15 +31,25 @@ services:
     build: .
     ports:
       - "8000:8000"
-    environment:
-      DATABASE_URL: postgresql://agentic:agentic@postgres:5432/agentic_workflows
-      P1_PROVIDER: ${P1_PROVIDER:-openai}
-    depends_on:
-      postgres:
-        condition: service_healthy
+    volumes:
+      - ./:/app/project
+      - ./src:/app/src
+      - ./workspace:/app/workspace
     env_file:
       - path: .env
         required: false
+    environment:
+      DATABASE_URL: postgresql://agentic:agentic@postgres:5432/agentic_workflows
+      LLAMA_CPP_BASE_URL: http://host.docker.internal:8080/v1
+      # Agent writes go to the mounted host directory
+      AGENT_WORKDIR: /app/workspace
+      # Readable root covers both workspace and source code
+      AGENT_ROOT: /app/project
+    depends_on:
+      postgres:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
 volumes:
   pgdata:

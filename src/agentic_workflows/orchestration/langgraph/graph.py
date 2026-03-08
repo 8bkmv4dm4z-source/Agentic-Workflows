@@ -195,69 +195,97 @@ class LangGraphOrchestrator:
         self.system_prompt = self._build_system_prompt()
         self._compiled = self._compile_graph()
 
+    @staticmethod
+    def _build_codebase_context(cwd: str) -> str:
+        """Return a compact codebase summary injected into the system prompt."""
+        from pathlib import Path  # noqa: PLC0415
+
+        root = Path(cwd)
+        lines: list[str] = []
+
+        # Architecture section only from AGENTS.md — skip commands/style/git noise
+        for candidate in ("AGENTS.md", "README.md"):
+            doc = root / candidate
+            if doc.exists():
+                try:
+                    text = doc.read_text(encoding="utf-8")
+                    # Extract only lines between ## 2. Architecture and the next ## section
+                    arch_lines: list[str] = []
+                    in_arch = False
+                    for l in text.splitlines():
+                        if l.startswith("## 2.") or (not in_arch and "Architecture" in l and l.startswith("#")):
+                            in_arch = True
+                        elif in_arch and l.startswith("## "):
+                            break
+                        if in_arch and l.strip():
+                            arch_lines.append(l.rstrip())
+                    if arch_lines:
+                        lines.extend(arch_lines[:12])
+                    break
+                except OSError:
+                    pass
+
+        # Key source dirs only (skip build/doc/config noise)
+        src = root / "src"
+        if src.is_dir():
+            try:
+                pkgs = sorted(p.name for p in src.iterdir() if p.is_dir() and not p.name.startswith("_"))[:5]
+                if pkgs:
+                    lines.append("src/: " + ", ".join(pkgs))
+            except OSError:
+                pass
+
+        return "\n".join(lines)
+
     def _build_system_prompt(self) -> str:
         """Construct strict planner prompt and tool/memo policy contract."""
         tool_list = ", ".join(self.tools.keys())
-        cwd = os.getcwd()
+        # AGENT_ROOT = readable project root (source/docs); AGENT_WORKDIR = writable output dir
+        readable_root = os.environ.get("AGENT_ROOT") or os.environ.get("AGENT_WORKDIR") or os.getcwd()
+        writable_root = os.environ.get("AGENT_WORKDIR") or os.getcwd()
+        codebase_ctx = self._build_codebase_context(readable_root)
+        workspace_line = (
+            f"Project root (read): {readable_root}\nWrite workspace: {writable_root}\n"
+            if readable_root != writable_root
+            else f"Working directory: {readable_root}\n"
+        )
         return (
             "You are a deterministic tool-using agent.\n"
-            f"Working directory: {cwd}\n"
-            "When a user refers to a file by partial name, FIRST call search_files to locate "
-            "the full path before using run_bash or read_file.\n"
-            "Return exactly one JSON object per response.\n"
-            "Never output XML tags (for example <invoke>), markdown, or prose outside JSON.\n"
-            f"Allowed tool_name values: {tool_list}\n\n"
-            "Schema:\n"
-            '{"action":"tool","tool_name":"<tool>","args":{...}}\n'
+            + workspace_line
+            + (f"Codebase context:\n{codebase_ctx}\n\n" if codebase_ctx else "")
+            + "Return exactly one JSON object per response. No XML, markdown, or prose outside JSON.\n"
+            f"Available tools: {tool_list}\n\n"
+            "Response schema:\n"
+            '{"action":"tool","tool_name":"<name>","args":{...}}\n'
             '{"action":"finish","answer":"<summary>"}\n'
-            '{"action":"clarify","question":"<question for user>"}\n\n'
-            "CORRECT examples:\n"
-            '  {"action":"tool","tool_name":"sort_array","args":{"items":[3,1,2],"order":"asc"}}\n'
-            '  {"action":"finish","answer":"Done. Sorted array written to output.txt"}\n'
-            "INCORRECT (never do this):\n"
-            "  <invoke>sort_array</invoke>\n"
-            '  Here is the JSON: {"action": ...}\n'
-            "  ```json\n"
-            '  {"action": ...}\n'
-            "  ```\n\n"
-            "You may reason inside <thinking>...</thinking> before your JSON. "
-            "Only the JSON object outside <thinking> is processed.\n\n"
-            "If the user's request does not require any tool, respond with finish or clarify.\n\n"
-            "Tool arg reference (use exact names):\n"
-            '- repeat_message: {"message":"<string>"}\n'
-            '- sort_array: {"items":[...], "order":"asc|desc"}\n'
-            '- string_ops: {"text":"<string>", "operation":"uppercase|lowercase|reverse|length|trim|replace|split|count_words|startswith|endswith|contains"}\n'
-            '- math_stats: {"operation":"...", "a":<number>, "b":<number>} or {"operation":"...", "numbers":[...]}\n'
-            '- write_file: {"path":"<filepath>", "content":"<string>"}\n'
-            '- retrieve_memo: {"key":"<key>", "run_id":"<run_id>", "namespace":"run(optional)"}\n'
-            '- task_list_parser: {"text":"<string>"}\n'
-            '- text_analysis: {"text":"<string>", "operation":"word_count|sentence_count|char_count|key_terms|complexity_score|paragraph_count|avg_word_length|unique_words|full_report"}\n'
-            '- data_analysis: {"numbers":[...], "operation":"summary_stats|outliers|percentiles|distribution|correlation|normalize|z_scores"}\n'
-            '- json_parser: {"text":"<json_string>", "operation":"parse|validate|extract_keys|flatten|get_path|pretty_print|count_elements"}\n'
-            '- regex_matcher: {"text":"<string>", "pattern":"<regex>", "operation":"find_all|find_first|split|replace|match|count_matches|extract_groups"}\n'
-            '- read_file: {"path":"<filepath>", "start_line":<int optional>, "end_line":<int optional>}\n'
-            '- parse_code_structure: {"file_path":"<filepath>", "language":"python|javascript|..."}\n'
-            '- describe_db_schema: {"path":"<sqlite_db_path>"}\n'
-            '- run_bash: {"command":"<shell command>", "timeout":<int optional, max 120>}\n'
-            '- http_request: {"url":"<url>", "method":"GET|POST|PUT|PATCH|DELETE", "headers":{...optional}, "body":{...optional}}\n'
-            '- datetime_ops: {"operation":"now|parse|format|add|subtract|diff|weekday|to_timestamp|from_timestamp", "value":"<datetime string optional>", ...}\n'
-            '- extract_table: {"text":"<csv/tsv/delimited text>", "delimiter":"<char optional>", "operation":"parse|filter|column|count|sum|sort"}\n'
-            '- fill_template: {"template":"<string with {placeholders}>", "variables":{"key":"value",...}}\n'
-            '- hash_content: {"content":"<string>", "algorithm":"sha256|md5|sha1|sha512|sha3_256"}\n'
-            '- query_db: {"operation":"insert|query|list|delete|count", "key":"<str optional>", "value":"<str optional>", "search":"<str optional>"}\n'
-            '- recognize_pattern: {"text":"<string>", "pattern_type":"email|url|date|phone|ip_address|hex_color|fibonacci_sequence|arithmetic_sequence|geometric_sequence"}\n'
-            '- clear_context: {"scope":"missions|full"}\n'
-            '- update_file_section: {"path":"<filepath>", "marker":"<## Section heading>", "content":"<new section content>"}\n'
-            f'- search_files: {{"pattern":"<glob e.g. *.py>", "path":"{cwd}(default)", "max_results":<int optional>}}\n\n'
-            "Memoization policy:\n"
-            "- Memoization is automatic — write_file results are cached without any explicit memoize call.\n"
-            '- Use "retrieve_memo" only when explicitly needed to look up prior cached values.\n'
-            "- For write_file tasks, the orchestrator auto-checks memo keys before writing.\n"
-            "- For recurring write tasks, the orchestrator may auto-reuse cached write inputs from prior runs.\n"
-            "- Do not emit extra planning subtasks; output the next concrete tool call only.\n"
-            "Always obey system feedback messages.\n"
-            'If all recent tool calls failed and you cannot recover, emit: {"action":"finish","answer":"FAILED: <reason>"}\n'
-            "Never claim success if tool results show errors."
+            '{"action":"clarify","question":"<question>"}\n\n'
+            "Tool args (each \"operation\" takes exactly ONE value, never comma-separated):\n"
+            '- text_analysis: {"text":"...", "operation":"word_count"} (one of: word_count|sentence_count|char_count|key_terms|full_report|complexity_score|paragraph_count|avg_word_length|unique_words)\n'
+            '- string_ops: {"text":"...", "operation":"uppercase"} (one of: uppercase|lowercase|reverse|length|trim|replace|split|count_words|startswith|endswith|contains)\n'
+            '- data_analysis: {"numbers":[...], "operation":"summary_stats"} (one of: summary_stats|outliers|percentiles|distribution|correlation|normalize|z_scores)\n'
+            '- math_stats: {"operation":"add", "a":1, "b":2} or {"operation":"mean", "numbers":[...]}\n'
+            '- sort_array: {"items":[...], "order":"asc"}\n'
+            '- write_file: {"path":"...", "content":"..."}\n'
+            '- read_file: {"path":"..."} — reads entire file; only use for small files\n'
+            '- read_file_chunk: {"path":"...", "offset":0, "limit":150} — read large files in 150-line chunks; use next_offset from result to continue\n'
+            '- outline_code: {"path":"..."} — show functions/classes/imports with line numbers; use before reading a large code file\n'
+            '- json_parser: {"text":"...", "operation":"parse"} (one of: parse|validate|extract_keys|flatten|get_path|pretty_print|count_elements)\n'
+            '- regex_matcher: {"text":"...", "pattern":"...", "operation":"find_all"} (one of: find_all|find_first|split|replace|match|count_matches|extract_groups)\n'
+            '- repeat_message: {"message":"..."}\n'
+            '- run_bash: {"command":"..."}\n'
+            f'- search_files: {{"pattern":"*.py", "path":"{readable_root}"}}\n'
+            "- Other tools: see tool name for usage.\n\n"
+            "Rules:\n"
+            "- One tool call per response.\n"
+            "- Memoization is automatic. Do not emit extra planning subtasks.\n"
+            "- Obey system feedback messages. If a tool returns an error, fix the args.\n"
+            '- On unrecoverable failure: {"action":"finish","answer":"FAILED: <reason>"}\n'
+            "- Never claim success if tool results show errors.\n"
+            "Context management rules (critical — violating these causes context overflow):\n"
+            "- NEVER call read_file on a code file without checking its size first. Use outline_code to inspect structure, then read_file_chunk for sections you need.\n"
+            "- For any file likely over 200 lines, always use read_file_chunk (offset=0, limit=150) and loop using next_offset until has_more is false.\n"
+            "- After reading a chunk and writing partial output, continue with the next chunk — do not stop after one chunk.\n"
+            "- Message history is windowed automatically — completed mission summaries are preserved, raw history is evicted. Focus on the current task."
         )
 
     def _invalidate_known_poisoned_cache_entries(self) -> None:

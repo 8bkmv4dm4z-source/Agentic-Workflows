@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 07.2-04-PLAN.md
-last_updated: "2026-03-08T01:30:30.105Z"
-last_activity: 2026-03-08 — Wave 3 final improvements (P1_BASH_ENABLED guard, memoize prompt removal, tool contract tests)
+stopped_at: Completed 07.2-05-PLAN.md
+last_updated: "2026-03-08T02:00:00.000Z"
+last_activity: 2026-03-08 — Docker agent root fix: AGENT_ROOT for reads, AGENT_WORKDIR for writes
 progress:
   total_phases: 9
   completed_phases: 8
@@ -63,6 +63,7 @@ Progress: [██████████] 100% (32/32 plans complete, Phase 7.2
 | Phase 07.2 P02 | 6min | 3 tasks | 6 files |
 | Phase 07.2 P03 | 5min | 2 tasks | 4 files |
 | Phase 07.2 P04 | 4min | 4 tasks | 6 files |
+| Phase 07.2 P05 | 2min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -123,6 +124,8 @@ Recent decisions affecting current work:
 - [Phase 07.2]: P1_BASH_ENABLED guard uses != 'true' pattern (ruff SIM201 compliant) at top of run_bash.execute()
 - [Phase 07.2]: Memoize tool kept in registry for internal auto-memoize use, only removed from planner prompt's tool arg reference
 - [Phase 07.2]: Tool contract test accepts KeyError/ValueError/TypeError as valid responses to empty args
+- [Phase 07.2-05]: _build_system_prompt() uses AGENT_ROOT for readable context and AGENT_WORKDIR for write workspace; shown separately in prompt when they differ
+- [Phase 07.2-05]: update_file_section.py adds AGENT_WORKDIR fallback after P1_RUN_ARTIFACT_DIR (matches write_file.py pattern)
 
 ### Roadmap Evolution
 

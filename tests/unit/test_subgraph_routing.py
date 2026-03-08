@@ -169,3 +169,46 @@ def test_executor_subgraph_invoke_not_called_during_routing() -> None:
         "_executor_subgraph.invoke should NOT be called during routing — "
         "only _execute_action should fire"
     )
+
+
+# ---------------------------------------------------------------------------
+# _build_system_prompt() — AGENT_ROOT / AGENT_WORKDIR separation (Phase 07.2-05)
+# ---------------------------------------------------------------------------
+
+
+def test_system_prompt_uses_agent_root_for_reads(monkeypatch: object) -> None:
+    """When AGENT_ROOT and AGENT_WORKDIR differ, prompt shows both separately."""
+    monkeypatch.setenv("AGENT_ROOT", "/tmp/project")
+    monkeypatch.setenv("AGENT_WORKDIR", "/tmp/workspace")
+
+    orch = _make_orch()
+    prompt = orch.system_prompt
+
+    assert "Project root (read): /tmp/project" in prompt, "readable root must appear in prompt"
+    assert "Write workspace: /tmp/workspace" in prompt, "writable workspace must appear in prompt"
+    assert '"path":"/tmp/project"' in prompt, "search_files example must use readable root"
+    assert "Working directory:" not in prompt, "single-dir label must not appear when roots differ"
+
+
+def test_system_prompt_single_dir_when_roots_equal(monkeypatch: object) -> None:
+    """When only AGENT_WORKDIR is set (no AGENT_ROOT), prompt uses single 'Working directory' line."""
+    monkeypatch.delenv("AGENT_ROOT", raising=False)
+    monkeypatch.setenv("AGENT_WORKDIR", "/tmp/same")
+
+    orch = _make_orch()
+    prompt = orch.system_prompt
+
+    assert "Working directory: /tmp/same" in prompt
+    assert "Project root (read):" not in prompt
+
+
+def test_system_prompt_search_files_uses_readable_root(monkeypatch: object) -> None:
+    """search_files example in prompt must point to readable root, not write dir."""
+    monkeypatch.setenv("AGENT_ROOT", "/app/project")
+    monkeypatch.setenv("AGENT_WORKDIR", "/app/workspace")
+
+    orch = _make_orch()
+    prompt = orch.system_prompt
+
+    assert '"/app/project"' in prompt
+    assert '"/app/workspace"' not in prompt
