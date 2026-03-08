@@ -52,12 +52,91 @@ class TestArtifactStoreRuntime:
 
     def test_artifacts_persisted_after_mission_complete(self, pg_pool, clean_pg):
         """SC-1 primary: write_file artifact is persisted to mission_artifacts after mission complete."""
-        raise NotImplementedError("RED stub — implement in GREEN phase")
+        provider = MockEmbeddingProvider()
+        artifact_store = ArtifactStore(pool=pg_pool, embedding_provider=provider)
+        cm = ContextManager(embedding_provider=provider, artifact_store=artifact_store)
+
+        run_id = "test-run-artifact-01"
+        state = _make_state(run_id, mission_id=1, goal="Write output to file")
+
+        # Simulate tool execution: write_file produces a file_path artifact
+        cm.on_tool_result(
+            state,
+            "write_file",
+            result={"result": "Successfully wrote 10 characters to /tmp/out.txt"},
+            args={"path": "/tmp/out.txt"},
+            mission_id=1,
+        )
+        cm.on_mission_complete(state, mission_id=1)
+
+        # Query mission_artifacts directly
+        with pg_pool.connection() as conn:
+            rows = conn.execute(
+                "SELECT key, value, source_tool FROM mission_artifacts WHERE run_id = %s",
+                (run_id,),
+            ).fetchall()
+
+        assert len(rows) >= 1
+        keys = [r[0] for r in rows]
+        tools = [r[2] for r in rows]
+        assert "file_path" in keys
+        assert "write_file" in tools
 
     def test_no_artifacts_when_pool_none(self, pg_pool, clean_pg):
         """SC-1 extended: ArtifactStore(pool=None) is a no-op — no rows inserted."""
-        raise NotImplementedError("RED stub — implement in GREEN phase")
+        provider = MockEmbeddingProvider()
+        artifact_store_no_pool = ArtifactStore(pool=None)
+        cm = ContextManager(artifact_store=artifact_store_no_pool)
+
+        run_id = "test-run-no-pool-01"
+        state = _make_state(run_id, mission_id=1, goal="Write output to file")
+
+        # Call lifecycle methods — must not raise
+        cm.on_tool_result(
+            state,
+            "write_file",
+            result={"result": "Successfully wrote 5 characters to /tmp/x.txt"},
+            args={"path": "/tmp/x.txt"},
+            mission_id=1,
+        )
+        cm.on_mission_complete(state, mission_id=1)
+
+        # No rows should exist in mission_artifacts for this run_id
+        with pg_pool.connection() as conn:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM mission_artifacts WHERE run_id = %s",
+                (run_id,),
+            ).fetchone()[0]
+
+        assert count == 0
 
     def test_multiple_artifacts_from_data_analysis(self, pg_pool, clean_pg):
         """SC-1 multi: data_analysis produces mean + outliers — both rows in mission_artifacts."""
-        raise NotImplementedError("RED stub — implement in GREEN phase")
+        provider = MockEmbeddingProvider()
+        artifact_store = ArtifactStore(pool=pg_pool, embedding_provider=provider)
+        cm = ContextManager(embedding_provider=provider, artifact_store=artifact_store)
+
+        run_id = "test-run-data-analysis-01"
+        state = _make_state(run_id, mission_id=1, goal="Analyze dataset for outliers")
+
+        # Simulate data_analysis tool result — produces mean + outliers artifacts
+        cm.on_tool_result(
+            state,
+            "data_analysis",
+            result={"mean": 5.0, "outliers": [10], "non_outliers": [1, 2, 3, 4, 5]},
+            args={},
+            mission_id=1,
+        )
+        cm.on_mission_complete(state, mission_id=1)
+
+        # Both mean and outliers should be persisted
+        with pg_pool.connection() as conn:
+            rows = conn.execute(
+                "SELECT key FROM mission_artifacts WHERE run_id = %s",
+                (run_id,),
+            ).fetchall()
+
+        keys = [r[0] for r in rows]
+        assert len(rows) >= 2
+        assert "mean" in keys
+        assert "outliers" in keys
