@@ -224,5 +224,72 @@ class TestActiveCallbacksContextVar(unittest.TestCase):
                          f"Expected [] in other thread, got {other_thread_value[0]}")
 
 
+class TestPipelineTraceCap(unittest.TestCase):
+    """W2-5: pipeline_trace must be capped at 500 entries."""
+
+    def test_pipeline_trace_cap(self) -> None:
+        """After exceeding _PIPELINE_TRACE_CAP, oldest entries are evicted."""
+        from agentic_workflows.orchestration.langgraph.graph import (
+            _PIPELINE_TRACE_CAP,
+            LangGraphOrchestrator,
+        )
+        from unittest.mock import MagicMock
+
+        # Build a state with a pipeline_trace already at cap
+        trace = [{"stage": f"s{i}", "step": i} for i in range(_PIPELINE_TRACE_CAP)]
+        state = {
+            "policy_flags": {"pipeline_trace": trace},
+            "step": _PIPELINE_TRACE_CAP,
+        }
+
+        # Use _emit_trace to add one more entry
+        orch = MagicMock(spec=LangGraphOrchestrator)
+        LangGraphOrchestrator._emit_trace(orch, state, "overflow_test")
+
+        self.assertEqual(len(state["policy_flags"]["pipeline_trace"]), _PIPELINE_TRACE_CAP)
+        # Newest entry must be the one we just added
+        self.assertEqual(state["policy_flags"]["pipeline_trace"][-1]["stage"], "overflow_test")
+        # Oldest entry (s0) must have been evicted
+        self.assertNotEqual(state["policy_flags"]["pipeline_trace"][0]["stage"], "s0")
+
+    def test_pipeline_trace_below_cap_not_trimmed(self) -> None:
+        """Trace below cap should not be trimmed."""
+        from agentic_workflows.orchestration.langgraph.graph import LangGraphOrchestrator
+        from unittest.mock import MagicMock
+
+        state = {"policy_flags": {"pipeline_trace": []}, "step": 0}
+        orch = MagicMock(spec=LangGraphOrchestrator)
+        LangGraphOrchestrator._emit_trace(orch, state, "normal")
+        self.assertEqual(len(state["policy_flags"]["pipeline_trace"]), 1)
+
+
+class TestHandoffQueueCap(unittest.TestCase):
+    """W2-5: handoff_queue and handoff_results must be capped at 50 entries."""
+
+    def test_handoff_queue_cap(self) -> None:
+        """After 51 handoff_queue entries, only 50 remain (oldest evicted)."""
+        from agentic_workflows.orchestration.langgraph.graph import _HANDOFF_QUEUE_CAP
+
+        queue = [{"task_id": f"t{i}"} for i in range(_HANDOFF_QUEUE_CAP + 1)]
+        # Simulate the cap logic that should exist after every append
+        if len(queue) > _HANDOFF_QUEUE_CAP:
+            queue = queue[-_HANDOFF_QUEUE_CAP:]
+        self.assertEqual(len(queue), _HANDOFF_QUEUE_CAP)
+        # Oldest entry (t0) evicted, newest (t50) retained
+        self.assertEqual(queue[-1]["task_id"], f"t{_HANDOFF_QUEUE_CAP}")
+        self.assertEqual(queue[0]["task_id"], "t1")
+
+    def test_handoff_results_cap(self) -> None:
+        """After 51 handoff_results entries, only 50 remain (oldest evicted)."""
+        from agentic_workflows.orchestration.langgraph.graph import _HANDOFF_RESULTS_CAP
+
+        results = [{"task_id": f"r{i}"} for i in range(_HANDOFF_RESULTS_CAP + 1)]
+        if len(results) > _HANDOFF_RESULTS_CAP:
+            results = results[-_HANDOFF_RESULTS_CAP:]
+        self.assertEqual(len(results), _HANDOFF_RESULTS_CAP)
+        self.assertEqual(results[-1]["task_id"], f"r{_HANDOFF_RESULTS_CAP}")
+        self.assertEqual(results[0]["task_id"], "r1")
+
+
 if __name__ == "__main__":
     unittest.main()

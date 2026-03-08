@@ -87,6 +87,11 @@ _ANNOTATED_LIST_FIELDS: frozenset[str] = frozenset(
     {"tool_history", "memo_events", "mission_reports"}
 )
 
+# W2-5: Caps for unbounded list growth.
+_PIPELINE_TRACE_CAP: int = 500
+_HANDOFF_QUEUE_CAP: int = 50
+_HANDOFF_RESULTS_CAP: int = 50
+
 # W1-2: Per-run callback isolation via ContextVar.
 # Each run()/streaming call sets its own callback list; concurrent runs in
 # different threads each see their own value (ContextVar provides this
@@ -481,6 +486,8 @@ class LangGraphOrchestrator:
         trace = policy_flags.setdefault("pipeline_trace", [])
         if isinstance(trace, list):
             trace.append({"stage": stage, "step": state.get("step", 0), **fields})
+            if len(trace) > _PIPELINE_TRACE_CAP:
+                del trace[: len(trace) - _PIPELINE_TRACE_CAP]
 
     def _route_after_plan(self, state: RunState) -> str:
         """Route graph transitions based on the planner's pending action."""
@@ -1427,6 +1434,8 @@ class LangGraphOrchestrator:
                 token_budget=int(state.get("token_budget_remaining", 0)),
             )
         )
+        if len(state["handoff_queue"]) > _HANDOFF_QUEUE_CAP:
+            state["handoff_queue"] = state["handoff_queue"][-_HANDOFF_QUEUE_CAP:]
 
         if specialist in ("executor", "evaluator"):
             # W1-1 fix: Removed dual-execution bug. Previously, both
@@ -1465,6 +1474,8 @@ class LangGraphOrchestrator:
                 tokens_used=0,
             )
         )
+        if len(state["handoff_results"]) > _HANDOFF_RESULTS_CAP:
+            state["handoff_results"] = state["handoff_results"][-_HANDOFF_RESULTS_CAP:]
         self.logger.info(
             "SPECIALIST OUTPUT step=%s run_id=%s task_id=%s specialist=%s status=%s via_subgraph=True",
             state["step"],
