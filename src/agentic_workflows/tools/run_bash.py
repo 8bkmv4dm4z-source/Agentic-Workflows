@@ -33,7 +33,7 @@ class RunBashTool(Tool):
 
     def execute(self, args: dict[str, Any]) -> dict[str, Any]:
         # Security: opt-in guard — disabled by default
-        if not os.environ.get("P1_BASH_ENABLED", "").strip().lower() == "true":
+        if os.environ.get("P1_BASH_ENABLED", "").strip().lower() != "true":
             return {"error": "run_bash is disabled; set P1_BASH_ENABLED=true to enable"}
 
         command: str = args.get("command", "")
