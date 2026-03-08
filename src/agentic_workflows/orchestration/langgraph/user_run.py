@@ -64,9 +64,45 @@ class UserSession:
     _last_run_failures: list[str] = field(default_factory=list, init=False)
 
     def __post_init__(self) -> None:
+        db_url = os.getenv("DATABASE_URL")
+        embedding_provider = None
+        mission_context_store = None
+        artifact_store: Any = None
+        self._pg_pool: Any = None
+
+        if db_url:
+            try:
+                from psycopg_pool import (
+                    ConnectionPool as PgConnectionPool,  # type: ignore[import-untyped]
+                )
+
+                from agentic_workflows.context.embedding_provider import get_embedding_provider
+                from agentic_workflows.storage.mission_context_store import MissionContextStore
+
+                self._pg_pool = PgConnectionPool(
+                    conninfo=db_url,
+                    min_size=2,
+                    max_size=10,
+                    open=False,
+                    kwargs={"autocommit": True, "prepare_threshold": 0},
+                )
+                self._pg_pool.open(wait=True)
+                embedding_provider = get_embedding_provider()
+                mission_context_store = MissionContextStore(
+                    pool=self._pg_pool, embedding_provider=embedding_provider
+                )
+                from agentic_workflows.storage.artifact_store import ArtifactStore
+                artifact_store = ArtifactStore(pool=self._pg_pool, embedding_provider=embedding_provider)
+            except Exception as exc:  # noqa: BLE001
+                _LOG.warning("Could not connect to Postgres — running without vector memory: %s", exc)
+                self._pg_pool = None
+
         self._orchestrator = LangGraphOrchestrator(
             max_steps=self.max_steps,
             on_specialist_route=self._on_route,
+            embedding_provider=embedding_provider,
+            mission_context_store=mission_context_store,
+            artifact_store=artifact_store,
         )
 
     def _on_route(self, *, specialist: str, tool: str, mission_id: int) -> None:
