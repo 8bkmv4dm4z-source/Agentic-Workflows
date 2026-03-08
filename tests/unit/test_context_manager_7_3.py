@@ -115,7 +115,7 @@ class TestCrossRunInjection:
             _make_result("Sort numbers ascending", "Sorted 100 numbers using sort_array"),
         ]
         cm = ContextManager(mission_context_store=mock_store)
-        state: dict = {"missions": ["Sort the array"], "mission_contexts": {}, "messages": []}
+        state: dict = {"missions": ["Sort the array"], "mission_contexts": {}, "messages": [], "step": 1}
         result = cm.build_planner_context_injection(state)
         assert "[Cross-run] Similar:" in result
 
@@ -127,13 +127,13 @@ class TestCrossRunInjection:
             _make_result(f"goal {i}", long_summary) for i in range(3)
         ]
         cm = ContextManager(mission_context_store=mock_store)
-        state: dict = {"missions": ["test mission"], "mission_contexts": {}, "messages": []}
+        state: dict = {"missions": ["test mission"], "mission_contexts": {}, "messages": [], "step": 1}
         result = cm.build_planner_context_injection(state)
         assert len(result) <= 1500
 
     def test_no_cross_run_when_store_none(self):
         cm = ContextManager(mission_context_store=None)
-        state: dict = {"missions": ["test"], "mission_contexts": {}, "messages": []}
+        state: dict = {"missions": ["test"], "mission_contexts": {}, "messages": [], "step": 1}
         result = cm.build_planner_context_injection(state)
         assert "[Cross-run] Similar:" not in result
 
@@ -141,7 +141,7 @@ class TestCrossRunInjection:
         mock_store = MagicMock()
         mock_store.query_cascade.side_effect = RuntimeError("connection refused")
         cm = ContextManager(mission_context_store=mock_store)
-        state: dict = {"missions": ["test"], "mission_contexts": {}, "messages": []}
+        state: dict = {"missions": ["test"], "mission_contexts": {}, "messages": [], "step": 1}
         # Must not raise
         result = cm.build_planner_context_injection(state)
         assert isinstance(result, str)
@@ -156,6 +156,7 @@ class TestGoalCache:
             "mission_contexts": {},
             "messages": [],
             "run_id": run_id,
+            "step": 1,  # step > 0 so cascade guard allows injection
         }
 
     def test_embed_sync_called_once_for_repeated_goal(self):
@@ -193,8 +194,8 @@ class TestGoalCache:
         mock_store.query_cascade.return_value = []
 
         cm = ContextManager(mission_context_store=mock_store)
-        # State with no missions → goal_text = ""
-        state: dict = {"missions": [], "mission_contexts": {}, "messages": [], "run_id": "run-1"}
+        # State with no missions → goal_text = "", step=1 so only empty-goal guard fires
+        state: dict = {"missions": [], "mission_contexts": {}, "messages": [], "run_id": "run-1", "step": 1}
 
         cm.build_planner_context_injection(state)
 
@@ -231,3 +232,59 @@ class TestGoalCache:
 
         # Different goals → different cache entries
         assert mock_provider.embed_sync.call_count == 2
+
+    def test_step_zero_suppresses_cross_run_injection(self):
+        """Bug 4 regression: cascade query must NOT fire on step=0."""
+        mock_store = MagicMock()
+        mock_store.query_cascade.return_value = []
+
+        cm = ContextManager(mission_context_store=mock_store)
+        state = self._make_state("Sort numbers and write to file", run_id="run-1")
+        state["step"] = 0
+
+        cm.build_planner_context_injection(state)
+
+        mock_store.query_cascade.assert_not_called()
+
+    def test_step_nonzero_allows_cross_run_injection(self):
+        """Cascade query fires when step > 0."""
+        mock_store = MagicMock()
+        mock_store.query_cascade.return_value = []
+
+        cm = ContextManager(mission_context_store=mock_store)
+        state = self._make_state("Sort numbers and write to file", run_id="run-1")
+        state["step"] = 1
+
+        cm.build_planner_context_injection(state)
+
+        mock_store.query_cascade.assert_called_once()
+
+    def test_active_mission_goal_used_for_multi_task_state(self):
+        """Bug 3 regression: _get_current_goal_text must use current_mission_id, not missions[0]."""
+        mock_store = MagicMock()
+        mock_store.query_cascade.return_value = []
+        mock_provider = MagicMock()
+        mock_provider.embed_sync.return_value = [0.1] * 384
+
+        cm = ContextManager(mission_context_store=mock_store, embedding_provider=mock_provider)
+
+        state: dict = {
+            "missions": ["Task 1: sort numbers", "Task 2: analyze data", "Task 3: write report"],
+            "mission_contexts": {
+                "1": {"mission_id": 1, "goal": "sort numbers", "status": "completed", "summary": "done", "artifacts": [], "tools_used": [], "key_results": {}, "step_range": [0, 2]},
+                "2": {"mission_id": 2, "goal": "analyze data", "status": "active", "summary": "", "artifacts": [], "tools_used": [], "key_results": {}, "step_range": None},
+                "3": {"mission_id": 3, "goal": "write report", "status": "pending", "summary": "", "artifacts": [], "tools_used": [], "key_results": {}, "step_range": None},
+            },
+            "messages": [],
+            "run_id": "run-multi",
+            "current_mission_id": 2,
+            "step": 1,
+        }
+
+        cm.build_planner_context_injection(state)
+
+        # The cascade query must be called with "analyze data" (mission 2), not "sort numbers" (mission 1)
+        call_args = mock_store.query_cascade.call_args
+        assert call_args is not None
+        goal_used = call_args[0][0] if call_args[0] else call_args[1].get("goal_text", "")
+        assert goal_used == "analyze data", f"Expected 'analyze data', got '{goal_used}'"

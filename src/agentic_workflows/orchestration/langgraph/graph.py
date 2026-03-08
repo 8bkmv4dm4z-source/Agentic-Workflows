@@ -296,7 +296,10 @@ class LangGraphOrchestrator:
             "- NEVER call read_file on a code file without checking its size first. Use outline_code to inspect structure, then read_file_chunk for sections you need.\n"
             "- For any file likely over 200 lines, always use read_file_chunk (offset=0, limit=150) and loop using next_offset until has_more is false.\n"
             "- After reading a chunk and writing partial output, continue with the next chunk — do not stop after one chunk.\n"
-            "- Message history is windowed automatically — completed mission summaries are preserved, raw history is evicted. Focus on the current task."
+            "- Message history is windowed automatically — completed mission summaries are preserved, raw history is evicted. Focus on the current task.\n"
+            "Context injections prefixed [Cross-run] show HISTORICAL similar missions from past runs.\n"
+            "They are reference examples only — they do NOT mean your current tasks are done.\n"
+            "Always execute tools to complete every task in your current mission list."
         )
 
     def _invalidate_known_poisoned_cache_entries(self) -> None:
@@ -984,10 +987,12 @@ class LangGraphOrchestrator:
                 state["retry_counts"]["provider_timeout"] = 0
             if action.get("action") == "finish" and not self._all_missions_completed(state):
                 _rpts = state.get("mission_reports", [])
+                _input_is_substantive = len(state.get("user_input", "")) > 30
                 _conversational = (
                     len(_rpts) == 1
                     and not _rpts[0].get("required_tools")
                     and not _rpts[0].get("required_files")
+                    and not _input_is_substantive
                 )
                 if not _conversational:
                     return self._reject_finish_and_recover(

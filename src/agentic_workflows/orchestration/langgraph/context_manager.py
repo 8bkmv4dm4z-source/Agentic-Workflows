@@ -288,11 +288,18 @@ class ContextManager:
             self._logger.warning("_persist_mission_context failed (non-fatal): %s", exc)
 
     def _get_current_goal_text(self, state: dict[str, Any]) -> str:
-        """Extract goal text from the first pending or active mission in state."""
+        """Extract goal text from the active mission in state."""
+        active_id = str(state.get("current_mission_id", 1))
+        mission_contexts = state.get("mission_contexts") or {}
+        ctx = mission_contexts.get(active_id)
+        if isinstance(ctx, dict):
+            goal = ctx.get("goal", "")
+            if goal:
+                return str(goal)
+        # fallback: first mission
         missions = state.get("missions") or []
         if missions:
             return str(missions[0]) if isinstance(missions[0], str) else str(missions[0].get("goal", ""))
-        mission_contexts = state.get("mission_contexts") or {}
         for ctx in mission_contexts.values():
             if isinstance(ctx, dict):
                 goal = ctx.get("goal", "")
@@ -554,7 +561,8 @@ class ContextManager:
         # Phase 7.3: append cross-run similar missions from cascade store
         _CONTEXT_CAP = 1500  # total chars across all injected content
         cross_run_lines: list[str] = []
-        if self._store is not None:
+        current_step = state.get("step", 0)
+        if self._store is not None and current_step > 0:
             try:
                 goal_text = self._get_current_goal_text(state)
 
