@@ -291,5 +291,73 @@ class TestHandoffQueueCap(unittest.TestCase):
         self.assertEqual(results[0]["task_id"], "r1")
 
 
+class TestPrepareStateMethod(unittest.TestCase):
+    """W3-7: LangGraphOrchestrator must expose prepare_state() as single source of truth."""
+
+    def test_prepare_state_method_exists(self) -> None:
+        """prepare_state must be a callable method on LangGraphOrchestrator."""
+        from agentic_workflows.orchestration.langgraph.graph import LangGraphOrchestrator
+        self.assertTrue(
+            hasattr(LangGraphOrchestrator, "prepare_state"),
+            "LangGraphOrchestrator must have a prepare_state method",
+        )
+        self.assertTrue(
+            callable(getattr(LangGraphOrchestrator, "prepare_state")),
+            "prepare_state must be callable",
+        )
+
+    def test_prepare_state_returns_run_state(self) -> None:
+        """prepare_state() must return a dict with required RunState keys."""
+        from agentic_workflows.orchestration.langgraph.graph import LangGraphOrchestrator
+        from tests.conftest import ScriptedProvider
+
+        provider = ScriptedProvider(responses=[{"action": "finish", "answer": "done"}])
+        orch = LangGraphOrchestrator(provider=provider, max_steps=5)
+        state = orch.prepare_state("test mission")
+
+        # Must have core RunState keys
+        self.assertIn("run_id", state)
+        self.assertIn("missions", state)
+        self.assertIn("messages", state)
+        self.assertIn("seen_tool_signatures", state)
+        self.assertIn("structured_plan", state)
+        self.assertIn("mission_contracts", state)
+        self.assertIn("mission_reports", state)
+        self.assertIn("rerun_context", state)
+        self.assertIn("active_mission_index", state)
+        self.assertIn("active_mission_id", state)
+
+    def test_prepare_state_accepts_run_id(self) -> None:
+        """prepare_state() must accept and use a custom run_id."""
+        from agentic_workflows.orchestration.langgraph.graph import LangGraphOrchestrator
+        from tests.conftest import ScriptedProvider
+
+        provider = ScriptedProvider(responses=[{"action": "finish", "answer": "done"}])
+        orch = LangGraphOrchestrator(provider=provider, max_steps=5)
+        state = orch.prepare_state("test mission", run_id="custom-123")
+        self.assertEqual(state["run_id"], "custom-123")
+
+    def test_prepare_state_merges_prior_context(self) -> None:
+        """prepare_state() must merge prior_context system messages into system prompt."""
+        from agentic_workflows.orchestration.langgraph.graph import LangGraphOrchestrator
+        from tests.conftest import ScriptedProvider
+
+        provider = ScriptedProvider(responses=[{"action": "finish", "answer": "done"}])
+        orch = LangGraphOrchestrator(provider=provider, max_steps=5)
+        prior = [
+            {"role": "system", "content": "EXTRA SYSTEM INFO"},
+            {"role": "user", "content": "previous question"},
+        ]
+        state = orch.prepare_state("test mission", prior_context=prior)
+
+        # System message should contain the extra system info
+        system_msg = next(m for m in state["messages"] if m.get("role") == "system")
+        self.assertIn("EXTRA SYSTEM INFO", system_msg["content"])
+
+        # Prior user message should be in messages
+        user_contents = [m["content"] for m in state["messages"] if m.get("role") == "user"]
+        self.assertTrue(any("previous question" in c for c in user_contents))
+
+
 if __name__ == "__main__":
     unittest.main()
