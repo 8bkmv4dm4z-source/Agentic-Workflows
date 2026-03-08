@@ -10,10 +10,12 @@ run/mission reports using only local state for final snapshots.
 import contextlib
 import contextvars
 import json
+import operator
 import os
 import queue
 import re
 import threading
+import typing
 from pathlib import Path
 from typing import Any
 
@@ -83,9 +85,25 @@ class MemoizationPolicyViolation(RuntimeError):
 # dict; the reducer would double each list on every step unless we zero out the
 # delta in the returned dict. Wrap every graph node with _sequential_node() to
 # apply this correction automatically.
-_ANNOTATED_LIST_FIELDS: frozenset[str] = frozenset(
-    {"tool_history", "memo_events", "mission_reports"}
-)
+#
+# W3-6: Auto-derived from RunState annotations at import time so that adding
+# or removing an Annotated[list, operator.add] field is automatically reflected
+# here — no manual maintenance required.
+
+
+def _derive_annotated_list_fields() -> frozenset[str]:
+    """Introspect RunState type hints and return fields with Annotated[list, operator.add]."""
+    hints = typing.get_type_hints(RunState, include_extras=True)
+    result: set[str] = set()
+    for name, hint in hints.items():
+        if typing.get_origin(hint) is typing.Annotated:
+            args = typing.get_args(hint)
+            if len(args) >= 2 and args[1] is operator.add:
+                result.add(name)
+    return frozenset(result)
+
+
+_ANNOTATED_LIST_FIELDS: frozenset[str] = _derive_annotated_list_fields()
 
 # W2-5: Caps for unbounded list growth.
 _PIPELINE_TRACE_CAP: int = 500
