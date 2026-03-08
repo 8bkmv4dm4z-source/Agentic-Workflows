@@ -139,3 +139,28 @@ def test_annotated_list_fields_synchronized():
     assert reducer_fields == _ANNOTATED_LIST_FIELDS, (
         f"Mismatch: RunState has {reducer_fields}, _ANNOTATED_LIST_FIELDS has {_ANNOTATED_LIST_FIELDS}"
     )
+
+
+# ---------------------------------------------------------------------------
+# SQLiteCheckpointStore persistent connection tests (W2-3)
+# ---------------------------------------------------------------------------
+
+
+def test_checkpoint_store_uses_persistent_connection(tmp_path):
+    """SQLiteCheckpointStore must have a persistent _conn and _lock (not per-call _connect)."""
+    from agentic_workflows.orchestration.langgraph.checkpoint_store import SQLiteCheckpointStore
+
+    db_file = str(tmp_path / "test_wal.db")
+    store = SQLiteCheckpointStore(db_file)
+
+    assert hasattr(store, "_conn"), "Store must have a persistent _conn attribute"
+    assert hasattr(store, "_lock"), "Store must have a threading._lock attribute"
+
+    # Two saves must succeed without error (proves persistent connection works)
+    store.save(run_id="r1", step=0, node_name="init", state={"test": True})
+    store.save(run_id="r1", step=1, node_name="plan", state={"test": True, "step": 1})
+
+    # Verify both checkpoints were saved
+    checkpoints = store.list_checkpoints("r1")
+    assert len(checkpoints) == 2
+    store.close()
