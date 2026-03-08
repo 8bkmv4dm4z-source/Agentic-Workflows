@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 from agentic_workflows.orchestration.langgraph.context_manager import (
     ArtifactRecord,
     ContextManager,
@@ -10,6 +12,7 @@ from agentic_workflows.orchestration.langgraph.context_manager import (
     extract_artifacts,
     extract_summary_from_result,
 )
+from agentic_workflows.storage.mission_context_store import MissionContextResult
 
 # ── Model tests ──────────────────────────────────────────────────────
 
@@ -682,3 +685,117 @@ class TestBuildPlannerContextInjection:
         state = _make_state(mission_contexts={"1": ctx.model_dump()})
         result = cm.build_planner_context_injection(state)
         assert result == ""
+
+
+# ── Cross-run dedup tests (Phase 7.4) ────────────────────────────────
+
+
+def _make_hit(goal: str = "Sort numbers", summary: str = "Sorted 100 numbers") -> MissionContextResult:
+    """Build a MissionContextResult with source_layer to avoid attribution bug."""
+    return MissionContextResult(
+        id=1,
+        run_id="prev-run",
+        mission_id="m-1",
+        goal=goal,
+        summary=summary,
+        tools_used=["sort_array"],
+        score=0.9,
+        source_layer="L0",
+    )
+
+
+class TestCrossRunDedup:
+    """_injected_cross_run_keys instance set prevents duplicate [Cross-run] injections."""
+
+    def _make_state(self, goal: str = "Sort array", run_id: str = "run-abc") -> dict:
+        return {
+            "missions": [goal],
+            "mission_contexts": {},
+            "messages": [],
+            "run_id": run_id,
+            "step": 1,
+        }
+
+    def test_first_call_returns_cross_run_content(self):
+        """First call with a cache_key that has hits returns [Cross-run] text."""
+        mock_store = MagicMock()
+        mock_store.query_cascade.return_value = [_make_hit()]
+        cm = ContextManager(mission_context_store=mock_store)
+        state = self._make_state()
+
+        result = cm.build_planner_context_injection(state)
+
+        assert "[Cross-run] Similar:" in result
+
+    def test_second_call_suppresses_cross_run_content(self):
+        """Second call with the same cache_key must NOT contain [Cross-run] Similar:."""
+        mock_store = MagicMock()
+        mock_store.query_cascade.return_value = [_make_hit()]
+        cm = ContextManager(mission_context_store=mock_store)
+        state = self._make_state()
+
+        cm.build_planner_context_injection(state)  # first call — seeds the dedup set
+        result2 = cm.build_planner_context_injection(state)  # second call — must suppress
+
+        assert "[Cross-run] Similar:" not in result2
+
+    def test_five_calls_inject_cross_run_only_once(self):
+        """Calling build_planner_context_injection 5 times: only first contains [Cross-run]."""
+        mock_store = MagicMock()
+        mock_store.query_cascade.return_value = [_make_hit()]
+        cm = ContextManager(mission_context_store=mock_store)
+        state = self._make_state()
+
+        results = [cm.build_planner_context_injection(state) for _ in range(5)]
+
+        cross_run_count = sum(1 for r in results if "[Cross-run] Similar:" in r)
+        assert cross_run_count == 1, f"Expected 1 injection, got {cross_run_count}"
+
+    def test_distinct_cache_keys_inject_independently(self):
+        """Different cache_keys (different run_id or goal) are deduped independently."""
+        mock_store = MagicMock()
+        mock_store.query_cascade.return_value = [_make_hit()]
+        cm = ContextManager(mission_context_store=mock_store)
+
+        state_a = self._make_state(run_id="run-abc")
+        state_b = self._make_state(run_id="run-xyz")
+
+        result_a = cm.build_planner_context_injection(state_a)
+        result_b = cm.build_planner_context_injection(state_b)
+
+        # Both distinct keys get injected on their first call
+        assert "[Cross-run] Similar:" in result_a
+        assert "[Cross-run] Similar:" in result_b
+
+    def test_instance_isolation_no_shared_state(self):
+        """Two ContextManager instances do NOT share _injected_cross_run_keys."""
+        mock_store = MagicMock()
+        mock_store.query_cascade.return_value = [_make_hit()]
+        cm1 = ContextManager(mission_context_store=mock_store)
+        cm2 = ContextManager(mission_context_store=mock_store)
+        state = self._make_state()
+
+        cm1.build_planner_context_injection(state)  # seeds cm1's dedup set
+
+        # cm2 is a separate instance; its first call should still inject
+        result_cm2 = cm2.build_planner_context_injection(state)
+        assert "[Cross-run] Similar:" in result_cm2
+
+    def test_empty_hits_does_not_mark_key_as_injected(self):
+        """When cascade returns [], the cache_key is NOT added to _injected_cross_run_keys."""
+        mock_store = MagicMock()
+        mock_store.query_cascade.return_value = []  # no hits
+        cm = ContextManager(mission_context_store=mock_store)
+        state = self._make_state()
+
+        cm.build_planner_context_injection(state)  # no hits — key must NOT be seeded
+
+        # Now make the store return hits
+        mock_store.query_cascade.return_value = [_make_hit()]
+        # Reset the cascade cache so a fresh query is triggered for the same key
+        cm._cascade_cache.clear()
+
+        result = cm.build_planner_context_injection(state)
+        assert "[Cross-run] Similar:" in result, (
+            "Expected injection after empty-hit call, but key was incorrectly marked as injected"
+        )
