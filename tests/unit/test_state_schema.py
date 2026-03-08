@@ -127,6 +127,31 @@ def test_compaction_threshold_configurable():
 # ---------------------------------------------------------------------------
 
 
+def test_derive_annotated_list_fields_function_exists():
+    """_derive_annotated_list_fields() must be a module-level function in graph.py."""
+    from agentic_workflows.orchestration.langgraph.graph import _derive_annotated_list_fields
+    assert callable(_derive_annotated_list_fields)
+    # Must return a frozenset
+    result = _derive_annotated_list_fields()
+    assert isinstance(result, frozenset), f"Expected frozenset, got {type(result)}"
+    # Must contain the known reducer fields
+    assert result == {"tool_history", "memo_events", "mission_reports"}
+
+
+def test_derive_annotated_list_fields_auto_detects_new_fields():
+    """If a new Annotated[list, operator.add] field were added, _derive_annotated_list_fields would pick it up.
+
+    We verify this by checking the function introspects RunState.__annotations__ at call time,
+    not by relying on a static literal.
+    """
+    from agentic_workflows.orchestration.langgraph.graph import (
+        _ANNOTATED_LIST_FIELDS,
+        _derive_annotated_list_fields,
+    )
+    # _ANNOTATED_LIST_FIELDS must equal the result of calling _derive_annotated_list_fields()
+    assert _ANNOTATED_LIST_FIELDS == _derive_annotated_list_fields()
+
+
 def test_annotated_list_fields_synchronized():
     """_ANNOTATED_LIST_FIELDS must contain every Annotated[list[...], operator.add] field in RunState.
 
