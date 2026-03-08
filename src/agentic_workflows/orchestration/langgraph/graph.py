@@ -1423,41 +1423,11 @@ class LangGraphOrchestrator:
         )
 
         if specialist in ("executor", "evaluator"):
-            # Build ExecutorState for the subgraph invocation.
-            # The subgraph invocation provides real subgraph node transitions in logs
-            # (satisfying ROADMAP Phase 4 Success Criterion 1).
-            # _execute_action() is still called for its full pre-processing pipeline
-            # (arg normalization, duplicate detection, auto-memo-lookup, content validation,
-            # mission attribution) — the approaches are complementary, not redundant.
-
-            # Get enriched context from ContextManager
-            specialist_ctx = self.context_manager.build_specialist_context(
-                state, max(0, int(mission_id or 0))
-            )
-
-            exec_state: dict[str, Any] = {
-                "task_id": task_id,
-                "specialist": "executor",
-                "mission_id": max(0, int(mission_id or 0)),
-                "tool_scope": tool_scope,
-                "input_context": {
-                    "tool_name": tool_name,
-                    "args": dict(action.get("args", {})),
-                    "step": int(state["step"]),
-                },
-                "token_budget": int(state.get("token_budget_remaining", 0)),
-                "exec_tool_history": [],
-                "exec_seen_signatures": [],
-                "result": {},
-                "tokens_used": 0,
-                "status": "success",
-                "mission_goal": specialist_ctx.get("mission_goal", ""),
-                "prior_results_summary": specialist_ctx.get("prior_results_summary", ""),
-            }
-            # Invoke the compiled subgraph — this records real subgraph node transitions.
-            self._executor_subgraph.invoke(exec_state, config={"callbacks": self._active_callbacks})
-            # Execute through _execute_action() to apply full pipeline (arg normalization,
-            # duplicate detection, auto-memo-lookup, content validation, mission attribution).
+            # W1-1 fix: Removed dual-execution bug. Previously, both
+            # _executor_subgraph.invoke() AND _execute_action() fired for each tool,
+            # causing duplicate side effects. Now only _execute_action() runs —
+            # it handles the full pipeline (arg normalization, duplicate detection,
+            # auto-memo-lookup, content validation, mission attribution).
             pre_tool_history_len = len(state.get("tool_history", []))
             state = self._execute_action(state)
             post_tool_history_len = len(state.get("tool_history", []))
