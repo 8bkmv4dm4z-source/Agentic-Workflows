@@ -19,6 +19,7 @@ Starting from a working single-agent LangGraph foundation (208 tests green, 4-no
 - [x] **Phase 6: Production Service Layer** - FastAPI HTTP service with POST /run, GET /run/{id}, and SSE streaming endpoint (completed 2026-03-04)
 - [x] **Phase 7: Production Persistence and CI** - Postgres persistence replacing SQLite, Dockerfile + docker-compose, GitHub Actions CI pipeline (completed 2026-03-06)
 - [ ] **Phase 7.1: Context Manipulation for Better Sub-Agent Multi-Task Handling** (INSERTED) - MissionContext model, event-driven eviction, specialist enrichment, provider-agnostic context management
+- [ ] **Phase 07.2: Architecture Review Implementation - Critical Bug Fixes and Systemic Hardening** (INSERTED) - Fix 2 correctness bugs, 5 critical bottlenecks, 3 structural/safety improvements
 
 ## Phase Details
 
@@ -128,6 +129,20 @@ Plans:
 - [x] 07-03-PLAN.md — Docker containerization + CI pipeline: Dockerfile, docker-compose.yml, CI with Postgres matrix, coverage enforcement (PROD-04, PROD-05)
 - [ ] 07-04-PLAN.md — Architecture walkthrough: WALKTHROUGH_PHASE7.md covering Docker, Postgres, CI, store factory (PROD-03, PROD-04, PROD-05)
 
+### Phase 07.2: Architecture Review Implementation - Critical Bug Fixes and Systemic Hardening (INSERTED)
+
+**Goal:** Fix 2 correctness bugs (dual tool execution, _active_callbacks data race), 5 critical bottlenecks (SQLite WAL, seen_tool_signatures set conversion, pipeline_trace/handoff caps), and 3 structural/safety improvements (_ANNOTATED_LIST_FIELDS auto-derivation, prepare_state() extraction, run_bash guard, memoize prompt removal, tool contract tests). All changes are internal — no observable behavior change.
+**Requirements**: (internal fixes, no external requirement IDs)
+**Depends on:** Phase 7.1
+**Plans:** 5 plans
+
+Plans:
+- [ ] 07.2-00-PLAN.md — Wave 0: Create test_tool_contracts.py stub with failing parametrized test baseline
+- [ ] 07.2-01-PLAN.md — Wave 1: Remove dual-execution in _route_to_specialist; replace _active_callbacks with ContextVar (W1-1, W1-2)
+- [ ] 07.2-02-PLAN.md — Wave 2: SQLiteCheckpointStore WAL + persistent conn; seen_tool_signatures set; cap pipeline_trace/handoff lists (W2-3, W2-4, W2-5)
+- [ ] 07.2-03-PLAN.md — Wave 3a: Auto-derive _ANNOTATED_LIST_FIELDS; extract prepare_state() (W3-6, W3-7)
+- [ ] 07.2-04-PLAN.md — Wave 3b: run_bash P1_BASH_ENABLED guard; remove memoize from prompt; implement tool contract tests (W3-8, W3-9, W3-10)
+
 ### Phase 07.1: Context Manipulation for Better Sub-Agent Multi-Task Handling (INSERTED)
 
 **Goal:** Introduce a typed MissionContext model as a durable queryable context store, replace fragmented eviction mechanisms with a unified provider-agnostic ContextManager, enrich specialist subgraph context with mission goals and prior results, and scope planner messages per-mission with deterministic summarization
@@ -151,7 +166,7 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7 → 7.1
+Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7 → 7.1 → 7.2
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -163,3 +178,4 @@ Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7 → 7.1
 | 6. Production Service Layer | 3/3 | Complete | 2026-03-04 |
 | 7. Production Persistence and CI | 4/4 | Complete   | 2026-03-06 |
 | 7.1. Context Manipulation (INSERTED) | 3/4 | In Progress|  |
+| 7.2. Architecture Review - Critical Bug Fixes (INSERTED) | 0/5 | Planned | |
