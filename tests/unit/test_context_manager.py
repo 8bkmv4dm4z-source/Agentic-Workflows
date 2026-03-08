@@ -5,11 +5,11 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from agentic_workflows.orchestration.langgraph.context_manager import (
+    _CACHE_MAX_SIZE,
     ArtifactRecord,
     ContextManager,
     MissionContext,
     SubMissionContext,
-    _CACHE_MAX_SIZE,
     extract_artifacts,
     extract_summary_from_result,
 )
