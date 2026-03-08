@@ -15,7 +15,6 @@ from agentic_workflows.context.embedding_provider import MockEmbeddingProvider
 from agentic_workflows.orchestration.langgraph.context_manager import ContextManager
 from agentic_workflows.storage.mission_context_store import (
     MissionContextStore,
-    encode_tool_pattern,
 )
 
 requires_postgres = pytest.mark.skipif(
@@ -192,6 +191,7 @@ class TestCrossRunInjection:
             "missions": ["Explain the fibonacci sequence and write a summary"],
             "mission_contexts": {},
             "messages": [],
+            "step": 1,
         }
         injection = cm.build_planner_context_injection(state)
 
@@ -226,6 +226,7 @@ class TestCrossRunInjection:
             "missions": ["process dataset with statistical methods"],
             "mission_contexts": {},
             "messages": [],
+            "step": 1,
         }
         injection = cm.build_planner_context_injection(state)
         assert len(injection) <= 1500
@@ -268,6 +269,7 @@ class TestSmoketwOruns:
             "missions": ["Sort the list of numbers from smallest to largest"],
             "mission_contexts": {},
             "messages": [],
+            "step": 1,
         }
         injection = cm2.build_planner_context_injection(state)
 

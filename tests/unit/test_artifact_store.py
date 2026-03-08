@@ -1,8 +1,6 @@
 """Tests for ArtifactStore.
 Covers SCS-07 from VALIDATION.md.
 """
-import pytest
-
 from agentic_workflows.storage.artifact_store import ArtifactStore
 
 

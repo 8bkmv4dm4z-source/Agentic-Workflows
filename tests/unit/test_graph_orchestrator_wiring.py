@@ -5,8 +5,6 @@ are forwarded from LangGraphOrchestrator.__init__ to ContextManager.
 """
 from unittest.mock import MagicMock
 
-import pytest
-
 from agentic_workflows.orchestration.langgraph.graph import LangGraphOrchestrator
 
 

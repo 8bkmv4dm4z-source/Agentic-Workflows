@@ -3,12 +3,10 @@ Covers SCS-01, SCS-02 from VALIDATION.md.
 """
 import logging
 import math
-import os
 
 import pytest
 
 from agentic_workflows.context.embedding_provider import (
-    EmbeddingProvider,
     FastEmbedProvider,
     MockEmbeddingProvider,
     get_embedding_provider,

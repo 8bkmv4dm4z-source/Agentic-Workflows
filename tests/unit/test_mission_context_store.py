@@ -1,8 +1,6 @@
 """Tests for MissionContextStore, reciprocal_rank_fusion, encode_tool_pattern, _sha256.
 Covers SCS-03, SCS-04, SCS-05, SCS-06 from VALIDATION.md.
 """
-import pytest
-
 from agentic_workflows.storage.mission_context_store import (
     MissionContextStore,
     _sha256,
@@ -99,7 +97,7 @@ class TestL2EarlyExit:
 
     def test_l4_skipped_when_l2_has_enough(self):
         """L4 query (embedding branch) must not execute when L2 >= top_k."""
-        from unittest.mock import MagicMock, call
+        from unittest.mock import MagicMock
 
         store = MissionContextStore(pool=None)
 
