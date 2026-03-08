@@ -15,10 +15,14 @@ from __future__ import annotations
 import hashlib
 from typing import TYPE_CHECKING, TypedDict
 
+from agentic_workflows.logger import get_logger
+
 if TYPE_CHECKING:
     from psycopg_pool import ConnectionPool
 
     from agentic_workflows.context.embedding_provider import EmbeddingProvider
+
+_logger = get_logger("mission_context_store")
 
 # ---------------------------------------------------------------------------
 # Tool bitmask registry
@@ -177,6 +181,7 @@ class MissionContextStore:
         No-op when pool=None (graceful degradation for CI / SQLite environments).
         """
         if self._pool is None:
+            _logger.debug("CASCADE UPSERT skipped pool=None")
             return
 
         import json
@@ -222,6 +227,7 @@ class MissionContextStore:
                     json.dumps(artifacts or []),
                 ),
             )
+        _logger.info("CASCADE UPSERT run_id=%s goal_hash=%s", run_id, goal_hash[:12])
 
     # ------------------------------------------------------------------
     # Read path -- 5-layer cascade
@@ -248,8 +254,11 @@ class MissionContextStore:
             return []
 
         try:
-            return self._cascade(goal, tools_used or [], embedding, top_k)
-        except Exception:
+            results = self._cascade(goal, tools_used or [], embedding, top_k)
+            _logger.info("CASCADE QUERY done layers=4 results=%d", len(results))
+            return results
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("CASCADE QUERY error layer=cascade error=%s", exc)
             return []
 
     def _cascade(
@@ -270,6 +279,7 @@ class MissionContextStore:
                 (goal_hash,),
             ).fetchone()
             if row:
+                _logger.info("CASCADE QUERY short_circuit layer=L0 results=1")
                 return [self._row_to_result(row, score=1.0)]
 
             # L1: tool bitmask structural match -- short-circuit if sufficient
@@ -283,7 +293,9 @@ class MissionContextStore:
                         "ORDER BY created_at DESC LIMIT %s",
                         (bitmask, bitmask, top_k),
                     ).fetchall()
+                    _logger.debug("CASCADE QUERY layer=L1 hits=%d", len(rows))
                     if len(rows) >= top_k:
+                        _logger.info("CASCADE QUERY short_circuit layer=L1 results=%d", len(rows))
                         return [self._row_to_result(r, score=0.9) for r in rows[:top_k]]
 
             # L2: BM25 tsvector keyword search
@@ -301,6 +313,17 @@ class MissionContextStore:
             for r in l2_rows:
                 l2_ids.append(str(r[0]))
                 l2_id_to_row[str(r[0])] = r
+            _logger.debug("CASCADE QUERY layer=L2 hits=%d", len(l2_ids))
+
+            # L2 early-exit: if BM25 already has enough results, skip HNSW scan
+            if len(l2_ids) >= top_k:
+                _logger.info("CASCADE QUERY short_circuit layer=L2 results=%d", len(l2_ids))
+                results_l2: list[MissionContextResult] = []
+                fused_l2 = reciprocal_rank_fusion(l2_ids)
+                for doc_id, rrf_score in list(fused_l2.items())[:top_k]:
+                    if doc_id in l2_id_to_row:
+                        results_l2.append(self._row_to_result(l2_id_to_row[doc_id], score=rrf_score))
+                return results_l2
 
             # L4: pgvector HNSW cosine similarity
             l4_ids: list[str] = []
@@ -318,6 +341,7 @@ class MissionContextStore:
                 for r in l4_rows:
                     l4_ids.append(str(r[0]))
                     l4_id_to_row[str(r[0])] = r
+            _logger.debug("CASCADE QUERY layer=L4 hits=%d", len(l4_ids))
 
             # RRF fusion over L2 + L4
             fused = reciprocal_rank_fusion(l2_ids, l4_ids)

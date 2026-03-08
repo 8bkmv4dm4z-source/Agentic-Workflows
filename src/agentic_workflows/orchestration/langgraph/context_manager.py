@@ -245,6 +245,9 @@ class ContextManager:
         self._store = mission_context_store
         self._embedding_provider = embedding_provider
         self._logger = _logger
+        # Per-run caches keyed by f"{run_id}:{goal_text}" to prevent cross-run contamination
+        self._cascade_cache: dict[str, list] = {}   # cache_key → cached hits
+        self._embed_cache: dict[str, list[float]] = {}  # cache_key → embedding
 
     # ── Phase 7.3: cross-run persistence helpers ───────────────────────
 
@@ -554,14 +557,41 @@ class ContextManager:
         if self._store is not None:
             try:
                 goal_text = self._get_current_goal_text(state)
-                embedding = None
-                if self._embedding_provider is not None and goal_text:
-                    embedding = self._embedding_provider.embed_sync(goal_text)
-                hits = self._store.query_cascade(
-                    goal_text or "",
-                    embedding=embedding,
-                    top_k=3,
-                )
+
+                # Early-exit: skip cascade entirely for empty goals
+                if not goal_text:
+                    result = base_result[:_CONTEXT_CAP] if base_result else base_result
+                    self._logger.info(
+                        "CONTEXT INJECT missions=%d cross_run_hits=%d chars=%d cached=%s",
+                        len(summaries), 0, len(result), False,
+                    )
+                    return result
+
+                run_id = str(state.get("run_id", ""))
+                cache_key = f"{run_id}:{goal_text}"
+
+                # Cache embedding to avoid re-embedding same goal 10-25× per run
+                if self._embedding_provider is not None:
+                    if cache_key not in self._embed_cache:
+                        self._embed_cache[cache_key] = self._embedding_provider.embed_sync(goal_text)
+                    self._logger.debug(
+                        "EMBED GEN context cached=%s goal_len=%d",
+                        cache_key in self._embed_cache and cache_key in self._embed_cache,
+                        len(goal_text),
+                    )
+                    embedding = self._embed_cache[cache_key]
+                else:
+                    embedding = None
+
+                # Cache cascade result to avoid re-running SQL 10-25× per run
+                if cache_key not in self._cascade_cache:
+                    self._cascade_cache[cache_key] = self._store.query_cascade(
+                        goal_text,
+                        embedding=embedding,
+                        top_k=3,
+                    )
+                hits = self._cascade_cache[cache_key]
+
                 for hit in hits:
                     line = f'[Cross-run] Similar: "{hit["goal"]}" \u2192 {hit["summary"]}'
                     cross_run_lines.append(line)
@@ -569,16 +599,29 @@ class ContextManager:
                 self._logger.debug("cross-run cascade query failed (non-fatal): %s", exc)
 
         if not cross_run_lines:
-            return base_result[:_CONTEXT_CAP] if base_result else base_result
+            result = base_result[:_CONTEXT_CAP] if base_result else base_result
+            self._logger.info(
+                "CONTEXT INJECT missions=%d cross_run_hits=%d chars=%d cached=%s",
+                len(summaries), 0, len(result),
+                f"{state.get('run_id', '')}:{self._get_current_goal_text(state)}" in self._cascade_cache,
+            )
+            return result
 
         # Combine: existing content takes priority, cross-run hits fill remaining capacity
         remaining = _CONTEXT_CAP - len(base_result)
         cross_run_text = "\n".join(cross_run_lines)
         if remaining <= 0:
-            return base_result[:_CONTEXT_CAP]
+            result = base_result[:_CONTEXT_CAP]
+        else:
+            combined = base_result + ("\n" if base_result else "") + cross_run_text
+            result = combined[:_CONTEXT_CAP]
 
-        combined = base_result + ("\n" if base_result else "") + cross_run_text
-        return combined[:_CONTEXT_CAP]
+        self._logger.info(
+            "CONTEXT INJECT missions=%d cross_run_hits=%d chars=%d cached=%s",
+            len(summaries), len(cross_run_lines), len(result),
+            f"{state.get('run_id', '')}:{self._get_current_goal_text(state)}" in self._cascade_cache,
+        )
+        return result
 
     def _emit_eviction_event(
         self,
