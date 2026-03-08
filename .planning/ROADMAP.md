@@ -188,10 +188,48 @@ Plans:
 - [ ] 07.3-08-PLAN.md — Wave 4B: docker-compose.stress.yml + scripts/stress_test.py
 - [ ] 07.3-09-PLAN.md — Wave 4C: WALKTHROUGH_PHASE7.3.md
 
+### Phase 07.4: Context Injection Dedup and Runtime Safety (INSERTED)
+
+**Goal:** Fix the cross-run context injection dedup bug (same `[Cross-run] Similar:` string re-appended to `state["messages"]` on every planner step), add a timeout guard for the synchronous `query_cascade()` call in the planner hot path, bound `_cascade_cache`/`_embed_cache` to prevent memory leaks in long-lived processes, and fix the `_make_result()` test fixture that omits the required `source_layer` field.
+**Depends on:** Phase 07.3
+**Requirements**: (context injection correctness, no external requirement IDs)
+**Success Criteria** (what must be TRUE):
+  1. After N planner steps with the same goal, `state["messages"]` contains exactly one `[Cross-run] Similar:` injection (not N copies) — verified by a unit test asserting message count
+  2. A slow or non-responsive Postgres cascade query does not block the planner indefinitely — `query_cascade()` is wrapped with a 2-second timeout, falling back to `[]`
+  3. `_cascade_cache` and `_embed_cache` never exceed a fixed bound (200 entries) in long-lived processes — verified by a unit test calling `build_planner_context_injection` 300 times with distinct keys
+  4. `_make_result()` in `test_context_manager_7_3.py` includes `source_layer` — attribution logs show a real layer label (`L0`, `L1`, etc.) instead of `?` in unit tests
+  5. All existing 1198+ tests pass unchanged
+
+**Plans:** 4 plans
+Plans:
+- [ ] 07.4-01-PLAN.md — Add `_injected_cross_run_keys: set[str]` to ContextManager; guard injection; regression test for once-per-run behavior
+- [ ] 07.4-02-PLAN.md — Wrap `query_cascade()` in ThreadPoolExecutor with 2s timeout; fallback to `[]`; test for timeout path
+- [ ] 07.4-03-PLAN.md — Bound `_cascade_cache` + `_embed_cache` to 200 entries with truncation on overflow; test for bound enforcement
+- [ ] 07.4-04-PLAN.md — Fix `_make_result()` source_layer + add attribution assertion to cross-run injection tests
+
+### Phase 07.5: Wire ArtifactStore to Runtime (INSERTED)
+
+**Goal:** Connect the currently-dead `ArtifactStore` to the live mission execution path. `MissionContext.artifacts` (already computed at `context_manager.py:492`) should be persisted to Postgres via `ArtifactStore.upsert()` inside `_persist_mission_context()`. Add `artifact_store` parameter to `LangGraphOrchestrator` and `ContextManager`, wire it in `run.py` and `user_run.py`, and add an integration test confirming artifacts appear in the DB after a mission completes.
+**Depends on:** Phase 07.4
+**Requirements**: (artifact persistence, no external requirement IDs)
+**Success Criteria** (what must be TRUE):
+  1. After a mission completes with artifacts, `SELECT * FROM mission_artifacts WHERE run_id = ?` returns the expected rows — verified by a Postgres integration test
+  2. `LangGraphOrchestrator(artifact_store=None)` (default) runs without error — backward compat preserved
+  3. `run.py` and `user_run.py` instantiate `ArtifactStore(pool=pg_pool)` when `DATABASE_URL` is set and pass it to the orchestrator
+  4. All existing 1198+ tests pass unchanged
+
+**Plans:** 5 plans
+Plans:
+- [ ] 07.5-01-PLAN.md — Add `artifact_store` param to `ContextManager.__init__`; wire `_persist_mission_context()` to call `artifact_store.upsert()` for each artifact
+- [ ] 07.5-02-PLAN.md — Add `artifact_store` param to `LangGraphOrchestrator.__init__`; forward to `ContextManager`
+- [ ] 07.5-03-PLAN.md — Wire `ArtifactStore(pool=pg_pool)` in `run.py` + `user_run.py` when `DATABASE_URL` set
+- [ ] 07.5-04-PLAN.md — Postgres integration test: mission completes → artifacts appear in `mission_artifacts` table
+- [ ] 07.5-05-PLAN.md — Update `docs/WALKTHROUGH_PHASE7.3.md` with artifact persistence flow
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7 → 7.1 → 7.2 → 7.3
+Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7 → 7.1 → 7.2 → 7.3 → 7.4 → 7.5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -205,3 +243,5 @@ Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7 → 7.1 → 7.2
 | 7.1. Context Manipulation (INSERTED) | 3/4 | In Progress|  |
 | 7.2. Architecture Review - Critical Bug Fixes (INSERTED) | 5/5 | Complete   | 2026-03-08 |
 | 7.3. Hybrid Deterministic + Semantic Context System (INSERTED) | 10/10 | Complete    | 2026-03-08 |
+| 7.4. Context Injection Dedup and Runtime Safety (INSERTED) | 0/4 | Planned | |
+| 7.5. Wire ArtifactStore to Runtime (INSERTED) | 0/5 | Planned | |
