@@ -973,6 +973,50 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _build_orchestrator() -> tuple[LangGraphOrchestrator, Any]:
+    """Construct orchestrator with MissionContextStore + EmbeddingProvider if DATABASE_URL is set.
+
+    Returns (orchestrator, pool) — caller must close pool when done (pool may be None).
+    """
+    db_url = os.getenv("DATABASE_URL")
+    pool = None
+    embedding_provider = None
+    mission_context_store = None
+    artifact_store = None
+
+    if db_url:
+        try:
+            from psycopg_pool import (
+                ConnectionPool as PgConnectionPool,  # type: ignore[import-untyped]
+            )
+
+            from agentic_workflows.context.embedding_provider import get_embedding_provider
+            from agentic_workflows.storage.mission_context_store import MissionContextStore
+
+            pool = PgConnectionPool(
+                conninfo=db_url,
+                min_size=2,
+                max_size=10,
+                open=False,
+                kwargs={"autocommit": True, "prepare_threshold": 0},
+            )
+            pool.open(wait=True)
+            embedding_provider = get_embedding_provider()
+            mission_context_store = MissionContextStore(pool=pool, embedding_provider=embedding_provider)
+            from agentic_workflows.storage.artifact_store import ArtifactStore
+            artifact_store = ArtifactStore(pool=pool, embedding_provider=embedding_provider)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[warn] Could not connect to Postgres — running without vector memory: {exc}")
+            pool = None
+            artifact_store = None
+
+    return LangGraphOrchestrator(
+        embedding_provider=embedding_provider,
+        mission_context_store=mission_context_store,
+        artifact_store=artifact_store,
+    ), pool
+
+
 @observe(name="run")
 def main() -> None:
     args = _parse_args()
@@ -980,7 +1024,7 @@ def main() -> None:
     reviewer_mode = _normalize_reviewer_mode(args.reviewer_mode or env_mode)
     prefer_mode = _normalize_prefer_mode(args.prefer)
     # This prompt intentionally exercises multiple deterministic tools.
-    orchestrator = LangGraphOrchestrator()
+    orchestrator, _pg_pool = _build_orchestrator()
     user_input = _default_demo_input()
     try:
         if args.fork_test_runs > 0:
@@ -1028,6 +1072,10 @@ def main() -> None:
         )
     finally:
         flush_observability()
+        if _pg_pool is not None:
+            import contextlib
+            with contextlib.suppress(Exception):
+                _pg_pool.close()
 
 
 if __name__ == "__main__":
