@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 07.1-04-PLAN.md
-last_updated: "2026-03-07T15:00:00.000Z"
-last_activity: 2026-03-07 — Data-access visibility added to user_run.py (quick task 3, phase 7.1)
+stopped_at: Completed 07.2-05-PLAN.md
+last_updated: "2026-03-08T02:00:00.000Z"
+last_activity: 2026-03-08 — Docker agent root fix: AGENT_ROOT for reads, AGENT_WORKDIR for writes
 progress:
-  total_phases: 8
-  completed_phases: 7
-  total_plans: 26
-  completed_plans: 27
+  total_phases: 9
+  completed_phases: 8
+  total_plans: 31
+  completed_plans: 32
   percent: 100
 ---
 
@@ -21,23 +21,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-02)
 
 **Core value:** A specialist-routing multi-agent system that reliably executes multi-mission workloads end-to-end — with the architecture understood deeply enough to stress test, evolve, and deploy with confidence.
-**Current focus:** Phase 7.1 — Context Manipulation for Better Sub-Agent Multi-Task Handling
+**Current focus:** Phase 7.2 — Architecture Review Implementation: Critical Bug Fixes and Systemic Hardening
 
 ## Current Position
 
-Phase: 7.1 (Context Manipulation for Better Sub-Agent Multi-Task Handling)
-Plan: 4 of 4 in current phase (07.1-01, 07.1-02, 07.1-03, 07.1-04 DONE)
-Status: Phase 7.1 COMPLETE — ContextManager lifecycle fully integrated into graph.py.
-Last activity: 2026-03-07 — ContextManager lifecycle hooks wired, 657 tests passing
+Phase: 7.2 (Architecture Review Implementation: Critical Bug Fixes and Systemic Hardening)
+Plan: 5 of 5 in current phase (07.2-00, 07.2-01, 07.2-02, 07.2-03, 07.2-04 DONE; 07.2-05 pending)
+Status: Plan 04 complete — Wave 3 final improvements (P1_BASH_ENABLED guard, memoize prompt removal, 144 tool contract tests).
+Last activity: 2026-03-08 — Wave 3 final improvements (P1_BASH_ENABLED guard, memoize prompt removal, tool contract tests)
 
-Progress: [██████████] 100% (27/27 plans complete, Phase 7.1 04/04 done)
+Progress: [██████████] 100% (32/32 plans complete, Phase 7.2 05/05 done)
 
 ## Test Status
 
-- **657 tests pass** (all context manager lifecycle hooks wired, parallel plan regressions fixed)
-- 3 pre-existing unit test failures (test_run_bash_python_guard, 2x write_file shebang tests) -- unrelated to Phase 7
-- ruff check: clean (pre-existing UP035 in app.py noted)
-- Branch: `p7-production-persistence-and-ci`
+- **823 unit+integration tests pass** (all passing, 0 failures); 144 tool contract stubs replaced with real assertions in Plan 04
+- 0 pre-existing test_tool_contracts failures (stubs replaced); 0 test_tool_security failures (P1_BASH_ENABLED added)
+- ruff check: clean on all modified files (pre-existing UP035 in app.py, B039 in graph.py, I001/B009 in test_run_helpers.py noted)
+- Branch: `phase-7.2-arch-review`
 
 ## Performance Metrics
 
@@ -58,6 +58,12 @@ Progress: [██████████] 100% (27/27 plans complete, Phase 7.1
 | 07-production-persistence-and-ci | 4/4 | 26 min | 7 min |
 | Phase 07.1 P02 | 5min | 2 tasks | 5 files |
 | Phase 07.1 P04 | 4min | 2 tasks | 6 files |
+| Phase 07.2 P00 | 1min | 1 task | 1 file |
+| Phase 07.2 P01 | 4min | 3 tasks | 4 files |
+| Phase 07.2 P02 | 6min | 3 tasks | 6 files |
+| Phase 07.2 P03 | 5min | 2 tasks | 4 files |
+| Phase 07.2 P04 | 4min | 4 tasks | 6 files |
+| Phase 07.2 P05 | 2min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -104,10 +110,27 @@ Recent decisions affecting current work:
 - [Phase 07.1]: All eviction injected messages use role=user with [Orchestrator] prefix, never role=system
 - [Phase 07.1]: ContextManager is single source of truth for message lifecycle -- removed competing compaction from ensure_state_defaults
 - [Phase 07.1]: ContextManager lifecycle calls wrapped in try/except for graceful degradation
+- [Phase 07.2]: Module-level _build_all_tools() with in-memory stores for parametrized test scaffold
+- [Phase 07.2]: Removed _executor_subgraph.invoke() from _route_to_specialist -- eliminated dual tool execution side effects
+- [Phase 07.2]: _active_callbacks_var ContextVar at module level replaces self._active_callbacks instance field -- thread-isolated Langfuse callbacks
+- [Phase 07.2]: SSE streaming path (routes/run.py) uses _active_callbacks_var.set() not orchestrator._active_callbacks mutation
+- [Phase 07.2]: SQLiteCheckpointStore persistent connection + WAL mode — matches SQLiteRunStore pattern
+- [Phase 07.2]: seen_tool_signatures as set[str] with list-to-set conversion in ensure_state_defaults for checkpoint safety
+- [Phase 07.2]: Local _PIPELINE_TRACE_CAP in context_manager.py to avoid circular import with graph.py
+- [Phase 07.2]: Cap constants at module level (_PIPELINE_TRACE_CAP=500, _HANDOFF_QUEUE_CAP=50, _HANDOFF_RESULTS_CAP=50)
+- [Phase 07.2]: Auto-derive _ANNOTATED_LIST_FIELDS via typing.get_type_hints(RunState, include_extras=True) at import time
+- [Phase 07.2]: prepare_state() public method on LangGraphOrchestrator as single source of truth for state initialization
+- [Phase 07.2]: Callback setup (ContextVar) remains in callers since it is per-request, not per-state
+- [Phase 07.2]: P1_BASH_ENABLED guard uses != 'true' pattern (ruff SIM201 compliant) at top of run_bash.execute()
+- [Phase 07.2]: Memoize tool kept in registry for internal auto-memoize use, only removed from planner prompt's tool arg reference
+- [Phase 07.2]: Tool contract test accepts KeyError/ValueError/TypeError as valid responses to empty args
+- [Phase 07.2-05]: _build_system_prompt() uses AGENT_ROOT for readable context and AGENT_WORKDIR for write workspace; shown separately in prompt when they differ
+- [Phase 07.2-05]: update_file_section.py adds AGENT_WORKDIR fallback after P1_RUN_ARTIFACT_DIR (matches write_file.py pattern)
 
 ### Roadmap Evolution
 
 - Phase 7.1 inserted after Phase 7: context manipulation for better sub-agent multi-task handling (URGENT)
+- Phase 7.2 inserted after Phase 7.1: Architecture Review Implementation - Critical Bug Fixes and Systemic Hardening (URGENT)
 
 ### Pending Todos
 
@@ -125,6 +148,11 @@ Recent decisions affecting current work:
 | 7 | Docker containerization + CI with sqlite/postgres matrix, 80% coverage | Infra | 2026-03-06 | 3fb6923 | ✓ Complete |
 | 7 | WALKTHROUGH_PHASE7.md: Docker, Postgres, CI architecture walkthrough | Docs | 2026-03-06 | 1fdf29d | ✓ Complete |
 | 7.1 | Data-access log visibility in user_run.py: _DATA_ACCESS_TOOLS panel + run log section | Enhance | 2026-03-07 | (quick-3) | ✓ Complete |
+| 7.2 | Tool contract test scaffold: 144 parametrized stubs for 36 tools | Test | 2026-03-08 | e4c7c33 | ✓ Complete |
+| 7.2 | Wave 1: dual-execution removal + ContextVar callback isolation | Fix | 2026-03-08 | b6a42df | ✓ Complete |
+| 7.2 | Wave 2: persistent WAL connection + set dedup + bounded list caps | Fix | 2026-03-08 | 55e1922 | ✓ Complete |
+| 7.2 | Wave 3: auto-derived annotated fields + prepare_state single source of truth | Refactor | 2026-03-08 | 6ed752b | ✓ Complete |
+| 7.2 | Wave 3 final: P1_BASH_ENABLED guard, memoize prompt removal, 144 tool contract tests | Security+Test | 2026-03-08 | e3f3214 | ✓ Complete |
 
 ### Blockers/Concerns
 
@@ -134,6 +162,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-03-07 (quick task 3)
-Stopped at: quick-3 data-access visibility
+Last session: 2026-03-08T01:14:48Z
+Stopped at: Completed 07.2-04-PLAN.md
 Resume file: None

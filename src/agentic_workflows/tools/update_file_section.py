@@ -25,7 +25,7 @@ class UpdateFileSectionTool(Tool):
             return {"error": "section_marker is required"}
 
         target_path = path
-        artifact_dir = str(os.getenv("P1_RUN_ARTIFACT_DIR", "")).strip()
+        artifact_dir = (os.environ.get("P1_RUN_ARTIFACT_DIR") or os.environ.get("AGENT_WORKDIR") or "").strip()
         if artifact_dir and not os.path.isabs(path) and not os.path.dirname(path):
             os.makedirs(artifact_dir, exist_ok=True)
             target_path = os.path.join(artifact_dir, path)

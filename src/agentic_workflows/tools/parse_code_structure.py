@@ -7,17 +7,23 @@ import re
 from pathlib import Path
 from typing import Any
 
+from ._security import effective_root
 from .base import Tool
 
 MAX_FILE_BYTES = 500 * 1024  # 500KB
 
 
-class ParseCodeStructureTool(Tool):
-    name = "parse_code_structure"
+MAX_OUTLINE_ITEMS = 30  # cap per category to keep result context-friendly
+
+
+class OutlineCodeTool(Tool):
+    name = "outline_code"
     description = (
-        "Extract functions, classes, and imports from source files using AST (Python) or regex (other). "
+        "Show the outline of a source file: functions, classes, and imports with line numbers. "
+        "Use this instead of read_file when you need to understand a file's structure without reading all its content. "
         "Required args: path (str). "
-        "Optional: operations (list of 'functions', 'classes', 'imports'; default all three)."
+        "Optional: operations (list of 'functions', 'classes', 'imports'; default all three), "
+        "max_items (int, max entries per category, default 30)."
     )
 
     def execute(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -25,11 +31,12 @@ class ParseCodeStructureTool(Tool):
         operations = args.get("operations", ["functions", "classes", "imports"])
         if isinstance(operations, str):
             operations = [operations]
+        max_items = max(1, int(args.get("max_items", MAX_OUTLINE_ITEMS)))
         if not path_str:
             return {"error": "path is required"}
 
         # Path traversal protection
-        cwd = Path.cwd().resolve()
+        cwd = effective_root()
         try:
             target = Path(path_str).resolve()
         except Exception:
@@ -65,6 +72,13 @@ class ParseCodeStructureTool(Tool):
             result.update(_parse_python(raw, operations))
         else:
             result.update(_parse_regex(raw, operations))
+
+        # Cap results to keep context usage manageable
+        for key in ("functions", "classes", "imports"):
+            if key in result and len(result[key]) > max_items:
+                total = len(result[key])
+                result[key] = result[key][:max_items]
+                result[f"{key}_truncated"] = f"showing {max_items} of {total} — use read_file_chunk to read specific sections"
 
         return result
 

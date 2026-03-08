@@ -8,11 +8,14 @@ run/mission reports using only local state for final snapshots.
 """
 
 import contextlib
+import contextvars
 import json
+import operator
 import os
 import queue
 import re
 import threading
+import typing
 from pathlib import Path
 from typing import Any
 
@@ -82,8 +85,37 @@ class MemoizationPolicyViolation(RuntimeError):
 # dict; the reducer would double each list on every step unless we zero out the
 # delta in the returned dict. Wrap every graph node with _sequential_node() to
 # apply this correction automatically.
-_ANNOTATED_LIST_FIELDS: frozenset[str] = frozenset(
-    {"tool_history", "memo_events", "seen_tool_signatures", "mission_reports"}
+#
+# W3-6: Auto-derived from RunState annotations at import time so that adding
+# or removing an Annotated[list, operator.add] field is automatically reflected
+# here — no manual maintenance required.
+
+
+def _derive_annotated_list_fields() -> frozenset[str]:
+    """Introspect RunState type hints and return fields with Annotated[list, operator.add]."""
+    hints = typing.get_type_hints(RunState, include_extras=True)
+    result: set[str] = set()
+    for name, hint in hints.items():
+        if typing.get_origin(hint) is typing.Annotated:
+            args = typing.get_args(hint)
+            if len(args) >= 2 and args[1] is operator.add:
+                result.add(name)
+    return frozenset(result)
+
+
+_ANNOTATED_LIST_FIELDS: frozenset[str] = _derive_annotated_list_fields()
+
+# W2-5: Caps for unbounded list growth.
+_PIPELINE_TRACE_CAP: int = 500
+_HANDOFF_QUEUE_CAP: int = 50
+_HANDOFF_RESULTS_CAP: int = 50
+
+# W1-2: Per-run callback isolation via ContextVar.
+# Each run()/streaming call sets its own callback list; concurrent runs in
+# different threads each see their own value (ContextVar provides this
+# automatically). Default is [] (no callbacks when credentials absent).
+_active_callbacks_var: contextvars.ContextVar[list] = contextvars.ContextVar(
+    "_active_callbacks", default=[]
 )
 
 
@@ -159,76 +191,101 @@ class LangGraphOrchestrator:
         )
         self._executor_subgraph = build_executor_subgraph(memo_store=self.memo_store)
         self._evaluator_subgraph = build_evaluator_subgraph()
-        self._active_callbacks: list[Any] = []  # populated at run() start; empty = no-op
         self._invalidate_known_poisoned_cache_entries()
         self.system_prompt = self._build_system_prompt()
         self._compiled = self._compile_graph()
 
+    @staticmethod
+    def _build_codebase_context(cwd: str) -> str:
+        """Return a compact codebase summary injected into the system prompt."""
+        from pathlib import Path  # noqa: PLC0415
+
+        root = Path(cwd)
+        lines: list[str] = []
+
+        # Architecture section only from AGENTS.md — skip commands/style/git noise
+        for candidate in ("AGENTS.md", "README.md"):
+            doc = root / candidate
+            if doc.exists():
+                try:
+                    text = doc.read_text(encoding="utf-8")
+                    # Extract only lines between ## 2. Architecture and the next ## section
+                    arch_lines: list[str] = []
+                    in_arch = False
+                    for l in text.splitlines():
+                        if l.startswith("## 2.") or (not in_arch and "Architecture" in l and l.startswith("#")):
+                            in_arch = True
+                        elif in_arch and l.startswith("## "):
+                            break
+                        if in_arch and l.strip():
+                            arch_lines.append(l.rstrip())
+                    if arch_lines:
+                        lines.extend(arch_lines[:12])
+                    break
+                except OSError:
+                    pass
+
+        # Key source dirs only (skip build/doc/config noise)
+        src = root / "src"
+        if src.is_dir():
+            try:
+                pkgs = sorted(p.name for p in src.iterdir() if p.is_dir() and not p.name.startswith("_"))[:5]
+                if pkgs:
+                    lines.append("src/: " + ", ".join(pkgs))
+            except OSError:
+                pass
+
+        return "\n".join(lines)
+
     def _build_system_prompt(self) -> str:
         """Construct strict planner prompt and tool/memo policy contract."""
         tool_list = ", ".join(self.tools.keys())
-        cwd = os.getcwd()
+        # AGENT_ROOT = readable project root (source/docs); AGENT_WORKDIR = writable output dir
+        readable_root = os.environ.get("AGENT_ROOT") or os.environ.get("AGENT_WORKDIR") or os.getcwd()
+        writable_root = os.environ.get("AGENT_WORKDIR") or os.getcwd()
+        codebase_ctx = self._build_codebase_context(readable_root)
+        workspace_line = (
+            f"Project root (read): {readable_root}\nWrite workspace: {writable_root}\n"
+            if readable_root != writable_root
+            else f"Working directory: {readable_root}\n"
+        )
         return (
             "You are a deterministic tool-using agent.\n"
-            f"Working directory: {cwd}\n"
-            "When a user refers to a file by partial name, FIRST call search_files to locate "
-            "the full path before using run_bash or read_file.\n"
-            "Return exactly one JSON object per response.\n"
-            "Never output XML tags (for example <invoke>), markdown, or prose outside JSON.\n"
-            f"Allowed tool_name values: {tool_list}\n\n"
-            "Schema:\n"
-            '{"action":"tool","tool_name":"<tool>","args":{...}}\n'
+            + workspace_line
+            + (f"Codebase context:\n{codebase_ctx}\n\n" if codebase_ctx else "")
+            + "Return exactly one JSON object per response. No XML, markdown, or prose outside JSON.\n"
+            f"Available tools: {tool_list}\n\n"
+            "Response schema:\n"
+            '{"action":"tool","tool_name":"<name>","args":{...}}\n'
             '{"action":"finish","answer":"<summary>"}\n'
-            '{"action":"clarify","question":"<question for user>"}\n\n'
-            "CORRECT examples:\n"
-            '  {"action":"tool","tool_name":"sort_array","args":{"items":[3,1,2],"order":"asc"}}\n'
-            '  {"action":"finish","answer":"Done. Sorted array written to output.txt"}\n'
-            "INCORRECT (never do this):\n"
-            "  <invoke>sort_array</invoke>\n"
-            '  Here is the JSON: {"action": ...}\n'
-            "  ```json\n"
-            '  {"action": ...}\n'
-            "  ```\n\n"
-            "You may reason inside <thinking>...</thinking> before your JSON. "
-            "Only the JSON object outside <thinking> is processed.\n\n"
-            "If the user's request does not require any tool, respond with finish or clarify.\n\n"
-            "Tool arg reference (use exact names):\n"
-            '- repeat_message: {"message":"<string>"}\n'
-            '- sort_array: {"items":[...], "order":"asc|desc"}\n'
-            '- string_ops: {"text":"<string>", "operation":"uppercase|lowercase|reverse|length|trim|replace|split|count_words|startswith|endswith|contains"}\n'
-            '- math_stats: {"operation":"...", "a":<number>, "b":<number>} or {"operation":"...", "numbers":[...]}\n'
-            '- write_file: {"path":"<filepath>", "content":"<string>"}\n'
-            '- memoize: {"key":"<key>", "value":<json>, "run_id":"<run_id>", "namespace":"run(optional)"}\n'
-            '- retrieve_memo: {"key":"<key>", "run_id":"<run_id>", "namespace":"run(optional)"}\n'
-            '- task_list_parser: {"text":"<string>"}\n'
-            '- text_analysis: {"text":"<string>", "operation":"word_count|sentence_count|char_count|key_terms|complexity_score|paragraph_count|avg_word_length|unique_words|full_report"}\n'
-            '- data_analysis: {"numbers":[...], "operation":"summary_stats|outliers|percentiles|distribution|correlation|normalize|z_scores"}\n'
-            '- json_parser: {"text":"<json_string>", "operation":"parse|validate|extract_keys|flatten|get_path|pretty_print|count_elements"}\n'
-            '- regex_matcher: {"text":"<string>", "pattern":"<regex>", "operation":"find_all|find_first|split|replace|match|count_matches|extract_groups"}\n'
-            '- read_file: {"path":"<filepath>", "start_line":<int optional>, "end_line":<int optional>}\n'
-            '- parse_code_structure: {"file_path":"<filepath>", "language":"python|javascript|..."}\n'
-            '- describe_db_schema: {"path":"<sqlite_db_path>"}\n'
-            '- run_bash: {"command":"<shell command>", "timeout":<int optional, max 120>}\n'
-            '- http_request: {"url":"<url>", "method":"GET|POST|PUT|PATCH|DELETE", "headers":{...optional}, "body":{...optional}}\n'
-            '- datetime_ops: {"operation":"now|parse|format|add|subtract|diff|weekday|to_timestamp|from_timestamp", "value":"<datetime string optional>", ...}\n'
-            '- extract_table: {"text":"<csv/tsv/delimited text>", "delimiter":"<char optional>", "operation":"parse|filter|column|count|sum|sort"}\n'
-            '- fill_template: {"template":"<string with {placeholders}>", "variables":{"key":"value",...}}\n'
-            '- hash_content: {"content":"<string>", "algorithm":"sha256|md5|sha1|sha512|sha3_256"}\n'
-            '- query_db: {"operation":"insert|query|list|delete|count", "key":"<str optional>", "value":"<str optional>", "search":"<str optional>"}\n'
-            '- recognize_pattern: {"text":"<string>", "pattern_type":"email|url|date|phone|ip_address|hex_color|fibonacci_sequence|arithmetic_sequence|geometric_sequence"}\n'
-            '- clear_context: {"scope":"missions|full"}\n'
-            '- update_file_section: {"path":"<filepath>", "marker":"<## Section heading>", "content":"<new section content>"}\n'
-            f'- search_files: {{"pattern":"<glob e.g. *.py>", "path":"{cwd}(default)", "max_results":<int optional>}}\n\n'
-            "Memoization policy:\n"
-            "- For heavy deterministic writes, memoize result before continuing.\n"
-            '- Use tool "memoize" with args: key, value, run_id, optional namespace.\n'
-            '- Use "retrieve_memo" only when explicitly needed for task context.\n'
-            "- For write_file tasks, the orchestrator auto-checks memo keys before writing.\n"
-            "- For recurring write tasks, the orchestrator may auto-reuse cached write inputs from prior runs.\n"
-            "- Do not emit extra planning subtasks; output the next concrete tool call only.\n"
-            "Always obey system feedback messages.\n"
-            'If all recent tool calls failed and you cannot recover, emit: {"action":"finish","answer":"FAILED: <reason>"}\n'
-            "Never claim success if tool results show errors."
+            '{"action":"clarify","question":"<question>"}\n\n'
+            "Tool args (each \"operation\" takes exactly ONE value, never comma-separated):\n"
+            '- text_analysis: {"text":"...", "operation":"word_count"} (one of: word_count|sentence_count|char_count|key_terms|full_report|complexity_score|paragraph_count|avg_word_length|unique_words)\n'
+            '- string_ops: {"text":"...", "operation":"uppercase"} (one of: uppercase|lowercase|reverse|length|trim|replace|split|count_words|startswith|endswith|contains)\n'
+            '- data_analysis: {"numbers":[...], "operation":"summary_stats"} (one of: summary_stats|outliers|percentiles|distribution|correlation|normalize|z_scores)\n'
+            '- math_stats: {"operation":"add", "a":1, "b":2} or {"operation":"mean", "numbers":[...]}\n'
+            '- sort_array: {"items":[...], "order":"asc"}\n'
+            '- write_file: {"path":"...", "content":"..."}\n'
+            '- read_file: {"path":"..."} — reads entire file; only use for small files\n'
+            '- read_file_chunk: {"path":"...", "offset":0, "limit":150} — read large files in 150-line chunks; use next_offset from result to continue\n'
+            '- outline_code: {"path":"..."} — show functions/classes/imports with line numbers; use before reading a large code file\n'
+            '- json_parser: {"text":"...", "operation":"parse"} (one of: parse|validate|extract_keys|flatten|get_path|pretty_print|count_elements)\n'
+            '- regex_matcher: {"text":"...", "pattern":"...", "operation":"find_all"} (one of: find_all|find_first|split|replace|match|count_matches|extract_groups)\n'
+            '- repeat_message: {"message":"..."}\n'
+            '- run_bash: {"command":"..."}\n'
+            f'- search_files: {{"pattern":"*.py", "path":"{readable_root}"}}\n'
+            "- Other tools: see tool name for usage.\n\n"
+            "Rules:\n"
+            "- One tool call per response.\n"
+            "- Memoization is automatic. Do not emit extra planning subtasks.\n"
+            "- Obey system feedback messages. If a tool returns an error, fix the args.\n"
+            '- On unrecoverable failure: {"action":"finish","answer":"FAILED: <reason>"}\n'
+            "- Never claim success if tool results show errors.\n"
+            "Context management rules (critical — violating these causes context overflow):\n"
+            "- NEVER call read_file on a code file without checking its size first. Use outline_code to inspect structure, then read_file_chunk for sections you need.\n"
+            "- For any file likely over 200 lines, always use read_file_chunk (offset=0, limit=150) and loop using next_offset until has_more is false.\n"
+            "- After reading a chunk and writing partial output, continue with the next chunk — do not stop after one chunk.\n"
+            "- Message history is windowed automatically — completed mission summaries are preserved, raw history is evicted. Focus on the current task."
         )
 
     def _invalidate_known_poisoned_cache_entries(self) -> None:
@@ -307,7 +364,7 @@ class LangGraphOrchestrator:
                 tool_name = tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", "")
                 tool_args = tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {})
                 signature = f"{tool_name}:{json.dumps(tool_args, sort_keys=True, default=str)}"
-                if signature in state.get("seen_tool_signatures", []):
+                if signature in state.get("seen_tool_signatures", set()):
                     self.logger.info(
                         "TOOL_NODE DEDUP BLOCK tool=%s signature=%s",
                         tool_name,
@@ -389,21 +446,20 @@ class LangGraphOrchestrator:
 
         return builder.compile()
 
-    @observe("langgraph.orchestrator.run")
-    def run(
+    def prepare_state(
         self,
         user_input: str,
         run_id: str | None = None,
         *,
-        rerun_context: dict[str, Any] | None = None,
         prior_context: list[AgentMessage] | None = None,
-    ) -> RunResult:
-        """Execute one end-to-end run and return audit-friendly artifacts."""
-        # Build callback list once per run. Empty list when credentials absent (no console noise).
-        self._active_callbacks: list[Any] = []
-        _handler = get_langfuse_callback_handler()
-        if _handler is not None:
-            self._active_callbacks = [_handler]
+        rerun_context: dict[str, Any] | None = None,
+    ) -> RunState:
+        """Single source of truth for run state initialization.
+
+        Called by both run() and the SSE route handler. Encapsulates:
+        new_run_state + prior_context merge + ensure_state_defaults +
+        mission parsing + _write_shared_plan + initial checkpoint.save.
+        """
         state = new_run_state(self.system_prompt, user_input, run_id=run_id)
         if prior_context:
             # Merge prior-context system content into the main system prompt
@@ -444,9 +500,30 @@ class LangGraphOrchestrator:
             node_name="init",
             state=state,
         )
+        return state
+
+    @observe("langgraph.orchestrator.run")
+    def run(
+        self,
+        user_input: str,
+        run_id: str | None = None,
+        *,
+        rerun_context: dict[str, Any] | None = None,
+        prior_context: list[AgentMessage] | None = None,
+    ) -> RunResult:
+        """Execute one end-to-end run and return audit-friendly artifacts."""
+        # W1-2: Set per-run callbacks via ContextVar for thread-level isolation.
+        _handler = get_langfuse_callback_handler()
+        _active_callbacks_var.set([_handler] if _handler else [])
+        state = self.prepare_state(
+            user_input,
+            run_id=run_id,
+            prior_context=prior_context,
+            rerun_context=rerun_context,
+        )
         final_state = self._compiled.invoke(
             state,
-            config={"recursion_limit": self.max_steps * 9, "callbacks": self._active_callbacks},
+            config={"recursion_limit": self.max_steps * 9, "callbacks": _active_callbacks_var.get()},
         )
         final_state = ensure_state_defaults(final_state, system_prompt=self.system_prompt)
         memo_entries = self.memo_store.list_entries(run_id=final_state["run_id"])
@@ -475,6 +552,8 @@ class LangGraphOrchestrator:
         trace = policy_flags.setdefault("pipeline_trace", [])
         if isinstance(trace, list):
             trace.append({"stage": stage, "step": state.get("step", 0), **fields})
+            if len(trace) > _PIPELINE_TRACE_CAP:
+                del trace[: len(trace) - _PIPELINE_TRACE_CAP]
 
     def _route_after_plan(self, state: RunState) -> str:
         """Route graph transitions based on the planner's pending action."""
@@ -1421,43 +1500,15 @@ class LangGraphOrchestrator:
                 token_budget=int(state.get("token_budget_remaining", 0)),
             )
         )
+        if len(state["handoff_queue"]) > _HANDOFF_QUEUE_CAP:
+            state["handoff_queue"] = state["handoff_queue"][-_HANDOFF_QUEUE_CAP:]
 
         if specialist in ("executor", "evaluator"):
-            # Build ExecutorState for the subgraph invocation.
-            # The subgraph invocation provides real subgraph node transitions in logs
-            # (satisfying ROADMAP Phase 4 Success Criterion 1).
-            # _execute_action() is still called for its full pre-processing pipeline
-            # (arg normalization, duplicate detection, auto-memo-lookup, content validation,
-            # mission attribution) — the approaches are complementary, not redundant.
-
-            # Get enriched context from ContextManager
-            specialist_ctx = self.context_manager.build_specialist_context(
-                state, max(0, int(mission_id or 0))
-            )
-
-            exec_state: dict[str, Any] = {
-                "task_id": task_id,
-                "specialist": "executor",
-                "mission_id": max(0, int(mission_id or 0)),
-                "tool_scope": tool_scope,
-                "input_context": {
-                    "tool_name": tool_name,
-                    "args": dict(action.get("args", {})),
-                    "step": int(state["step"]),
-                },
-                "token_budget": int(state.get("token_budget_remaining", 0)),
-                "exec_tool_history": [],
-                "exec_seen_signatures": [],
-                "result": {},
-                "tokens_used": 0,
-                "status": "success",
-                "mission_goal": specialist_ctx.get("mission_goal", ""),
-                "prior_results_summary": specialist_ctx.get("prior_results_summary", ""),
-            }
-            # Invoke the compiled subgraph — this records real subgraph node transitions.
-            self._executor_subgraph.invoke(exec_state, config={"callbacks": self._active_callbacks})
-            # Execute through _execute_action() to apply full pipeline (arg normalization,
-            # duplicate detection, auto-memo-lookup, content validation, mission attribution).
+            # W1-1 fix: Removed dual-execution bug. Previously, both
+            # _executor_subgraph.invoke() AND _execute_action() fired for each tool,
+            # causing duplicate side effects. Now only _execute_action() runs —
+            # it handles the full pipeline (arg normalization, duplicate detection,
+            # auto-memo-lookup, content validation, mission attribution).
             pre_tool_history_len = len(state.get("tool_history", []))
             state = self._execute_action(state)
             post_tool_history_len = len(state.get("tool_history", []))
@@ -1489,6 +1540,8 @@ class LangGraphOrchestrator:
                 tokens_used=0,
             )
         )
+        if len(state["handoff_results"]) > _HANDOFF_RESULTS_CAP:
+            state["handoff_results"] = state["handoff_results"][-_HANDOFF_RESULTS_CAP:]
         self.logger.info(
             "SPECIALIST OUTPUT step=%s run_id=%s task_id=%s specialist=%s status=%s via_subgraph=True",
             state["step"],
@@ -1732,7 +1785,7 @@ class LangGraphOrchestrator:
                 state=state,
             )
             return state
-        state["seen_tool_signatures"].append(signature)
+        state["seen_tool_signatures"].add(signature)
 
         self.logger.info("TOOL EXEC step=%s tool=%s args=%s", state["step"], tool_name, tool_args)
         tool_result = self.tools[tool_name].execute(tool_args)

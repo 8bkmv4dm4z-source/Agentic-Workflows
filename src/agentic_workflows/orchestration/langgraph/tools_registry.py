@@ -24,9 +24,10 @@ from agentic_workflows.tools.http_request import HttpRequestTool
 from agentic_workflows.tools.json_parser import JsonParserTool
 from agentic_workflows.tools.list_directory import ListDirectoryTool
 from agentic_workflows.tools.math_stats import MathStatsTool
-from agentic_workflows.tools.parse_code_structure import ParseCodeStructureTool
+from agentic_workflows.tools.parse_code_structure import OutlineCodeTool
 from agentic_workflows.tools.query_db import QueryDBTool
 from agentic_workflows.tools.read_file import ReadFileTool
+from agentic_workflows.tools.read_file_chunk import ReadFileChunkTool
 from agentic_workflows.tools.recognize_pattern import RecognizePatternTool
 from agentic_workflows.tools.regex_matcher import RegexMatcherTool
 from agentic_workflows.tools.retrieve_run_context import RetrieveRunContextTool
@@ -135,7 +136,8 @@ def build_tool_registry(
         "data_analysis": DataAnalysisTool(),
         "json_parser": JsonParserTool(),
         "regex_matcher": RegexMatcherTool(),
-        "parse_code_structure": ParseCodeStructureTool(),
+        "outline_code": OutlineCodeTool(),
+        "read_file_chunk": ReadFileChunkTool(),
         "describe_db_schema": DescribeDbSchemaTool(),
         "read_file": ReadFileTool(),
         "run_bash": RunBashTool(),

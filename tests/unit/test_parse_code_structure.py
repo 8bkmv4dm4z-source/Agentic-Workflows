@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from agentic_workflows.tools.parse_code_structure import ParseCodeStructureTool
+from agentic_workflows.tools.parse_code_structure import OutlineCodeTool
 
 
 @pytest.fixture()
 def tool():
-    return ParseCodeStructureTool()
+    return OutlineCodeTool()
 
 
 class TestPythonAST:

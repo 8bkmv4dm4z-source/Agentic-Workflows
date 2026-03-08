@@ -19,6 +19,10 @@ from agentic_workflows.logger import get_logger
 
 _logger = get_logger("context_manager")
 
+# W2-5: Cap for pipeline_trace entries (matches graph.py _PIPELINE_TRACE_CAP).
+# Defined locally to avoid circular import with graph.py.
+_PIPELINE_TRACE_CAP: int = 500
+
 
 # ── Models ───────────────────────────────────────────────────────────
 
@@ -496,3 +500,5 @@ class ContextManager:
             "messages_removed": messages_removed,
             "summary_injected": summary_injected,
         })
+        if len(trace) > _PIPELINE_TRACE_CAP:
+            del trace[: len(trace) - _PIPELINE_TRACE_CAP]

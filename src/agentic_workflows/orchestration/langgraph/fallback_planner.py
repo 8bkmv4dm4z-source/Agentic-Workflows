@@ -206,7 +206,7 @@ def normalize_tool_args(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
     elif tool_name == "regex_matcher":
         if "pattern" not in normalized and isinstance(normalized.get("regex"), str):
             normalized["pattern"] = normalized.pop("regex")
-    elif tool_name == "parse_code_structure":
+    elif tool_name == "outline_code":
         if "path" not in normalized and isinstance(normalized.get("file_path"), str):
             normalized["path"] = normalized.pop("file_path")
     elif tool_name in ("list_directory", "search_content", "search_files"):

@@ -39,7 +39,8 @@ EXECUTOR_TOOLS = frozenset(
         "json_parser",
         "regex_matcher",
         # Phase 4.7 additions
-        "parse_code_structure",
+        "outline_code",
+        "read_file_chunk",
         "describe_db_schema",
         # Phase 5 additions
         "read_file",

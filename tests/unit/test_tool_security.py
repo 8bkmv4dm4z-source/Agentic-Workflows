@@ -156,6 +156,7 @@ class TestCheckContentSize:
 
 class TestRunBashToolSecurity:
     def test_blocks_denied_command(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("P1_BASH_ENABLED", "true")
         monkeypatch.setenv("P1_BASH_DENIED_PATTERNS", "rm -rf")
         from agentic_workflows.tools.run_bash import RunBashTool
         tool = RunBashTool()
@@ -164,6 +165,7 @@ class TestRunBashToolSecurity:
         assert "blocked" in result["error"]
 
     def test_allows_when_env_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("P1_BASH_ENABLED", "true")
         monkeypatch.delenv("P1_BASH_DENIED_PATTERNS", raising=False)
         from agentic_workflows.tools.run_bash import RunBashTool
         tool = RunBashTool()

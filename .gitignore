@@ -52,3 +52,5 @@ coverage.xml
 *.swp
 agent-planner-pe-methods.jsx
 Agentic AI Workflows_*.md
+workspace/*
+!workspace/.gitkeep

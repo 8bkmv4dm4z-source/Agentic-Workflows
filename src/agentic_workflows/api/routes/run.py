@@ -77,64 +77,26 @@ async def post_run(body: RunRequest, request: Request) -> EventSourceResponse:
         try:
             def _run_streaming() -> dict[str, Any]:
                 """Stream node transitions and return final result."""
-                from agentic_workflows.orchestration.langgraph.mission_parser import parse_missions
                 from agentic_workflows.orchestration.langgraph.state_schema import (
                     ensure_state_defaults,
-                    new_run_state,
                 )
 
-                # Build state (mirror run() logic)
-                state = new_run_state(orchestrator.system_prompt, user_input, run_id=run_id)
-                if prior_context:
-                    prior_system_parts = [
-                        m["content"] for m in prior_context if m.get("role") == "system"
-                    ]
-                    prior_conversation = [
-                        m for m in prior_context if m.get("role") != "system"
-                    ]
-                    if prior_system_parts:
-                        for msg in state["messages"]:
-                            if msg.get("role") == "system":
-                                msg["content"] += "\n\n" + "\n".join(prior_system_parts)
-                                break
-                    if prior_conversation:
-                        system_msgs = [m for m in state["messages"] if m.get("role") == "system"]
-                        user_msgs = [m for m in state["messages"] if m.get("role") != "system"]
-                        state["messages"] = system_msgs + prior_conversation + user_msgs
-
-                state = ensure_state_defaults(state, system_prompt=orchestrator.system_prompt)
-                state["rerun_context"] = {}
-
-                structured_plan = parse_missions(user_input)
-                missions = structured_plan.flat_missions
-                contracts = orchestrator._build_mission_contracts_from_plan(structured_plan, missions)
-                state["missions"] = missions
-                state["structured_plan"] = structured_plan.to_dict()
-                state["mission_contracts"] = contracts
-                state["mission_reports"] = orchestrator._initialize_mission_reports(
-                    missions, contracts=contracts
+                # W3-7: Use prepare_state() — single source of truth for state init.
+                state = orchestrator.prepare_state(
+                    user_input,
+                    run_id=run_id,
+                    prior_context=prior_context,
                 )
-                state["active_mission_index"] = -1
-                state["active_mission_id"] = 0
 
-                # Setup callbacks
+                # Setup callbacks via ContextVar (W1-2: per-request isolation)
                 from agentic_workflows.observability import get_langfuse_callback_handler
-                orchestrator._active_callbacks = []
+                from agentic_workflows.orchestration.langgraph.graph import _active_callbacks_var
                 handler = get_langfuse_callback_handler()
-                if handler is not None:
-                    orchestrator._active_callbacks = [handler]
-
-                orchestrator._write_shared_plan(state)
-                orchestrator.checkpoint_store.save(
-                    run_id=state["run_id"],
-                    step=state["step"],
-                    node_name="init",
-                    state=state,
-                )
+                _active_callbacks_var.set([handler] if handler else [])
 
                 config = {
                     "recursion_limit": orchestrator.max_steps * 9,
-                    "callbacks": orchestrator._active_callbacks,
+                    "callbacks": _active_callbacks_var.get(),
                 }
 
                 # Stream graph execution, emitting SSE events for each node.
