@@ -134,6 +134,7 @@ class MissionContextResult(TypedDict):
     summary: str
     tools_used: list[str]
     score: float
+    source_layer: str
 
 
 # ---------------------------------------------------------------------------
@@ -280,7 +281,7 @@ class MissionContextStore:
             ).fetchone()
             if row:
                 _logger.info("CASCADE QUERY short_circuit layer=L0 results=1")
-                return [self._row_to_result(row, score=1.0)]
+                return [self._row_to_result(row, score=1.0, source_layer="L0")]
 
             # L1: tool bitmask structural match -- short-circuit if sufficient
             if tools_used:
@@ -296,7 +297,7 @@ class MissionContextStore:
                     _logger.debug("CASCADE QUERY layer=L1 hits=%d", len(rows))
                     if len(rows) >= top_k:
                         _logger.info("CASCADE QUERY short_circuit layer=L1 results=%d", len(rows))
-                        return [self._row_to_result(r, score=0.9) for r in rows[:top_k]]
+                        return [self._row_to_result(r, score=0.9, source_layer="L1") for r in rows[:top_k]]
 
             # L2: BM25 tsvector keyword search
             l2_ids: list[str] = []
@@ -322,7 +323,7 @@ class MissionContextStore:
                 fused_l2 = reciprocal_rank_fusion(l2_ids)
                 for doc_id, rrf_score in list(fused_l2.items())[:top_k]:
                     if doc_id in l2_id_to_row:
-                        results_l2.append(self._row_to_result(l2_id_to_row[doc_id], score=rrf_score))
+                        results_l2.append(self._row_to_result(l2_id_to_row[doc_id], score=rrf_score, source_layer="L2"))
                 return results_l2
 
             # L4: pgvector HNSW cosine similarity
@@ -347,21 +348,31 @@ class MissionContextStore:
             fused = reciprocal_rank_fusion(l2_ids, l4_ids)
             results: list[MissionContextResult] = []
             all_rows = {**l2_id_to_row, **l4_id_to_row}
+            l2_set = set(l2_ids)
+            l4_set = set(l4_ids)
             for doc_id, rrf_score in list(fused.items())[:top_k]:
                 if doc_id in all_rows:
-                    results.append(self._row_to_result(all_rows[doc_id], score=rrf_score))
+                    in_l2 = doc_id in l2_set
+                    in_l4 = doc_id in l4_set
+                    if in_l2 and in_l4:
+                        layer = "RRF"
+                    elif in_l4:
+                        layer = "L4"
+                    else:
+                        layer = "L2"
+                    results.append(self._row_to_result(all_rows[doc_id], score=rrf_score, source_layer=layer))
 
             # Fallback: if no RRF results, return L2 results by rank
             if not results and l2_rows:
                 for r in l2_rows[:top_k]:
                     results.append(
-                        self._row_to_result(r, score=float(r[6]) if len(r) > 6 else 0.5)
+                        self._row_to_result(r, score=float(r[6]) if len(r) > 6 else 0.5, source_layer="L2")
                     )
 
             return results
 
     @staticmethod
-    def _row_to_result(row: tuple, score: float) -> MissionContextResult:
+    def _row_to_result(row: tuple, score: float, source_layer: str = "") -> MissionContextResult:
         """Convert a DB row tuple to MissionContextResult TypedDict."""
         return MissionContextResult(
             id=int(row[0]),
@@ -371,4 +382,5 @@ class MissionContextStore:
             summary=str(row[4]) if row[4] else "",
             tools_used=list(row[5]) if row[5] else [],
             score=score,
+            source_layer=source_layer,
         )

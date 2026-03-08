@@ -275,3 +275,86 @@ class TestSmoketwOruns:
 
         # Mission 2 should see mission 1's context
         assert "[Cross-run] Similar:" in injection or "sort" in injection.lower()
+
+
+@requires_postgres
+@pytest.mark.postgres
+class TestContextInjectionLogging:
+    """SCS-11: Attribution logging in build_planner_context_injection."""
+
+    def test_log_line_contains_hits_bracket(self, pg_pool, clean_pg, caplog):
+        """CONTEXT INJECT log line must include 'hits=[' attribution field."""
+        import logging
+
+        provider = MockEmbeddingProvider()
+        store = MissionContextStore(pool=pg_pool, embedding_provider=provider)
+
+        prior_goal = "Compute fibonacci sequence of length 50"
+        embedding = _make_embedding(prior_goal)
+        store.upsert(
+            run_id="run-log-01",
+            mission_id="m-log-01",
+            goal=prior_goal,
+            status="completed",
+            summary="Computed fib(50) using math_stats",
+            tools_used=["math_stats"],
+            key_results={},
+            embedding=embedding,
+        )
+
+        cm = ContextManager(
+            mission_context_store=store,
+            embedding_provider=provider,
+        )
+        state: dict = {
+            "missions": ["Compute fibonacci numbers up to length 50"],
+            "mission_contexts": {},
+            "messages": [],
+            "step": 1,
+        }
+
+        with caplog.at_level(logging.INFO, logger="context_manager"):
+            cm.build_planner_context_injection(state)
+
+        inject_records = [r for r in caplog.records if "CONTEXT INJECT" in r.message]
+        assert inject_records, "Expected at least one CONTEXT INJECT log record"
+        assert any("hits=[" in r.message for r in inject_records)
+
+    def test_l0_exact_match_logs_l0_100(self, pg_pool, clean_pg, caplog):
+        """L0 exact match should log 'L0:1.00' in the hits=[...] attribution."""
+        import logging
+
+        provider = MockEmbeddingProvider()
+        store = MissionContextStore(pool=pg_pool, embedding_provider=provider)
+
+        exact_goal = "Compute fibonacci sequence of length 50"
+        embedding = _make_embedding(exact_goal)
+        store.upsert(
+            run_id="run-log-02",
+            mission_id="m-log-02",
+            goal=exact_goal,
+            status="completed",
+            summary="Computed fib(50)",
+            tools_used=["math_stats"],
+            key_results={},
+            embedding=embedding,
+        )
+
+        cm = ContextManager(
+            mission_context_store=store,
+            embedding_provider=provider,
+        )
+        state: dict = {
+            "missions": [exact_goal],  # exact same goal triggers L0
+            "mission_contexts": {},
+            "messages": [],
+            "step": 1,
+        }
+
+        with caplog.at_level(logging.INFO, logger="context_manager"):
+            cm.build_planner_context_injection(state)
+
+        inject_records = [r for r in caplog.records if "CONTEXT INJECT" in r.message]
+        assert inject_records, "Expected at least one CONTEXT INJECT log record"
+        # L0 exact hit → source_layer="L0", score=1.0 → "L0:1.00"
+        assert any("L0:1.00" in r.message for r in inject_records)

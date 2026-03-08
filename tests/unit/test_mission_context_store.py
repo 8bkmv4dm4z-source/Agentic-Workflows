@@ -130,3 +130,61 @@ class TestL2EarlyExit:
             f"Expected 2 DB calls (L0+L2), got {mock_conn.execute.call_count}"
         )
         assert len(results) == 3
+
+
+class TestSourceLayerAttribution:
+    """source_layer field is set correctly on results from _cascade()."""
+
+    def _make_fake_row(self, id_: int) -> tuple:
+        """Minimal DB row tuple matching the SELECT column order."""
+        return (id_, "run-1", "m-1", f"goal {id_}", f"summary {id_}", ["write_file"], 0.9)
+
+    def test_l0_hit_has_source_layer_l0(self):
+        """L0 exact hash match must set source_layer='L0' and score=1.0."""
+        from unittest.mock import MagicMock
+
+        store = MissionContextStore(pool=None)
+        mock_conn = MagicMock()
+        mock_pool = MagicMock()
+        mock_pool.connection.return_value.__enter__ = MagicMock(return_value=mock_conn)
+        mock_pool.connection.return_value.__exit__ = MagicMock(return_value=False)
+
+        l0_row = self._make_fake_row(99)
+        mock_conn.execute.return_value.fetchone = MagicMock(return_value=l0_row)
+
+        store._pool = mock_pool
+        results = store._cascade("exact goal", [], None, top_k=3)
+
+        assert len(results) == 1
+        assert results[0]["source_layer"] == "L0"
+        assert results[0]["score"] == 1.0
+
+    def test_l2_early_exit_has_source_layer_l2(self):
+        """L2 early-exit path must set source_layer='L2' on all results."""
+        from unittest.mock import MagicMock
+
+        store = MissionContextStore(pool=None)
+        mock_conn = MagicMock()
+        mock_pool = MagicMock()
+        mock_pool.connection.return_value.__enter__ = MagicMock(return_value=mock_conn)
+        mock_pool.connection.return_value.__exit__ = MagicMock(return_value=False)
+
+        l2_rows = [self._make_fake_row(i) for i in range(3)]
+        execute_returns = [
+            MagicMock(fetchone=MagicMock(return_value=None)),   # L0 miss
+            MagicMock(fetchall=MagicMock(return_value=l2_rows)),  # L2 returns 3 (>= top_k=3)
+        ]
+        mock_conn.execute.side_effect = execute_returns
+
+        store._pool = mock_pool
+        results = store._cascade("sort the list", [], [0.1] * 384, top_k=3)
+
+        assert len(results) == 3
+        for r in results:
+            assert r["source_layer"] == "L2", f"Expected 'L2', got '{r['source_layer']}'"
+
+    def test_fallback_no_pool_returns_empty(self):
+        """query_cascade() returns [] when pool=None (no source_layer needed)."""
+        store = MissionContextStore(pool=None)
+        results = store.query_cascade("any goal")
+        assert results == []

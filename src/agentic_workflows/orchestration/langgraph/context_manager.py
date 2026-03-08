@@ -561,6 +561,7 @@ class ContextManager:
         # Phase 7.3: append cross-run similar missions from cascade store
         _CONTEXT_CAP = 1500  # total chars across all injected content
         cross_run_lines: list[str] = []
+        hits: list = []
         current_step = state.get("step", 0)
         if self._store is not None and current_step > 0:
             try:
@@ -570,8 +571,8 @@ class ContextManager:
                 if not goal_text:
                     result = base_result[:_CONTEXT_CAP] if base_result else base_result
                     self._logger.info(
-                        "CONTEXT INJECT missions=%d cross_run_hits=%d chars=%d cached=%s",
-                        len(summaries), 0, len(result), False,
+                        "CONTEXT INJECT missions=%d cross_run_hits=%d chars=%d cached=%s hits=[%s]",
+                        len(summaries), 0, len(result), False, "-",
                     )
                     return result
 
@@ -609,11 +610,19 @@ class ContextManager:
         if not cross_run_lines:
             result = base_result[:_CONTEXT_CAP] if base_result else base_result
             self._logger.info(
-                "CONTEXT INJECT missions=%d cross_run_hits=%d chars=%d cached=%s",
+                "CONTEXT INJECT missions=%d cross_run_hits=%d chars=%d cached=%s hits=[%s]",
                 len(summaries), 0, len(result),
                 f"{state.get('run_id', '')}:{self._get_current_goal_text(state)}" in self._cascade_cache,
+                "-",
             )
             return result
+
+        # Build attribution string from source_layer and score fields
+        attribution_parts = [
+            f"{hit.get('source_layer', '?')}:{hit.get('score', 0.0):.2f}"
+            for hit in hits
+        ]
+        attribution = ", ".join(attribution_parts) if attribution_parts else "-"
 
         # Combine: existing content takes priority, cross-run hits fill remaining capacity
         remaining = _CONTEXT_CAP - len(base_result)
@@ -625,9 +634,10 @@ class ContextManager:
             result = combined[:_CONTEXT_CAP]
 
         self._logger.info(
-            "CONTEXT INJECT missions=%d cross_run_hits=%d chars=%d cached=%s",
+            "CONTEXT INJECT missions=%d cross_run_hits=%d chars=%d cached=%s hits=[%s]",
             len(summaries), len(cross_run_lines), len(result),
             f"{state.get('run_id', '')}:{self._get_current_goal_text(state)}" in self._cascade_cache,
+            attribution,
         )
         return result
 
