@@ -35,12 +35,17 @@ def test_memo_events_has_annotated_reducer():
     assert hint.__metadata__[0] is operator.add, "reducer must be operator.add"
 
 
-def test_seen_tool_signatures_has_annotated_reducer():
-    """RunState.seen_tool_signatures must be Annotated[list[str], operator.add]."""
+def test_seen_tool_signatures_is_plain_set():
+    """RunState.seen_tool_signatures must be set[str] (no Annotated wrapper)."""
     hints = typing.get_type_hints(RunState, include_extras=True)
     hint = hints["seen_tool_signatures"]
-    assert hasattr(hint, "__metadata__"), "seen_tool_signatures must be Annotated"
-    assert hint.__metadata__[0] is operator.add, "reducer must be operator.add"
+    # Must NOT have Annotated metadata — it should be a plain set[str]
+    assert not hasattr(hint, "__metadata__"), (
+        "seen_tool_signatures must NOT be Annotated (should be plain set[str])"
+    )
+    # Verify it's set[str]
+    origin = getattr(hint, "__origin__", None)
+    assert origin is set, f"Expected set origin, got {origin}"
 
 
 def test_mission_reports_has_annotated_reducer():
@@ -123,7 +128,10 @@ def test_compaction_threshold_configurable():
 
 
 def test_annotated_list_fields_synchronized():
-    """_ANNOTATED_LIST_FIELDS must contain every Annotated[list[...], operator.add] field in RunState."""
+    """_ANNOTATED_LIST_FIELDS must contain every Annotated[list[...], operator.add] field in RunState.
+
+    seen_tool_signatures is NOT in this set (converted to plain set[str] in W2-4).
+    """
     from typing import Annotated, get_args, get_origin, get_type_hints
 
     from agentic_workflows.orchestration.langgraph.graph import _ANNOTATED_LIST_FIELDS
@@ -139,6 +147,54 @@ def test_annotated_list_fields_synchronized():
     assert reducer_fields == _ANNOTATED_LIST_FIELDS, (
         f"Mismatch: RunState has {reducer_fields}, _ANNOTATED_LIST_FIELDS has {_ANNOTATED_LIST_FIELDS}"
     )
+    assert "seen_tool_signatures" not in _ANNOTATED_LIST_FIELDS, (
+        "seen_tool_signatures must NOT be in _ANNOTATED_LIST_FIELDS (converted to set[str])"
+    )
+
+
+# ---------------------------------------------------------------------------
+# seen_tool_signatures checkpoint roundtrip test (W2-4)
+# ---------------------------------------------------------------------------
+
+
+def test_seen_tool_signatures_checkpoint_roundtrip():
+    """seen_tool_signatures set survives JSON roundtrip via set-aware serializer."""
+    import json
+
+    original = {"sig1", "sig2", "sig3"}
+    state = {"seen_tool_signatures": original, "step": 0}
+
+    # Serialize with set-aware default (matches checkpoint_store pattern)
+    serialized = json.dumps(
+        state, sort_keys=True,
+        default=lambda x: sorted(x) if isinstance(x, set) else str(x),
+    )
+
+    # Deserialize and convert list back to set (matches ensure_state_defaults pattern)
+    loaded = json.loads(serialized)
+    restored = set(loaded["seen_tool_signatures"])
+
+    assert restored == original, f"Expected {original}, got {restored}"
+
+
+def test_ensure_state_defaults_converts_list_to_set():
+    """ensure_state_defaults must convert seen_tool_signatures list (from JSON) to set."""
+    state = {"seen_tool_signatures": ["sig1", "sig2"]}
+    result = ensure_state_defaults(state)
+    assert isinstance(result["seen_tool_signatures"], set), (
+        f"Expected set, got {type(result['seen_tool_signatures'])}"
+    )
+    assert result["seen_tool_signatures"] == {"sig1", "sig2"}
+
+
+def test_new_run_state_initializes_set():
+    """new_run_state must initialize seen_tool_signatures as set()."""
+    from agentic_workflows.orchestration.langgraph.state_schema import new_run_state
+    state = new_run_state("system", "user")
+    assert isinstance(state["seen_tool_signatures"], set), (
+        f"Expected set, got {type(state['seen_tool_signatures'])}"
+    )
+    assert state["seen_tool_signatures"] == set()
 
 
 # ---------------------------------------------------------------------------

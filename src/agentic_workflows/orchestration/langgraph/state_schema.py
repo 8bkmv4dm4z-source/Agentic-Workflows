@@ -82,7 +82,7 @@ class RunState(TypedDict):
     retry_counts: dict[str, int]
     policy_flags: dict[str, Any]
     # Duplicate-call prevention and tool usage telemetry.
-    seen_tool_signatures: Annotated[list[str], operator.add]  # type: ignore[misc]
+    seen_tool_signatures: set[str]
     tool_call_counts: dict[str, int]
     # Human-readable mission-level report data.
     missions: list[str]
@@ -153,7 +153,7 @@ def new_run_state(system_prompt: str, user_input: str, run_id: str | None = None
             "cache_reuse_attempted": [],
             "planner_timeout_mode": False,
         },
-        "seen_tool_signatures": [],
+        "seen_tool_signatures": set(),
         "tool_call_counts": {},
         "missions": [],
         "mission_reports": [],
@@ -202,7 +202,9 @@ def ensure_state_defaults(state: RunState | dict[str, Any], *, system_prompt: st
     if "policy_flags" not in state_dict:
         state_dict["policy_flags"] = {}
     if "seen_tool_signatures" not in state_dict:
-        state_dict["seen_tool_signatures"] = []
+        state_dict["seen_tool_signatures"] = set()
+    elif isinstance(state_dict["seen_tool_signatures"], list):
+        state_dict["seen_tool_signatures"] = set(state_dict["seen_tool_signatures"])
     if "tool_call_counts" not in state_dict:
         state_dict["tool_call_counts"] = {}
     if "missions" not in state_dict:

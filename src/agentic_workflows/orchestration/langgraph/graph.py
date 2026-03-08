@@ -84,7 +84,7 @@ class MemoizationPolicyViolation(RuntimeError):
 # delta in the returned dict. Wrap every graph node with _sequential_node() to
 # apply this correction automatically.
 _ANNOTATED_LIST_FIELDS: frozenset[str] = frozenset(
-    {"tool_history", "memo_events", "seen_tool_signatures", "mission_reports"}
+    {"tool_history", "memo_events", "mission_reports"}
 )
 
 # W1-2: Per-run callback isolation via ContextVar.
@@ -315,7 +315,7 @@ class LangGraphOrchestrator:
                 tool_name = tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", "")
                 tool_args = tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {})
                 signature = f"{tool_name}:{json.dumps(tool_args, sort_keys=True, default=str)}"
-                if signature in state.get("seen_tool_signatures", []):
+                if signature in state.get("seen_tool_signatures", set()):
                     self.logger.info(
                         "TOOL_NODE DEDUP BLOCK tool=%s signature=%s",
                         tool_name,
@@ -1708,7 +1708,7 @@ class LangGraphOrchestrator:
                 state=state,
             )
             return state
-        state["seen_tool_signatures"].append(signature)
+        state["seen_tool_signatures"].add(signature)
 
         self.logger.info("TOOL EXEC step=%s tool=%s args=%s", state["step"], tool_name, tool_args)
         tool_result = self.tools[tool_name].execute(tool_args)
