@@ -1,0 +1,86 @@
+# docker/docker-compose.stress.yml
+# Multi-replica stress test environment: 3 API replicas + pgBouncer + Postgres.
+# Manual use only — NOT run in CI.
+#
+# Usage:
+#   docker compose -f docker/docker-compose.stress.yml up --build --scale api=3
+#   python scripts/stress_test.py --url http://localhost:8000 --concurrency 10
+#
+# Requires: docker compose >= v2.5 for deploy.replicas support in local mode.
+# Note: Port mapping with replicas requires either --scale flag or a load balancer.
+# Use nginx below for a single entry point across 3 api replicas.
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: agentic_workflows
+      POSTGRES_USER: agentic
+      POSTGRES_PASSWORD: agentic_secret
+    ports:
+      - "5433:5432"
+    volumes:
+      - pg_stress_data:/var/lib/postgresql/data
+      - ../db/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentic -d agentic_workflows"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - stress_net
+
+  pgbouncer:
+    image: bitnami/pgbouncer:latest
+    environment:
+      POSTGRESQL_HOST: db
+      POSTGRESQL_PORT: 5432
+      POSTGRESQL_DATABASE: agentic_workflows
+      POSTGRESQL_USERNAME: agentic
+      POSTGRESQL_PASSWORD: agentic_secret
+      PGBOUNCER_PORT: 6432
+      PGBOUNCER_POOL_MODE: transaction
+      PGBOUNCER_MAX_CLIENT_CONN: 200
+      PGBOUNCER_DEFAULT_POOL_SIZE: 20
+    ports:
+      - "6432:6432"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - stress_net
+
+  api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql://agentic:agentic_secret@pgbouncer:6432/agentic_workflows
+      P1_PROVIDER: scripted
+      AGENT_WORKDIR: /app/workspace
+      AGENT_ROOT: /app/project
+    depends_on:
+      pgbouncer:
+        condition: service_started
+    deploy:
+      replicas: 3
+    networks:
+      - stress_net
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "8000:80"
+    volumes:
+      - ./nginx-stress.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - api
+    networks:
+      - stress_net
+
+volumes:
+  pg_stress_data:
+
+networks:
+  stress_net:
+    driver: bridge
