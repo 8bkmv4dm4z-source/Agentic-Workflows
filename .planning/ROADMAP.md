@@ -174,7 +174,19 @@ Plans:
   3. `MockEmbeddingProvider` returns deterministic 384-dim vectors with no model download; `EMBEDDING_PROVIDER=fastembed` loads fastembed ONNX
   4. `ContextManager.build_planner_context_injection()` injects top-3 cross-run similar missions (formatted as `[Cross-run] Similar: ...`) up to 1500 chars total
   5. All 823+ existing tests pass unchanged; new unit tests cover each cascade layer independently; coverage ≥ 80%
-**Plans**: TBD
+**Plans**: 10 plans
+
+Plans:
+- [ ] 07.3-00-PLAN.md — Wave 0: Failing test stubs + conftest clean_pg extension (SCS-01 through SCS-10)
+- [ ] 07.3-01-PLAN.md — Wave 1A: DB migrations 002 (vector fix) + 003 (mission_contexts) + 004 (mission_artifacts)
+- [ ] 07.3-02-PLAN.md — Wave 1B: context/ package — EmbeddingProvider Protocol, MockEmbeddingProvider, FastEmbedProvider, factory + pyproject.toml
+- [ ] 07.3-03-PLAN.md — Wave 2A: MissionContextStore — 5-layer cascade, RRF, encode_tool_pattern, upsert, pool=None fallback
+- [ ] 07.3-04-PLAN.md — Wave 2B: ArtifactStore — upsert, semantic search, pool=None fallback
+- [ ] 07.3-05-PLAN.md — Wave 3A: ContextManager wiring — optional params, _persist_mission_context, cross-run injection, 1500-char cap
+- [ ] 07.3-06-PLAN.md — Wave 3B: graph.py wiring — LangGraphOrchestrator optional params forwarded to ContextManager
+- [ ] 07.3-07-PLAN.md — Wave 4A: Postgres integration tests — full cascade cycle, cross-run injection, two-run smoke
+- [ ] 07.3-08-PLAN.md — Wave 4B: docker-compose.stress.yml + scripts/stress_test.py
+- [ ] 07.3-09-PLAN.md — Wave 4C: WALKTHROUGH_PHASE7.3.md
 
 ## Progress
 
@@ -192,4 +204,4 @@ Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7 → 7.1 → 7.2
 | 7. Production Persistence and CI | 4/4 | Complete   | 2026-03-06 |
 | 7.1. Context Manipulation (INSERTED) | 3/4 | In Progress|  |
 | 7.2. Architecture Review - Critical Bug Fixes (INSERTED) | 5/5 | Complete   | 2026-03-08 |
-| 7.3. Hybrid Deterministic + Semantic Context System (INSERTED) | 0/TBD | Planning |  |
+| 7.3. Hybrid Deterministic + Semantic Context System (INSERTED) | 0/10 | Planning |  |
