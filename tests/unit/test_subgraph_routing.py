@@ -1,13 +1,15 @@
 """Unit tests for subgraph routing via _route_to_specialist().
 
-These tests verify that after Phase 4 wiring:
-- tool actions route through self._executor_subgraph.invoke() and tag entries
-  with via_subgraph=True in state["tool_history"]
-- finish actions still go through _execute_action() without via_subgraph tags
+These tests verify that after Phase 7.2 W1-1 fix:
+- _executor_subgraph.invoke is NOT called during routing (removed dual-execution)
+- _execute_action IS called (the main pipeline path)
+- tool_history contains exactly one entry per tool call (no duplicates)
 - HandoffResult is appended exactly once per tool action to handoff_results
 """
 
 from __future__ import annotations
+
+from unittest.mock import patch
 
 from agentic_workflows.orchestration.langgraph.graph import LangGraphOrchestrator
 from agentic_workflows.orchestration.langgraph.state_schema import new_run_state
@@ -142,4 +144,28 @@ def test_call_index_assigned_sequentially() -> None:
     # First new entry must have call = 3
     assert new_entries[0]["call"] == 3, (
         f"Expected call=3 for first new entry, got call={new_entries[0].get('call')}"
+    )
+
+
+def test_executor_subgraph_invoke_not_called_during_routing() -> None:
+    """W1-1: _executor_subgraph.invoke must NOT be called during _route_to_specialist.
+
+    The dual-execution bug caused both subgraph.invoke AND _execute_action to fire,
+    producing duplicate tool side effects. After the fix, only _execute_action runs.
+    """
+    orch = _make_orch()
+    state = _make_state(orch)
+    state["pending_action"] = {
+        "action": "tool",
+        "tool_name": "repeat_message",
+        "args": {"message": "no-double-exec"},
+        "__mission_id": 1,
+    }
+
+    with patch.object(orch._executor_subgraph, "invoke", wraps=orch._executor_subgraph.invoke) as mock_invoke:
+        orch._route_to_specialist(state)
+
+    mock_invoke.assert_not_called(), (
+        "_executor_subgraph.invoke should NOT be called during routing — "
+        "only _execute_action should fire"
     )
