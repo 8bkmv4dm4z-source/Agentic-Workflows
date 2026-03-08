@@ -39,6 +39,9 @@ dev = [
     "pytest-cov>=6.0",
 ]
 observability = ["langfuse>=3.0"]
+context = [
+    "fastembed>=0.3",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
