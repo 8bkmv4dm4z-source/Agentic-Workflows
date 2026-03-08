@@ -17,7 +17,11 @@ import re
 import threading
 import typing
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from agentic_workflows.context.embedding_provider import EmbeddingProvider
+    from agentic_workflows.storage.mission_context_store import MissionContextStore
 
 from agentic_workflows.logger import get_logger
 from agentic_workflows.observability import get_langfuse_callback_handler, observe
@@ -162,6 +166,8 @@ class LangGraphOrchestrator:
         max_duplicate_tool_retries: int = 6,
         max_finish_rejections: int = 6,
         on_specialist_route: Any = None,
+        embedding_provider: EmbeddingProvider | None = None,
+        mission_context_store: MissionContextStore | None = None,
     ) -> None:
         self.provider = provider or build_provider()
         self._router = ModelRouter(
@@ -184,7 +190,12 @@ class LangGraphOrchestrator:
         self.max_duplicate_tool_retries = max_duplicate_tool_retries
         self.max_finish_rejections = max_finish_rejections
         self._on_specialist_route = on_specialist_route
-        self.context_manager = ContextManager()
+        self._embedding_provider = embedding_provider
+        self._mission_context_store = mission_context_store
+        self.context_manager = ContextManager(
+            mission_context_store=mission_context_store,
+            embedding_provider=embedding_provider,
+        )
         self.strict_single_action_mode = self._env_bool("P1_STRICT_SINGLE_ACTION", False)
         self.tools: dict[str, Tool] = build_tool_registry(
             self.memo_store, checkpoint_store=self.checkpoint_store
