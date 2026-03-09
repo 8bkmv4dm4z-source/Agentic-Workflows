@@ -112,6 +112,10 @@ class RunState(TypedDict):
     # Stored as dict[str, Any] (not MissionContext) for checkpointer serialization safety.
     # Keys are str(mission_id) for JSON serialization.
     mission_contexts: dict[str, Any]
+    # Structural health metrics for parser and schema observability (Phase 7.6).
+    # json_parse_fallback: times the extract-first-object fallback parser was used.
+    # schema_mismatch: times a Pydantic ValidationError was caught on action validation.
+    structural_health: dict[str, Any]
 
 
 def utc_now_iso() -> str:
@@ -173,6 +177,7 @@ def new_run_state(system_prompt: str, user_input: str, run_id: str | None = None
         "token_budget_remaining": 100_000,
         "token_budget_used": 0,
         "mission_contexts": {},
+        "structural_health": {"json_parse_fallback": 0, "schema_mismatch": 0},
     }
 
 
@@ -242,6 +247,11 @@ def ensure_state_defaults(state: RunState | dict[str, Any], *, system_prompt: st
         state_dict["token_budget_used"] = 0
     if "mission_contexts" not in state_dict:
         state_dict["mission_contexts"] = {}
+    if "structural_health" not in state_dict or not isinstance(state_dict["structural_health"], dict):
+        state_dict["structural_health"] = {"json_parse_fallback": 0, "schema_mismatch": 0}
+    else:
+        state_dict["structural_health"].setdefault("json_parse_fallback", 0)
+        state_dict["structural_health"].setdefault("schema_mismatch", 0)
 
     retry_counts = state_dict["retry_counts"]
     retry_counts.setdefault("invalid_json", 0)

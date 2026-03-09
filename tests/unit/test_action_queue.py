@@ -82,7 +82,7 @@ class ParseAllActionsJsonTests(unittest.TestCase):
 
     def test_single_valid_json(self) -> None:
         text = '{"action": "tool", "tool_name": "read_file", "args": {"path": "a.txt"}}'
-        result = self.orch._parse_all_actions_json(text)
+        result, _ = self.orch._parse_all_actions_json(text)
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["tool_name"], "read_file")
 
@@ -90,14 +90,14 @@ class ParseAllActionsJsonTests(unittest.TestCase):
         obj1 = json.dumps({"action": "tool", "tool_name": "write_file", "args": {"path": "a.txt", "content": "hi"}})
         obj2 = json.dumps({"action": "tool", "tool_name": "read_file", "args": {"path": "b.txt"}})
         text = f"{obj1}{obj2}"
-        result = self.orch._parse_all_actions_json(text)
+        result, _ = self.orch._parse_all_actions_json(text)
         self.assertEqual(len(result), 2)
 
     def test_skips_non_action_objects(self) -> None:
         obj1 = json.dumps({"action": "tool", "tool_name": "read_file", "args": {}})
         obj2 = json.dumps({"some_other_key": "value"})  # no "action" key
         text = f"{obj1}{obj2}"
-        result = self.orch._parse_all_actions_json(text)
+        result, _ = self.orch._parse_all_actions_json(text)
         self.assertEqual(len(result), 1)
 
     def test_mixed_valid_invalid(self) -> None:
@@ -105,7 +105,7 @@ class ParseAllActionsJsonTests(unittest.TestCase):
         obj2 = json.dumps({"action": "finish", "answer": "done"})
         # Separate bad JSON that doesn't swallow the next object
         text = f"{obj1} bad-noise {obj2}"
-        result = self.orch._parse_all_actions_json(text)
+        result, _ = self.orch._parse_all_actions_json(text)
         self.assertEqual(len(result), 2)
 
 

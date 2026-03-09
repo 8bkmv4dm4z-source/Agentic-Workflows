@@ -799,7 +799,7 @@ class LangGraphOrchestrator:
             next_action_raw = queue.pop(0)
             state["pending_action_queue"] = queue
             try:
-                validated = self._validate_action_from_dict(next_action_raw)
+                validated, _used_fallback = self._validate_action_from_dict(next_action_raw)
                 queued_mission_id = int(validated.get("__mission_id", 0))
                 self._log_queue_mission_spacing(
                     state=state,
@@ -999,7 +999,11 @@ class LangGraphOrchestrator:
             # return — the graph edge routes the state to the "tools" node next.
             if os.getenv("P1_PROVIDER", "ollama").lower() == "anthropic":
                 return state
-            all_actions = self._parse_all_actions_json(model_output)
+            all_actions, _parse_used_fallback = self._parse_all_actions_json(model_output)
+            if _parse_used_fallback:
+                state["structural_health"]["json_parse_fallback"] = (
+                    state["structural_health"].get("json_parse_fallback", 0) + 1
+                )
             if not all_actions:
                 raise ValueError("no valid JSON action objects found in model output")
             tagged_actions: list[dict[str, Any]] = []
@@ -1031,7 +1035,11 @@ class LangGraphOrchestrator:
                 previews,
             )
 
-            action = self._validate_action_from_dict(tagged_actions[0])
+            action, _validate_used_fallback = self._validate_action_from_dict(tagged_actions[0])
+            if _validate_used_fallback:
+                state["structural_health"]["json_parse_fallback"] = (
+                    state["structural_health"].get("json_parse_fallback", 0) + 1
+                )
             if len(all_actions) > 1:
                 if self.strict_single_action_mode:
                     state["pending_action_queue"] = []
@@ -1173,6 +1181,10 @@ class LangGraphOrchestrator:
             return state
         except Exception as exc:
             error_text = str(exc)
+            if "schema error" in error_text.lower() or "validation" in error_text.lower():
+                state["structural_health"]["schema_mismatch"] = (
+                    state["structural_health"].get("schema_mismatch", 0) + 1
+                )
             invalid_count = int(state["retry_counts"].get("invalid_json", 0)) + 1
             state["retry_counts"]["invalid_json"] = invalid_count
             self._emit_trace(state, "planner_retry", reason="invalid_json", retry_count=invalid_count)
@@ -2205,6 +2217,11 @@ class LangGraphOrchestrator:
             role_tool_scopes=directives.role_tool_scopes(),
         )
         state["audit_report"] = audit.to_dict()
+        # Attach structural health metrics to audit report
+        state["audit_report"]["structural_health"] = state.get("structural_health", {
+            "json_parse_fallback": 0,
+            "schema_mismatch": 0,
+        })
         self.logger.info(
             "AUDIT REPORT run_id=%s passed=%s warned=%s failed=%s",
             state["run_id"],
@@ -2298,10 +2315,10 @@ class LangGraphOrchestrator:
 
     # --- Backward-compat shims: delegated to action_parser module ---
 
-    def _validate_action(self, model_output: str) -> dict[str, Any]:
+    def _validate_action(self, model_output: str) -> tuple[dict[str, Any], bool]:
         return action_parser.validate_action(model_output, self.tools)
 
-    def _parse_action_json(self, model_output: str, state: "RunState | None" = None) -> dict[str, Any]:
+    def _parse_action_json(self, model_output: str, state: "RunState | None" = None) -> tuple[dict[str, Any], bool]:
         step = (state or {}).get("step", 0)
         return action_parser.parse_action_json(model_output, step=step)
 
@@ -2311,10 +2328,10 @@ class LangGraphOrchestrator:
     def _extract_all_json_objects(self, text: str) -> list[str]:
         return action_parser.extract_all_json_objects(text)
 
-    def _parse_all_actions_json(self, model_output: str) -> list[dict[str, Any]]:
+    def _parse_all_actions_json(self, model_output: str) -> tuple[list[dict[str, Any]], bool]:
         return action_parser.parse_all_actions_json(model_output)
 
-    def _validate_action_from_dict(self, action_dict: dict[str, Any]) -> dict[str, Any]:
+    def _validate_action_from_dict(self, action_dict: dict[str, Any]) -> tuple[dict[str, Any], bool]:
         return action_parser.validate_action_from_dict(action_dict, self.tools)
 
     # --- Backward-compat shims: delegated to mission_tracker module ---

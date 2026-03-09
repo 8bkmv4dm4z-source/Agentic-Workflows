@@ -13,7 +13,7 @@ from agentic_workflows.orchestration.langgraph import action_parser
 class TestActionParser(unittest.TestCase):
     def test_parse_action_json_recovers_first_object(self) -> None:
         raw = 'noise {"action":"finish","answer":"done"} trailing'
-        parsed = action_parser.parse_action_json(raw)
+        parsed, _ = action_parser.parse_action_json(raw)
         self.assertEqual(parsed["action"], "finish")
         self.assertEqual(parsed["answer"], "done")
 
@@ -24,32 +24,32 @@ class TestActionParser(unittest.TestCase):
 
     def test_parse_all_actions_json_filters_non_actions(self) -> None:
         raw = '{"foo":1} {"action":"finish","answer":"done"}'
-        actions = action_parser.parse_all_actions_json(raw)
+        actions, _ = action_parser.parse_all_actions_json(raw)
         self.assertEqual(len(actions), 1)
         self.assertEqual(actions[0]["action"], "finish")
 
     def test_validate_action_accepts_tool_alias(self) -> None:
         registry = {"repeat_message": object()}
         model_output = '{"action":"repeat_message","args":{"message":"ok"}}'
-        parsed = action_parser.validate_action(model_output, registry)
+        parsed, _ = action_parser.validate_action(model_output, registry)
         self.assertEqual(parsed["action"], "tool")
         self.assertEqual(parsed["tool_name"], "repeat_message")
         self.assertEqual(parsed["args"]["message"], "ok")
 
     def test_strip_thinking_removes_scratchpad(self) -> None:
         raw = '<thinking>Let me reason about this.</thinking>{"action":"finish","answer":"ok"}'
-        parsed = action_parser.parse_action_json(raw)
+        parsed, _ = action_parser.parse_action_json(raw)
         self.assertEqual(parsed["action"], "finish")
         self.assertEqual(parsed["answer"], "ok")
 
     def test_strip_thinking_multiline(self) -> None:
         raw = "<thinking>\nStep 1: plan\nStep 2: act\n</thinking>\n{\"action\":\"finish\",\"answer\":\"done\"}"
-        parsed = action_parser.parse_action_json(raw)
+        parsed, _ = action_parser.parse_action_json(raw)
         self.assertEqual(parsed["answer"], "done")
 
     def test_strip_thinking_parse_all_actions(self) -> None:
         raw = '<thinking>reasoning</thinking>{"action":"finish","answer":"a"} {"action":"finish","answer":"b"}'
-        actions = action_parser.parse_all_actions_json(raw)
+        actions, _ = action_parser.parse_all_actions_json(raw)
         self.assertEqual(len(actions), 2)
 
     def test_validate_action_from_dict_preserves_mission_id(self) -> None:
@@ -60,7 +60,7 @@ class TestActionParser(unittest.TestCase):
             "args": {"message": "hello"},
             "__mission_id": 3,
         }
-        validated = action_parser.validate_action_from_dict(payload, registry)
+        validated, _ = action_parser.validate_action_from_dict(payload, registry)
         self.assertEqual(validated["__mission_id"], 3)
         self.assertEqual(validated["tool_name"], "repeat_message")
 
@@ -102,6 +102,18 @@ class TestParserFallbackLogging:
         assert not caplog.records, (
             f"Expected no warnings on happy path; got: {[r.message for r in caplog.records]}"
         )
+
+    def test_fallback_returns_true_flag(self) -> None:
+        """Fallback path returns used_fallback=True."""
+        raw = 'noise {"action":"finish","answer":"done"}'
+        _, used_fallback = action_parser.parse_action_json(raw, step=0)
+        assert used_fallback is True, "Expected used_fallback=True on fallback path"
+
+    def test_happy_path_returns_false_flag(self) -> None:
+        """Happy path returns used_fallback=False."""
+        raw = '{"action":"finish","answer":"done"}'
+        _, used_fallback = action_parser.parse_action_json(raw, step=0)
+        assert used_fallback is False, "Expected used_fallback=False on happy path"
 
 
 if __name__ == "__main__":

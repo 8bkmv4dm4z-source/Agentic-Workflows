@@ -26,9 +26,13 @@ def _strip_thinking(text: str) -> str:
 
 def validate_action(
     model_output: str, tool_registry: dict[str, Any], step: int = 0
-) -> dict[str, Any]:
-    """Validate model output against strict ToolAction/FinishAction schema."""
-    data = parse_action_json(model_output, step=step)
+) -> tuple[dict[str, Any], bool]:
+    """Validate model output against strict ToolAction/FinishAction schema.
+
+    Returns a ``(validated_dict, used_fallback)`` tuple where ``used_fallback``
+    is ``True`` when ``parse_action_json`` used the extract-first-object fallback.
+    """
+    data, used_fallback = parse_action_json(model_output, step=step)
     action_alias = str(data.get("action", "")).strip().lower()
     if (
         "tool_name" not in data
@@ -60,31 +64,35 @@ def validate_action(
     if action == "tool":
         try:
             parsed = ToolAction(**data)
-            return parsed.model_dump()
+            return parsed.model_dump(), used_fallback
         except ValidationError as exc:
             raise ValueError(f"tool schema error: {str(exc)}") from exc
     if action == "finish":
         try:
             parsed_finish = FinishAction(**data)
-            return parsed_finish.model_dump()
+            return parsed_finish.model_dump(), used_fallback
         except ValidationError as exc:
             raise ValueError(f"finish schema error: {str(exc)}") from exc
     if action == "clarify":
         return {
             "action": "clarify",
             "question": str(data.get("question", "I need more information to proceed.")),
-        }
+        }, used_fallback
     raise ValueError("action must be 'tool' or 'finish'")
 
 
-def parse_action_json(model_output: str, step: int = 0) -> dict[str, Any]:
-    """Parse planner output, recovering first JSON object when extra data is emitted."""
+def parse_action_json(model_output: str, step: int = 0) -> tuple[dict[str, Any], bool]:
+    """Parse planner output, recovering first JSON object when extra data is emitted.
+
+    Returns a ``(data, used_fallback)`` tuple where ``used_fallback`` is ``True``
+    when the extract-first-object fallback path was needed.
+    """
     cleaned = _strip_thinking(model_output)
     try:
         data = json.loads(cleaned)
         if not isinstance(data, dict):
             raise ValueError("action payload must be a JSON object")
-        return data
+        return data, False
     except json.JSONDecodeError as exc:
         candidate = extract_first_json_object(cleaned)
         if not candidate:
@@ -103,7 +111,7 @@ def parse_action_json(model_output: str, step: int = 0) -> dict[str, Any]:
             raise ValueError(f"invalid json: {str(recover_exc)}") from recover_exc
         if not isinstance(recovered, dict):
             raise ValueError("action payload must be a JSON object") from None
-        return recovered
+        return recovered, True
 
 
 def extract_first_json_object(text: str) -> str | None:
@@ -175,13 +183,18 @@ def extract_all_json_objects(text: str) -> list[str]:
     return objects
 
 
-def parse_all_actions_json(model_output: str) -> list[dict[str, Any]]:
-    """Parse all JSON action objects from planner output."""
+def parse_all_actions_json(model_output: str) -> tuple[list[dict[str, Any]], bool]:
+    """Parse all JSON action objects from planner output.
+
+    Returns a ``(actions, used_fallback)`` tuple where ``used_fallback`` is
+    ``True`` when ``json.loads`` failed on the full output and the extract-all
+    fallback path was used instead.
+    """
     cleaned = _strip_thinking(model_output)
     try:
         data = json.loads(cleaned)
         if isinstance(data, dict):
-            return [data]
+            return [data], False
     except json.JSONDecodeError:
         pass
 
@@ -194,17 +207,21 @@ def parse_all_actions_json(model_output: str) -> list[dict[str, Any]]:
                 actions.append(parsed)
         except (json.JSONDecodeError, ValueError):
             continue
-    return actions
+    return actions, bool(actions)
 
 
 def validate_action_from_dict(
     action_dict: dict[str, Any], tool_registry: dict[str, Any]
-) -> dict[str, Any]:
-    """Validate a pre-parsed action dict against Pydantic schemas."""
+) -> tuple[dict[str, Any], bool]:
+    """Validate a pre-parsed action dict against Pydantic schemas.
+
+    Returns a ``(validated_dict, used_fallback)`` tuple; ``used_fallback`` is
+    propagated from ``validate_action``.
+    """
     raw = dict(action_dict)
     mission_id = raw.get("__mission_id")
     sanitized = {key: value for key, value in raw.items() if not key.startswith("__")}
-    validated = validate_action(json.dumps(sanitized), tool_registry)
+    validated, used_fallback = validate_action(json.dumps(sanitized), tool_registry)
     if isinstance(mission_id, int) and mission_id > 0:
         validated["__mission_id"] = mission_id
-    return validated
+    return validated, used_fallback
