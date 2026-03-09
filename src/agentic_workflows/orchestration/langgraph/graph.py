@@ -1812,7 +1812,12 @@ class LangGraphOrchestrator:
             tool_args.setdefault("step", state["step"])
 
         signature = f"{tool_name}:{json.dumps(tool_args, sort_keys=True, default=str)}"
-        if signature in state["seen_tool_signatures"]:
+        # Cursor-resumption actions bypass duplicate detection (narrowly scoped to read_file_chunk)
+        _is_cursor_resume = (
+            action.get("__cursor_resume") is True
+            and tool_name == "read_file_chunk"
+        )
+        if not _is_cursor_resume and signature in state["seen_tool_signatures"]:
             duplicate_retry_count = int(state["retry_counts"].get("duplicate_tool", 0)) + 1
             state["retry_counts"]["duplicate_tool"] = duplicate_retry_count
             next_mission = self._next_incomplete_mission(state)
@@ -1871,6 +1876,28 @@ class LangGraphOrchestrator:
         self.logger.info(
             "TOOL RESULT step=%s tool=%s result=%s", state["step"], tool_name, tool_result
         )
+        # Cursor tracking for chunked reads (Phase 07.6-03)
+        if tool_name == "read_file_chunk" and isinstance(tool_result, dict):
+            _store = getattr(getattr(self, "context_manager", None), "_store", None)
+            if _store is not None:
+                path_key = tool_args.get("path", tool_args.get("file_path", ""))
+                run_id = state.get("run_id", "")
+                mission_id = str(state.get("active_mission_id", ""))
+                if tool_result.get("has_more"):
+                    _store.upsert_cursor(
+                        run_id=run_id,
+                        plan_step_id=str(state.get("step", 0)),
+                        mission_id=mission_id,
+                        tool_name="read_file_chunk",
+                        key=path_key,
+                        cursor=tool_result.get("next_offset", 0),
+                        total=tool_result.get("total_lines", 0),
+                    )
+                else:
+                    # Chunk complete — clear cursor
+                    cursor_key = f"{run_id}:{mission_id}:read_file_chunk:{path_key}"
+                    if hasattr(_store, "_cursors"):
+                        _store._cursors.pop(cursor_key, None)
         if tool_name == "retrieve_memo":
             self._record_retrieve_memo_trace(state=state, tool_result=tool_result)
         validation_error = self._validate_tool_result_for_active_mission(

@@ -591,6 +591,19 @@ class ContextManager:
                 summary_injected="",
             )
 
+        # Re-inject cursor hints for active chunked reads after eviction
+        if self._store is not None:
+            run_id = state.get("run_id", "")
+            if run_id:
+                active = self._store.get_active_cursors(run_id)
+                for cur in active:
+                    hint = (
+                        f"[Orchestrator] Chunked read in progress: read_file_chunk "
+                        f"path={cur['key']} next_offset={cur['next_offset']} "
+                        f"of {cur['total']} lines. Continue from offset={cur['next_offset']}."
+                    )
+                    state["messages"].append({"role": "user", "content": hint})
+
     def build_planner_context_injection(self, state: dict[str, Any]) -> str:
         """Build a context injection string from completed mission summaries.
 
