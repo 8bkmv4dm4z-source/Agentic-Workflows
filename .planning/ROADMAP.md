@@ -223,8 +223,13 @@ Plans:
   8. `audit_report["structural_health"]` contains `json_parse_fallback`, `schema_mismatch` counters — visible after every run
   9. All existing tests pass unchanged (no regressions)
 
-**Plans:** TBD
-Plans: (to be planned)
+**Plans:** 5 plans
+Plans:
+- [ ] 07.6-00-PLAN.md — Wave 0: Failing test stubs for provider context_size, prompt tier, cursor persistence, structural health
+- [ ] 07.6-01-PLAN.md — Wave 1: context_size() on all providers + _select_prompt_tier() + compact _build_system_prompt() + COMPACT directive (C0/C1/C2/C3)
+- [ ] 07.6-02-PLAN.md — Wave 1: parse_action_json() fallback WARNING + HandoffResult/TaskHandoff Pydantic migration (A2, A3)
+- [ ] 07.6-03-PLAN.md — Wave 2: upsert_cursor/get_cursor/get_active_cursors + cursor hint injection + cursor bypass (E1-E4)
+- [ ] 07.6-04-PLAN.md — Wave 3: structural_health in RunState + audit_report + env.example grammar comment + regression gate (D2, A1)
 
 ### Phase 07.5: Wire ArtifactStore to Runtime (INSERTED)
 
@@ -264,3 +269,4 @@ Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7 → 7.1 → 7.2
 | 7.3. Hybrid Deterministic + Semantic Context System (INSERTED) | 10/10 | Complete    | 2026-03-08 |
 | 7.4. Context Injection Dedup and Runtime Safety (INSERTED) | 4/4 | Complete   | 2026-03-08 |
 | 7.5. Wire ArtifactStore to Runtime (INSERTED) | 2/5 | Complete    | 2026-03-08 |
+| 7.6. LLM Output Structure Stabilization (INSERTED) | 0/5 | Planned     |  |
