@@ -207,6 +207,25 @@ Plans:
 - [ ] 07.4-03-PLAN.md — Bound `_cascade_cache` + `_embed_cache` to 200 entries with truncation on overflow; test for bound enforcement
 - [ ] 07.4-04-PLAN.md — Fix `_make_result()` source_layer + add attribution assertion to cross-run injection tests
 
+### Phase 07.6: LLM Output Structure Stabilization (INSERTED)
+
+**Goal:** Mechanically enforce LLM output structure before multi-mission agent teams are deployed with weaker executor models. Fix the phi4 context overflow blocker (8192-token context), add provider-aware compact prompts, re-enable GBNF grammar for llama-cpp, instrument fallback parser, convert handoff TypedDicts to Pydantic, persist chunked-read cursors to survive context eviction, and add structural health metrics to the audit report.
+**Depends on:** Phase 07.5
+**Requirements**: (structural hardening, no external requirement IDs)
+**Success Criteria** (what must be TRUE):
+  1. phi4 (llama-cpp, 8192-token context) completes a full multi-mission run without "context length exceeded" errors — system prompt + tool list fits within n_ctx budget using compact tier
+  2. `provider.context_size()` method exists on all four providers (OpenAI, Groq, Ollama, LlamaCpp) — `_select_prompt_tier()` returns "compact" for providers with ≤ 10k context
+  3. `supervisor.md` contains a `## COMPACT` variant (≤ 15 lines) injected when tier=compact
+  4. `action_parser.py` logs a WARNING with step/model_output prefix whenever `extract_first_json_object()` fallback is triggered
+  5. `TaskHandoff` and `HandoffResult` are Pydantic BaseModels with `extra="forbid"` — malformed handoff data raises ValidationError at parse time
+  6. `mission_context_store.py` has `upsert_cursor()` / `get_cursor()` / `get_active_cursors()` methods; chunked reads store progress in `sub_task_cursors` table
+  7. After context eviction, cursor hints are re-injected as `[Orchestrator]` messages before the next planner call — duplicate-kill loop on chunk resume is eliminated
+  8. `audit_report["structural_health"]` contains `json_parse_fallback`, `schema_mismatch` counters — visible after every run
+  9. All existing tests pass unchanged (no regressions)
+
+**Plans:** TBD
+Plans: (to be planned)
+
 ### Phase 07.5: Wire ArtifactStore to Runtime (INSERTED)
 
 **Goal:** Connect the currently-dead `ArtifactStore` to the live mission execution path. `MissionContext.artifacts` (already computed at `context_manager.py:492`) should be persisted to Postgres via `ArtifactStore.upsert()` inside `_persist_mission_context()`. Add `artifact_store` parameter to `LangGraphOrchestrator` and `ContextManager`, wire it in `run.py` and `user_run.py`, and add an integration test confirming artifacts appear in the DB after a mission completes.
@@ -229,7 +248,7 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7 → 7.1 → 7.2 → 7.3 → 7.4 → 7.5
+Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7 → 7.1 → 7.2 → 7.3 → 7.4 → 7.5 → 7.6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
