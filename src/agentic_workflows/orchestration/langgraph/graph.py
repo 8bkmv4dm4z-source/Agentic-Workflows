@@ -919,6 +919,17 @@ class LangGraphOrchestrator:
             model_output = self._generate_with_hard_timeout(state["messages"]).strip()
             self.logger.info("MODEL OUTPUT step=%s output=%s", state["step"], model_output[:500])
 
+            # Treat a bare "{}" as semantically empty — the GBNF grammar allows
+            # it syntactically but it carries no action information.  Normalising
+            # it to "" here lets the empty-output escalation below inject a
+            # targeted recovery hint instead of spinning in the PLAN INVALID loop.
+            if model_output == "{}":
+                self.logger.warning(
+                    "PLAN EMPTY JSON OBJECT step=%s — treating as empty output",
+                    state["step"],
+                )
+                model_output = ""
+
             # --- Empty-output escalation ---
             if not model_output:
                 empty_count = int(state["retry_counts"].get("consecutive_empty", 0)) + 1

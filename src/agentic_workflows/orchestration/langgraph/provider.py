@@ -601,6 +601,23 @@ class LlamaCppChatProvider(_RetryingProviderBase):
                 content = response.choices[0].message.content or ""
             except Exception:
                 pass
+        # Grammar-induced semantic collapse: GBNF grammar allows "{}" as the minimum
+        # valid JSON object token sequence.  Some models (e.g. phi-4) return bare "{}"
+        # when grammar-constrained inference fails to follow the action schema.
+        # Fall back to plain (unconstrained) mode so the model can use the system
+        # prompt's JSON examples instead of grammar-guided sampling.
+        if self._grammar_enabled and content.strip() == "{}":
+            _LOG.warning(
+                "LLAMA-CPP grammar returned '{}' — falling back to plain mode for model=%s",
+                self.model,
+            )
+            try:
+                response = self._request_with_retries(_request_plain_mode)
+                plain_content = response.choices[0].message.content
+                if plain_content:
+                    content = plain_content
+            except Exception:  # noqa: BLE001
+                pass
         return content
 
 
