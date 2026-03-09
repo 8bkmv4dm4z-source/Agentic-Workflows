@@ -159,6 +159,9 @@ class MissionContextStore:
     ) -> None:
         self._pool = pool
         self._embedding_provider = embedding_provider
+        # In-memory cursor store for pool=None (SQLite/CI) environments.
+        # Key: f"{run_id}:{mission_id}:{tool_name}:{key}"
+        self._cursors: dict[str, dict] = {}
 
     # ------------------------------------------------------------------
     # Write path
@@ -229,6 +232,100 @@ class MissionContextStore:
                 ),
             )
         _logger.info("CASCADE UPSERT run_id=%s goal_hash=%s", run_id, goal_hash[:12])
+
+    # ------------------------------------------------------------------
+    # Cursor methods for chunked-read persistence (Phase 07.6-03)
+    # ------------------------------------------------------------------
+
+    def upsert_cursor(
+        self,
+        run_id: str,
+        plan_step_id: str,
+        mission_id: str,
+        tool_name: str,
+        key: str,
+        cursor: int,
+        total: int,
+    ) -> None:
+        """Insert or update a chunked-read cursor record.
+
+        pool=None: stores in self._cursors in-memory dict.
+        Postgres: UPSERT into sub_task_cursors table.
+        """
+        cursor_key = f"{run_id}:{mission_id}:{tool_name}:{key}"
+        if self._pool is None:
+            self._cursors[cursor_key] = {
+                "run_id": run_id,
+                "mission_id": mission_id,
+                "tool_name": tool_name,
+                "key": key,
+                "next_offset": cursor,
+                "total": total,
+            }
+            return
+        # Postgres: UPSERT into sub_task_cursors table
+        with self._pool.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO sub_task_cursors
+                    (run_id, plan_step_id, mission_id, tool_name, key, next_offset, total, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                ON CONFLICT (run_id, mission_id, tool_name, key)
+                DO UPDATE SET next_offset = EXCLUDED.next_offset,
+                              total = EXCLUDED.total,
+                              updated_at = NOW()
+                """,
+                (run_id, plan_step_id, mission_id, tool_name, key, cursor, total),
+            )
+
+    def get_cursor(
+        self,
+        run_id: str,
+        plan_step_id: str,
+        mission_id: str,
+        tool_name: str,
+        key: str,
+    ) -> int | None:
+        """Return the stored next_offset for the given cursor key, or None if not found.
+
+        pool=None: reads from self._cursors in-memory dict.
+        Postgres: queries sub_task_cursors table.
+        """
+        cursor_key = f"{run_id}:{mission_id}:{tool_name}:{key}"
+        if self._pool is None:
+            entry = self._cursors.get(cursor_key)
+            return entry["next_offset"] if entry else None
+        with self._pool.connection() as conn:
+            row = conn.execute(
+                "SELECT next_offset FROM sub_task_cursors WHERE run_id=%s AND mission_id=%s AND tool_name=%s AND key=%s",
+                (run_id, mission_id, tool_name, key),
+            ).fetchone()
+            return row[0] if row else None
+
+    def get_active_cursors(self, run_id: str) -> list[dict]:
+        """Return all active cursor records for the given run_id.
+
+        pool=None: filters self._cursors in-memory dict by run_id.
+        Postgres: queries sub_task_cursors table.
+        """
+        if self._pool is None:
+            return [v for v in self._cursors.values() if v.get("run_id") == run_id]
+        with self._pool.connection() as conn:
+            rows = conn.execute(
+                "SELECT run_id, mission_id, tool_name, key, next_offset, total FROM sub_task_cursors WHERE run_id=%s",
+                (run_id,),
+            ).fetchall()
+            return [
+                {
+                    "run_id": r[0],
+                    "mission_id": r[1],
+                    "tool_name": r[2],
+                    "key": r[3],
+                    "next_offset": r[4],
+                    "total": r[5],
+                }
+                for r in rows
+            ]
 
     # ------------------------------------------------------------------
     # Read path -- 5-layer cascade
