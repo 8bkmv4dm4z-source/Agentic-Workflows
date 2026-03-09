@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 import unittest
+
+import pytest
 
 from agentic_workflows.orchestration.langgraph import action_parser
 
@@ -60,6 +63,45 @@ class TestActionParser(unittest.TestCase):
         validated = action_parser.validate_action_from_dict(payload, registry)
         self.assertEqual(validated["__mission_id"], 3)
         self.assertEqual(validated["tool_name"], "repeat_message")
+
+
+class TestParserFallbackLogging:
+    """Tests for WARNING log emission on fallback parse path."""
+
+    def test_fallback_emits_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Fallback path emits WARNING with PARSER FALLBACK marker."""
+        raw = 'noise before {"action":"finish","answer":"done"}'
+        with caplog.at_level(logging.WARNING, logger="langgraph.action_parser"):
+            action_parser.parse_action_json(raw, step=3)
+        assert any("PARSER FALLBACK" in r.message for r in caplog.records), (
+            "Expected WARNING with PARSER FALLBACK in message"
+        )
+
+    def test_fallback_warning_contains_step(self, caplog: pytest.LogCaptureFixture) -> None:
+        """WARNING message includes the step number."""
+        raw = 'noise {"action":"finish","answer":"x"}'
+        with caplog.at_level(logging.WARNING, logger="langgraph.action_parser"):
+            action_parser.parse_action_json(raw, step=7)
+        combined = " ".join(r.message for r in caplog.records)
+        assert "step=7" in combined, f"Expected step=7 in WARNING; got: {combined}"
+
+    def test_fallback_prose_prefix_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A second WARNING with prose_prefix is emitted when prefix is non-empty."""
+        raw = 'some prose before {"action":"finish","answer":"x"}'
+        with caplog.at_level(logging.WARNING, logger="langgraph.action_parser"):
+            action_parser.parse_action_json(raw, step=5)
+        assert any("prose_prefix" in r.message for r in caplog.records), (
+            "Expected prose_prefix WARNING when there is text before the JSON object"
+        )
+
+    def test_happy_path_no_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Happy path (clean JSON) emits NO WARNING."""
+        raw = '{"action":"finish","answer":"x"}'
+        with caplog.at_level(logging.WARNING, logger="langgraph.action_parser"):
+            action_parser.parse_action_json(raw, step=0)
+        assert not caplog.records, (
+            f"Expected no warnings on happy path; got: {[r.message for r in caplog.records]}"
+        )
 
 
 if __name__ == "__main__":

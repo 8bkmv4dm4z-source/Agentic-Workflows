@@ -2274,8 +2274,9 @@ class LangGraphOrchestrator:
     def _validate_action(self, model_output: str) -> dict[str, Any]:
         return action_parser.validate_action(model_output, self.tools)
 
-    def _parse_action_json(self, model_output: str) -> dict[str, Any]:
-        return action_parser.parse_action_json(model_output)
+    def _parse_action_json(self, model_output: str, state: "RunState | None" = None) -> dict[str, Any]:
+        step = (state or {}).get("step", 0)
+        return action_parser.parse_action_json(model_output, step=step)
 
     def _extract_first_json_object(self, text: str) -> str | None:
         return action_parser.extract_first_json_object(text)

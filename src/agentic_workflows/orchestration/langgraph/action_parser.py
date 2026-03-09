@@ -12,9 +12,11 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from agentic_workflows.logger import get_logger
 from agentic_workflows.schemas import FinishAction, ToolAction
 
 _THINKING_RE = re.compile(r"<thinking>.*?</thinking>", re.DOTALL | re.IGNORECASE)
+_LOG = get_logger("langgraph.action_parser")
 
 
 def _strip_thinking(text: str) -> str:
@@ -23,10 +25,10 @@ def _strip_thinking(text: str) -> str:
 
 
 def validate_action(
-    model_output: str, tool_registry: dict[str, Any]
+    model_output: str, tool_registry: dict[str, Any], step: int = 0
 ) -> dict[str, Any]:
     """Validate model output against strict ToolAction/FinishAction schema."""
-    data = parse_action_json(model_output)
+    data = parse_action_json(model_output, step=step)
     action_alias = str(data.get("action", "")).strip().lower()
     if (
         "tool_name" not in data
@@ -75,7 +77,7 @@ def validate_action(
     raise ValueError("action must be 'tool' or 'finish'")
 
 
-def parse_action_json(model_output: str) -> dict[str, Any]:
+def parse_action_json(model_output: str, step: int = 0) -> dict[str, Any]:
     """Parse planner output, recovering first JSON object when extra data is emitted."""
     cleaned = _strip_thinking(model_output)
     try:
@@ -87,6 +89,14 @@ def parse_action_json(model_output: str) -> dict[str, Any]:
         candidate = extract_first_json_object(cleaned)
         if not candidate:
             raise ValueError(f"invalid json: {str(exc)}") from exc
+        prefix = cleaned[: cleaned.find("{")] if "{" in cleaned else ""
+        _LOG.warning(
+            "PARSER FALLBACK used=extract_first_json step=%d model_output=%.200s",
+            step,
+            model_output,
+        )
+        if prefix.strip():
+            _LOG.warning("PARSER FALLBACK prose_prefix=%.200s", prefix.strip())
         try:
             recovered = json.loads(candidate)
         except json.JSONDecodeError as recover_exc:
