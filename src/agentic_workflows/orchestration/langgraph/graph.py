@@ -17,7 +17,7 @@ import re
 import threading
 import typing
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from agentic_workflows.context.embedding_provider import EmbeddingProvider
@@ -148,6 +148,15 @@ def _sequential_node(fn):  # type: ignore[no-untyped-def]
     return wrapper
 
 
+def _select_prompt_tier(context_size: int) -> Literal["compact", "full"]:
+    """Select prompt tier based on provider context window size.
+
+    Models with context_size <= 10000 tokens get the compact prompt to avoid
+    overflow. All others get the full prompt with detailed tool arg signatures.
+    """
+    return "compact" if context_size <= 10000 else "full"
+
+
 class LangGraphOrchestrator:
     """State-graph orchestrator with memoization and checkpoint guardrails."""
 
@@ -172,6 +181,12 @@ class LangGraphOrchestrator:
         artifact_store: ArtifactStore | None = None,
     ) -> None:
         self.provider = provider or build_provider()
+        try:
+            _ctx_size = self.provider.context_size()
+        except AttributeError:
+            # Graceful fallback for providers that predate context_size() — treat as full tier.
+            _ctx_size = 32768
+        self._prompt_tier = _select_prompt_tier(_ctx_size)
         self._router = ModelRouter(
             strong_provider=self.provider,
             fast_provider=fast_provider,
@@ -253,11 +268,54 @@ class LangGraphOrchestrator:
         return "\n".join(lines)
 
     def _build_system_prompt(self) -> str:
-        """Construct strict planner prompt and tool/memo policy contract."""
-        tool_list = ", ".join(self.tools.keys())
+        """Construct strict planner prompt and tool/memo policy contract.
+
+        Two tiers:
+        - compact: for providers with context_size <= 10000 (e.g. phi4/llama-cpp 8192).
+          Contains COMPACT directive from supervisor.md, tool names only (no arg signatures),
+          and env block. Avoids context overflow on small-window models.
+        - full: existing behavior with detailed tool arg signatures + env block prepended.
+        """
         # AGENT_ROOT = readable project root (source/docs); AGENT_WORKDIR = writable output dir
         readable_root = os.environ.get("AGENT_ROOT") or os.environ.get("AGENT_WORKDIR") or os.getcwd()
         writable_root = os.environ.get("AGENT_WORKDIR") or os.getcwd()
+
+        env_block = (
+            "<env>\n"
+            "python3 is available (not python)\n"
+            f"Working dir: {writable_root}\n"
+            "</env>\n"
+        )
+
+        if self._prompt_tier == "compact":
+            # Read only the ## COMPACT section from supervisor.md
+            supervisor_path = Path(__file__).resolve().parents[3] / "directives" / "supervisor.md"
+            compact_directive = ""
+            try:
+                text = supervisor_path.read_text(encoding="utf-8")
+                in_compact = False
+                compact_lines: list[str] = []
+                for line in text.splitlines():
+                    if line.strip() == "## COMPACT":
+                        in_compact = True
+                        continue
+                    if in_compact and line.startswith("## "):
+                        break
+                    if in_compact:
+                        compact_lines.append(line)
+                compact_directive = "\n".join(compact_lines).strip() + "\n"
+            except OSError:
+                compact_directive = "You emit exactly one JSON action per response. Pure JSON only.\n"
+
+            tool_names_line = ", ".join(self.tools.keys())
+            return (
+                env_block
+                + compact_directive
+                + f"Available tools: {tool_names_line}\n"
+            )
+
+        # Full tier: prepend env_block to existing prompt
+        tool_list = ", ".join(self.tools.keys())
         codebase_ctx = self._build_codebase_context(readable_root)
         workspace_line = (
             f"Project root (read): {readable_root}\nWrite workspace: {writable_root}\n"
@@ -265,7 +323,8 @@ class LangGraphOrchestrator:
             else f"Working directory: {readable_root}\n"
         )
         return (
-            "You are a deterministic tool-using agent.\n"
+            env_block
+            + "You are a deterministic tool-using agent.\n"
             + workspace_line
             + (f"Codebase context:\n{codebase_ctx}\n\n" if codebase_ctx else "")
             + "Return exactly one JSON object per response. No XML, markdown, or prose outside JSON.\n"
@@ -288,7 +347,7 @@ class LangGraphOrchestrator:
             '- regex_matcher: {"text":"...", "pattern":"...", "operation":"find_all"} (one of: find_all|find_first|split|replace|match|count_matches|extract_groups)\n'
             '- repeat_message: {"message":"..."}\n'
             '- run_bash: {"command":"..."}\n'
-            f'- search_files: {{"pattern":"*.py", "path":"{readable_root}"}}\n'
+            f'- search_files: {{"pattern":"*.py", "path":"{readable_root}"}} — exclude .venv, __pycache__, .git, node_modules paths from results\n'
             "- Other tools: see tool name for usage.\n\n"
             "Rules:\n"
             "- One tool call per response.\n"
