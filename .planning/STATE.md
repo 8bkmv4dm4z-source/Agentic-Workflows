@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
 status: completed
-stopped_at: Completed 07.6-01-PLAN.md
-last_updated: "2026-03-09T14:48:08.872Z"
+stopped_at: Completed 07.6-02-PLAN.md
+last_updated: "2026-03-09T14:54:17.642Z"
 last_activity: 2026-03-08 — Wave 3 final improvements (P1_BASH_ENABLED guard, memoize prompt removal, tool contract tests)
 progress:
   total_phases: 13
   completed_phases: 11
   total_plans: 55
-  completed_plans: 53
+  completed_plans: 54
   percent: 100
 ---
 
@@ -86,6 +86,7 @@ Progress: [██████████] 100% (32/32 plans complete, Phase 7.2
 | Phase 07.5-wire-artifactstore-to-runtime P05 | 2min | 1 tasks | 1 files |
 | Phase 07.6 P00 | 3 | 2 tasks | 4 files |
 | Phase 07.6 P01 | 5min | 2 tasks | 6 files |
+| Phase 07.6 P02 | 8min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -194,6 +195,8 @@ Recent decisions affecting current work:
 - [Phase 07.6]: context_size() returns hardcoded values per provider (Groq=32768, OpenAI=128000, LlamaCpp=env/8192, Ollama=num_ctx or env/32768)
 - [Phase 07.6]: _select_prompt_tier boundary is <=10000 tokens = compact, >10000 = full; graceful AttributeError fallback defaults to 32768 (full tier)
 - [Phase 07.6]: Compact prompt reads ## COMPACT section from supervisor.md at build time; full tier has env_block prepended only — no other changes
+- [Phase 07.6]: parse_action_json step=0 default keeps all existing callers unchanged; WARNING log placed before json.loads(candidate) in fallback path
+- [Phase 07.6]: TypedDict->Pydantic BaseModel migration: factory function signatures unchanged; callers use .model_dump() at RunState append sites for checkpoint serialization safety
 
 ### Roadmap Evolution
 
@@ -230,6 +233,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-03-09T14:48:08.869Z
-Stopped at: Completed 07.6-01-PLAN.md
+Last session: 2026-03-09T14:54:17.640Z
+Stopped at: Completed 07.6-02-PLAN.md
 Resume file: None
