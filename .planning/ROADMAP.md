@@ -223,7 +223,7 @@ Plans:
   8. `audit_report["structural_health"]` contains `json_parse_fallback`, `schema_mismatch` counters — visible after every run
   9. All existing tests pass unchanged (no regressions)
 
-**Plans:** 3/5 plans executed
+**Plans:** 4/5 plans executed
 Plans:
 - [ ] 07.6-00-PLAN.md — Wave 0: Failing test stubs for provider context_size, prompt tier, cursor persistence, structural health
 - [ ] 07.6-01-PLAN.md — Wave 1: context_size() on all providers + _select_prompt_tier() + compact _build_system_prompt() + COMPACT directive (C0/C1/C2/C3)
