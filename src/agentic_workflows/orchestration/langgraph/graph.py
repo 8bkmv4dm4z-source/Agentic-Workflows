@@ -1577,7 +1577,7 @@ class LangGraphOrchestrator:
                     "step": state["step"],
                 },
                 token_budget=int(state.get("token_budget_remaining", 0)),
-            )
+            ).model_dump()
         )
         if len(state["handoff_queue"]) > _HANDOFF_QUEUE_CAP:
             state["handoff_queue"] = state["handoff_queue"][-_HANDOFF_QUEUE_CAP:]
@@ -1617,7 +1617,7 @@ class LangGraphOrchestrator:
                 status=status,  # type: ignore[arg-type]
                 output=output,
                 tokens_used=0,
-            )
+            ).model_dump()
         )
         if len(state["handoff_results"]) > _HANDOFF_RESULTS_CAP:
             state["handoff_results"] = state["handoff_results"][-_HANDOFF_RESULTS_CAP:]

@@ -3,15 +3,19 @@ from __future__ import annotations
 """Typed handoff schemas for multi-agent sub-task delegation.
 
 TaskHandoff and HandoffResult define the contract between the supervisor
-router and specialist agents.  These are TypedDicts so they integrate
-naturally with RunState and LangGraph's typed-state machinery.
+router and specialist agents.  These are Pydantic BaseModels with
+extra="forbid" for runtime schema enforcement at handoff boundaries.
 """
 
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict
 
 
-class TaskHandoff(TypedDict):
+class TaskHandoff(BaseModel):
     """A sub-task routed from the supervisor to a specialist."""
+
+    model_config = ConfigDict(extra="forbid")
 
     task_id: str
     specialist: Literal["supervisor", "executor", "evaluator"]
@@ -21,8 +25,10 @@ class TaskHandoff(TypedDict):
     token_budget: int
 
 
-class HandoffResult(TypedDict):
+class HandoffResult(BaseModel):
     """Result returned from a specialist after completing a handoff."""
+
+    model_config = ConfigDict(extra="forbid")
 
     task_id: str
     specialist: Literal["supervisor", "executor", "evaluator"]
