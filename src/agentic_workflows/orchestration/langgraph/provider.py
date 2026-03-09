@@ -68,6 +68,8 @@ class ChatProvider(Protocol):
 
     def generate(self, messages: Sequence[AgentMessage]) -> str: ...
 
+    def context_size(self) -> int: ...
+
 
 def _env_float(name: str, default: float) -> float:
     raw = (os.getenv(name) or "").strip()
@@ -195,6 +197,9 @@ class OpenAIChatProvider(_RetryingProviderBase):
         self.client = OpenAI(api_key=api_key, timeout=self.timeout_seconds)
         self.model = model or os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 
+    def context_size(self) -> int:
+        return 128000
+
     def generate(self, messages: Sequence[AgentMessage]) -> str:
         # Use json_schema response format to guide the model toward the expected action shape.
         # Falls back to json_object if the model does not support json_schema.
@@ -234,6 +239,9 @@ class GroqChatProvider(_RetryingProviderBase):
             raise ValueError("GROQ_API_KEY not found in environment.")
         self.client = Groq(api_key=api_key, timeout=self.timeout_seconds)
         self.model = model or os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+
+    def context_size(self) -> int:
+        return 32768
 
     def generate(self, messages: Sequence[AgentMessage]) -> str:
         # Keep the same JSON-object response contract across providers.
@@ -283,6 +291,9 @@ class OllamaChatProvider(_RetryingProviderBase):
                 timeout=self.timeout_seconds,
             )
         )
+
+    def context_size(self) -> int:
+        return self.num_ctx if self.num_ctx > 0 else int(os.getenv("OLLAMA_NUM_CTX", "32768"))
 
     def _ollama_extra_body(self) -> dict | None:
         """Build Ollama-specific options passed via extra_body."""
@@ -435,44 +446,146 @@ class OllamaChatProvider(_RetryingProviderBase):
         return custom_name
 
 
+# Minimal GBNF grammar that constrains llama-server output to valid JSON objects.
+# Passed via extra_body so token sampling physically cannot emit malformed JSON.
+# Note: GBNF does not support {n} quantifiers — unicode escapes use four explicit groups.
+_JSON_GBNF_GRAMMAR = r'''root   ::= object
+value  ::= object | array | string | number | "true" | "false" | "null"
+object ::= "{" ws (string ":" ws value ("," ws string ":" ws value)*)? "}" ws
+array  ::= "[" ws (value ("," ws value)*)? "]" ws
+string ::= "\"" ([^"\\] | "\\" ["\\/bfnrt] | "\\" "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F])* "\"" ws
+number ::= "-"? ([0-9] | [1-9] [0-9]*) ("." [0-9]+)? ([eE] [-+]? [0-9]+)? ws
+ws     ::= ([ \t\n] ws)?
+'''
+
+
+def _detect_llama_cpp_model(base_url: str) -> str | None:
+    """Query the running llama-server for the loaded model name.
+
+    Calls GET /v1/models and returns the first model ID, or None on failure.
+    Useful when LLAMA_CPP_MODEL=auto so the .env doesn't need updating every
+    time a different GGUF is loaded into llama-server.
+    """
+    try:
+        normalized = base_url.rstrip("/")
+        if not normalized.endswith("/v1"):
+            normalized += "/v1"
+        resp = httpx.get(f"{normalized}/models", timeout=3.0)
+        resp.raise_for_status()
+        models = resp.json().get("data", [])
+        if models:
+            return str(models[0]["id"])
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 class LlamaCppChatProvider(_RetryingProviderBase):
-    """Local llama-server (SYCL/CPU) provider via its OpenAI-compatible endpoint."""
+    """Local llama-server (SYCL/CPU) provider via its OpenAI-compatible endpoint.
+
+    Set LLAMA_CPP_MODEL=auto (the default) to let the provider query the server
+    at startup and use whatever model is currently loaded — no .env edit needed
+    when switching GGUFs.  Set it to a specific filename to pin a model name.
+
+    JSON output is enforced via GBNF grammar passed in extra_body, which
+    constrains token sampling at the server level so the model physically cannot
+    emit malformed JSON regardless of instruction-following quality.
+    """
+
+    # Recommended GGUF models for CPU / Intel Arc (update LLAMA_CPP_MODEL=auto
+    # to use whichever is currently loaded, or pin one of these):
+    #
+    #   Qwen2.5-7B-Instruct-Q4_K_M.gguf   — best JSON discipline, ~4.5 GB
+    #   Qwen2.5-7B-Instruct-Q5_K_M.gguf   — slightly better quality, ~5.4 GB
+    #   Qwen3-4B-Q4_K_M.gguf              — newest Qwen, strong tool-use, ~2.5 GB
+    #   Qwen3-4B-Q5_K_M.gguf              — recommended if 3 GB available
+    #   Llama-3.1-8B-Instruct-Q4_K_M.gguf — solid fallback, ~4.7 GB
+    #   Llama-3.2-3B-Instruct-Q5_K_M.gguf — fastest CPU option, ~2.3 GB
+    #   phi-4-Q4_K_M.gguf                 — Microsoft Phi-4, strong reasoning
+    #
+    # Download from HuggingFace:
+    #   huggingface-cli download Qwen/Qwen2.5-7B-Instruct-GGUF --include "*Q4_K_M*"
+    #   huggingface-cli download Qwen/Qwen3-4B-GGUF --include "*Q4_K_M*"
+    #   huggingface-cli download bartowski/Meta-Llama-3.1-8B-Instruct-GGUF --include "*Q4_K_M*"
+    #   huggingface-cli download bartowski/Llama-3.2-3B-Instruct-GGUF --include "*Q5_K_M*"
 
     def __init__(self, model: str | None = None, base_url: str | None = None) -> None:
         super().__init__()
         llama_cpp_timeout = _env_float("LLAMA_CPP_TIMEOUT", 0.0)
         if llama_cpp_timeout > 0:
             self.timeout_seconds = llama_cpp_timeout
-        self.model = model or os.getenv("LLAMA_CPP_MODEL", "local")
         resolved_base_url = base_url or os.getenv(
             "LLAMA_CPP_BASE_URL", "http://127.0.0.1:8080/v1"
         )
+        env_model = model or os.getenv("LLAMA_CPP_MODEL", "auto")
+        if env_model.lower() == "auto":
+            detected = _detect_llama_cpp_model(resolved_base_url)
+            self.model = detected or "local"
+            if detected:
+                _LOG.info("LLAMA-CPP AUTO-DETECTED model=%s url=%s", detected, resolved_base_url)
+            else:
+                _LOG.warning(
+                    "LLAMA-CPP model detection failed (server not running?), using 'local'"
+                )
+        else:
+            self.model = env_model
         self.client = OpenAI(
             api_key="llama-cpp",
             base_url=resolved_base_url,
             timeout=self.timeout_seconds,
         )
+        # Grammar enforcement: disabled per-request when LLAMA_CPP_GRAMMAR=false
+        self._grammar_enabled = os.getenv("LLAMA_CPP_GRAMMAR", "true").strip().lower() not in (
+            "0", "false", "no"
+        )
+
+    def context_size(self) -> int:
+        return int(os.getenv("LLAMA_CPP_N_CTX", "8192"))
 
     @observe(name="provider.generate")
     def generate(self, messages: Sequence[AgentMessage]) -> str:
         enable_thinking = os.getenv("LLAMA_CPP_THINKING", "").strip().lower() in ("1", "true", "yes")
         extra: dict = {"enable_thinking": True} if enable_thinking else {}
 
+        # Grammar enforcement: merge GBNF grammar into extra_body so llama-server
+        # constrains token sampling to valid JSON objects at the sampler level.
+        if self._grammar_enabled:
+            extra = {**extra, "grammar": _JSON_GBNF_GRAMMAR}
+
+        # Qwen3 /no_think suffix: append to last user message when thinking is off.
+        # This is the most reliable way to suppress Qwen3's extended reasoning mode.
+        prepared = list(messages)
+        if not enable_thinking:
+            for i in range(len(prepared) - 1, -1, -1):
+                msg = prepared[i]
+                if msg.get("role") == "user":
+                    content = msg.get("content", "")
+                    if isinstance(content, str) and not content.rstrip().endswith("/no_think"):
+                        prepared[i] = {**msg, "content": content.rstrip() + " /no_think"}
+                    break
+
         def _request_json_mode() -> object:
-            return self.client.chat.completions.create(
-                model=self.model,
-                messages=list(messages),
-                response_format={"type": "json_object"},
-                timeout=self.timeout_seconds,
-                **({"extra_body": extra} if extra else {}),
-            )
+            # When GBNF grammar is active it supersedes response_format — llama-server
+            # treats them as mutually exclusive and returns 500 if both are present.
+            # Grammar-enforced sampling is strictly stronger than json_object mode,
+            # so skip response_format when grammar is already in extra_body.
+            kwargs: dict = {
+                "model": self.model,
+                "messages": prepared,
+                "timeout": self.timeout_seconds,
+            }
+            if not self._grammar_enabled:
+                kwargs["response_format"] = {"type": "json_object"}
+            if extra:
+                kwargs["extra_body"] = extra
+            return self.client.chat.completions.create(**kwargs)
 
         def _request_plain_mode() -> object:
             return self.client.chat.completions.create(
                 model=self.model,
-                messages=list(messages),
+                messages=prepared,
                 timeout=self.timeout_seconds,
-                **({"extra_body": extra} if extra else {}),
+                extra_body=extra if extra else None,
             )
 
         try:

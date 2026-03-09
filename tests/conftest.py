@@ -38,6 +38,9 @@ class ScriptedProvider:
         self._responses = [json.dumps(item) for item in responses]
         self._index = 0
 
+    def context_size(self) -> int:
+        return 32768
+
     def generate(self, messages):  # noqa: ANN001
         if self._index < len(self._responses):
             value = self._responses[self._index]
