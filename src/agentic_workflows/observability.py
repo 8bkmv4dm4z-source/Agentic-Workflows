@@ -95,3 +95,29 @@ def flush() -> None:
     if client is not None:
         with contextlib.suppress(Exception):
             client.flush()
+
+
+def report_schema_compliance(
+    role: str,
+    first_attempt_success: bool,
+    trace_id: str | None = None,
+    run_id: str | None = None,
+) -> None:
+    """Report schema compliance to Langfuse as a numeric score. No-op if not configured."""
+    client = get_langfuse_client()
+    if client is None:
+        return
+    import contextlib
+
+    with contextlib.suppress(Exception):
+        kwargs: dict[str, Any] = {
+            "name": "schema_compliance",
+            "value": 1.0 if first_attempt_success else 0.0,
+            "data_type": "NUMERIC",
+            "comment": f"role={role}",
+        }
+        if trace_id:
+            kwargs["trace_id"] = trace_id
+        if run_id:
+            kwargs["session_id"] = run_id
+        client.create_score(**kwargs)
