@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from agentic_workflows.storage.mission_context_store import MissionContextStore
 
 from agentic_workflows.logger import get_logger
-from agentic_workflows.observability import get_langfuse_callback_handler, observe
+from agentic_workflows.observability import get_langfuse_callback_handler, observe, report_schema_compliance
 from agentic_workflows.orchestration.langgraph import (
     action_parser,
     content_validator,
@@ -1201,6 +1201,11 @@ class LangGraphOrchestrator:
             if os.getenv("P1_PROVIDER", "ollama").lower() == "anthropic":
                 return state
             all_actions, _parse_used_fallback = self._parse_all_actions_json(model_output)
+            report_schema_compliance(
+                role=state.get("active_specialist", "supervisor"),
+                first_attempt_success=not _parse_used_fallback,
+                run_id=state.get("run_id"),
+            )
             if _parse_used_fallback:
                 state["structural_health"]["json_parse_fallback"] = (
                     state["structural_health"].get("json_parse_fallback", 0) + 1
@@ -1424,6 +1429,11 @@ class LangGraphOrchestrator:
                         state["messages"].append({"role": "assistant", "content": model_output})
                         state["policy_flags"]["planner_timeout_mode"] = False
                         all_actions, _pf = self._parse_all_actions_json(model_output)
+                        report_schema_compliance(
+                            role=state.get("active_specialist", "supervisor"),
+                            first_attempt_success=not _pf,
+                            run_id=state.get("run_id"),
+                        )
                         if all_actions:
                             action, _ = self._validate_action_from_dict(all_actions[0])
                             state["pending_action"] = action
@@ -1528,6 +1538,11 @@ class LangGraphOrchestrator:
                         state["messages"].append({"role": "assistant", "content": model_output})
                         state["policy_flags"]["planner_timeout_mode"] = False
                         all_actions, _pf = self._parse_all_actions_json(model_output)
+                        report_schema_compliance(
+                            role=state.get("active_specialist", "supervisor"),
+                            first_attempt_success=not _pf,
+                            run_id=state.get("run_id"),
+                        )
                         if all_actions:
                             action, _ = self._validate_action_from_dict(all_actions[0])
                             state["pending_action"] = action

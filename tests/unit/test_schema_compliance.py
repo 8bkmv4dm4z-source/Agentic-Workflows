@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pathlib
+import tempfile
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -85,3 +87,41 @@ class TestReportSchemaCompliance:
 
         # Should not raise
         report_schema_compliance(role="supervisor", first_attempt_success=True)
+
+
+class TestSchemaComplianceWiring:
+    """Integration test: graph.py calls report_schema_compliance after parse."""
+
+    @patch("agentic_workflows.orchestration.langgraph.graph.report_schema_compliance")
+    def test_graph_calls_compliance_on_parse(  # noqa: PLR6301
+        self, mock_report: MagicMock
+    ) -> None:
+        """Verify _plan_next_action triggers report_schema_compliance."""
+        from tests.conftest import ScriptedProvider
+
+        from agentic_workflows.orchestration.langgraph.checkpoint_store import (
+            SQLiteCheckpointStore,
+        )
+        from agentic_workflows.orchestration.langgraph.graph import (
+            LangGraphOrchestrator,
+        )
+
+        db_path = pathlib.Path(tempfile.mkdtemp()) / "test.db"
+
+        provider = ScriptedProvider([
+            {"action": "tool", "tool_name": "sort_array", "args": {"array": [3, 1, 2]}},
+            {"action": "finish", "answer": "done"},
+        ])
+        checkpoint_store = SQLiteCheckpointStore(db_path=str(db_path))
+        orch = LangGraphOrchestrator(
+            provider=provider,
+            checkpoint_store=checkpoint_store,
+        )
+        orch.run("Sort the array [3,1,2]")
+
+        # report_schema_compliance should have been called at least once
+        assert mock_report.call_count >= 1
+        # First call should report success (ScriptedProvider emits clean JSON)
+        first_call = mock_report.call_args_list[0]
+        assert first_call[1]["first_attempt_success"] is True
+        assert first_call[1]["role"] == "supervisor"
