@@ -272,7 +272,7 @@ Plans:
   3. `LangGraphOrchestrator.__init__` accepts `fallback_provider: ChatProvider | None`; on ProviderTimeoutError or 2 consecutive parse failures, retries on fallback_provider; events counted in `structural_health["cloud_fallback_count"]` — integration test with failing mock
   4. `structural_health` gains: `cloud_fallback_count`, `local_model_failures`, `routing_decisions` — visible in audit_report
   5. All existing tests pass unchanged
-**Plans:** 4 plans
+**Plans:** 1/4 plans executed
 Plans:
 - [ ] 07.8-01-PLAN.md — Multi-model LlamaCpp alias support (model_alias param, with_alias factory)
 - [ ] 07.8-02-PLAN.md — Intelligent ModelRouter with RoutingSignals TypedDict + signal-based inference
