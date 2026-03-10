@@ -107,6 +107,20 @@ def _print_audit_panel(
         else:
             print(f" {_LEVEL_ICON['pass']}  Mission {mid} — {short_mission}")
 
+    # Routing & Fallback section
+    sh = audit_report.get("structural_health", {})
+    routing = sh.get("routing_decisions", {})
+    fallback_count = sh.get("cloud_fallback_count", 0)
+    local_failures = sh.get("local_model_failures", {})
+    if routing or fallback_count or local_failures:
+        print(f"\n  Routing & Fallback:")
+        if routing:
+            print(f"    Routing: strong={routing.get('strong', 0)} fast={routing.get('fast', 0)}")
+        if fallback_count:
+            print(f"    Cloud fallbacks: {fallback_count}")
+        if local_failures and (local_failures.get('timeout', 0) or local_failures.get('parse', 0)):
+            print(f"    Local failures: timeout={local_failures.get('timeout', 0)} parse={local_failures.get('parse', 0)}")
+
     print()
     print(sep)
     summary_parts = []
@@ -1010,10 +1024,19 @@ def _build_orchestrator() -> tuple[LangGraphOrchestrator, Any]:
             pool = None
             artifact_store = None
 
+    fallback_provider = None
+    if os.getenv("GROQ_API_KEY"):
+        try:
+            from agentic_workflows.orchestration.langgraph.provider import GroqChatProvider
+            fallback_provider = GroqChatProvider()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[warn] Could not create Groq fallback provider: {exc}")
+
     return LangGraphOrchestrator(
         embedding_provider=embedding_provider,
         mission_context_store=mission_context_store,
         artifact_store=artifact_store,
+        fallback_provider=fallback_provider,
     ), pool
 
 
