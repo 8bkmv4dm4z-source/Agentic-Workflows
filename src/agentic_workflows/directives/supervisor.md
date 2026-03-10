@@ -101,3 +101,16 @@ User: Analyze [10,20,30,100,25] for outliers, then summarize the text "The datas
 ```json
 {"action":"finish","answer":"Outlier analysis found [100] as outlier (mean=37.0). Text has 4 words."}
 ```
+
+Example 4: Query past mission context before planning
+```
+User: Recall how we sorted arrays in previous runs
+```
+```json
+{"action":"tool","tool_name":"query_context","args":{"query":"sort array and write to file","max_results":3}}
+```
+// Tool returns: {"results": [{"goal": "sort [5,3,1] ascending", "summary": "sorted and wrote to sorted.txt", "tools_used": ["sort_array","write_file"], "score": 0.85, "source_layer": "L2"}], "count": 1}
+This retrieves similar past missions to inform the current plan.
+```json
+{"action":"tool","tool_name":"sort_array","args":{"items":[9,7,3],"order":"asc"}}
+```

@@ -231,7 +231,7 @@ _TOOL_KEYWORD_MAP: dict[str, list[str]] = {
     "rule": ["validate_data"],
     # Phase 6: run context
     "last_run": ["retrieve_run_context"],
-    "previous": ["retrieve_run_context"],
+    "previous": ["retrieve_run_context", "query_context"],
     "context": ["retrieve_run_context"],
     "history": ["retrieve_run_context"],
     # Natural language creation verbs
@@ -251,6 +251,10 @@ _TOOL_KEYWORD_MAP: dict[str, list[str]] = {
     "label": ["classify_intent"],
     # Extraction targets both regex and JSON
     "extract": ["regex_matcher", "json_parser"],
+    # Phase 7.9: cross-run context query
+    "prior": ["query_context"],
+    "recall": ["query_context"],
+    "remember": ["query_context"],
 }
 
 
