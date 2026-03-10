@@ -128,6 +128,7 @@ class ArtifactStore:
     ) -> list[ArtifactResult]:
         emb_str = "[" + ",".join(str(v) for v in embedding) + "]"
 
+        params: tuple[str | int, ...]
         if run_id is not None:
             sql = (
                 "SELECT id, run_id, mission_id, key, value, source_tool, "
@@ -146,6 +147,8 @@ class ArtifactStore:
             )
             params = (emb_str, emb_str, limit)
 
+        if self._pool is None:
+            return []
         with self._pool.connection() as conn:
             rows = conn.execute(sql, params).fetchall()
 
