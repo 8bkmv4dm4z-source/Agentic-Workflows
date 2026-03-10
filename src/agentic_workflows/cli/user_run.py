@@ -23,10 +23,12 @@ import httpx
 from rich.console import Console
 from rich.panel import Panel
 
-from agentic_workflows.logger import setup_dual_logging
+from agentic_workflows.logger import get_logger, setup_dual_logging
 
 API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
 _TMP_DIR = Path(os.environ.get("TMP_DIR", ".tmp"))
+
+_log = get_logger("cli.user_run")
 
 console = Console()
 
@@ -264,12 +266,17 @@ async def stream_run(
     if _api_key:
         headers["X-API-Key"] = _api_key
 
+    ctx_turns = len(prior_context) if prior_context else 0
+    _log.info("SESSION REQUEST input_chars=%d context_turns=%d api=%s", len(user_input), ctx_turns, API_BASE_URL)
+    _t0 = time.monotonic()
+
     run_id = ""
     answer = ""
     last_result: dict[str, Any] = {}
     async with httpx.AsyncClient(base_url=API_BASE_URL, timeout=300.0) as client, client.stream("POST", "/run", json=payload, headers=headers) as resp:
         if resp.status_code != 200:
             body = await resp.aread()
+            _log.error("SESSION ERROR status=%d body=%s", resp.status_code, body.decode()[:300])
             console.print(f"[bold red]Server error {resp.status_code}: {body.decode()[:500]}[/]")
             return "", ""
 
@@ -293,8 +300,21 @@ async def stream_run(
 
             _render_event(event)
 
+    _elapsed = time.monotonic() - _t0
     if run_id and last_result:
+        missions = len(last_result.get("mission_report", []))
+        tools = len(last_result.get("tools_used", []))
+        audit = last_result.get("audit_report", {})
+        audit_summary = ""
+        if isinstance(audit, dict):
+            audit_summary = f" audit=P{audit.get('passed', 0)}/W{audit.get('warned', 0)}/F{audit.get('failed', 0)}"
+        _log.info(
+            "SESSION COMPLETE run_id=%s elapsed=%.1fs missions=%d tools=%d answer_chars=%d%s",
+            run_id, _elapsed, missions, tools, len(answer), audit_summary,
+        )
         _write_run_report(run_id, last_result)
+    elif not run_id:
+        _log.warning("SESSION NO_RESULT elapsed=%.1fs", _elapsed)
 
     return run_id, answer
 

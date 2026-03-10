@@ -27,6 +27,10 @@ _ADMIN_PREFIXES: tuple[str, ...] = (
     "CASCADE UPSERT",
     "EMBED INIT",
     "ARTIFACT STORE",
+    "SESSION REQUEST",
+    "SESSION COMPLETE",
+    "SESSION ERROR",
+    "SESSION NO_RESULT",
 )
 
 _setup_done: bool = False
