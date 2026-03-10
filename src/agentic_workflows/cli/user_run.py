@@ -102,6 +102,19 @@ def _write_run_report(run_id: str, result: dict[str, Any]) -> None:
                     f"{finding.get('check')}: {finding.get('detail')}"
                 )
 
+    # Routing & fallback stats
+    if isinstance(audit, dict):
+        sh = audit.get("structural_health", {})
+        routing = sh.get("routing_decisions", {})
+        fallback_count = sh.get("cloud_fallback_count", 0)
+        local_failures = sh.get("local_model_failures", {})
+        if routing or fallback_count:
+            lines.append(f"ROUTING: strong={routing.get('strong', 0)} fast={routing.get('fast', 0)}")
+        if fallback_count:
+            lines.append(f"CLOUD_FALLBACK: {fallback_count} event(s)")
+        if local_failures and (local_failures.get('timeout', 0) or local_failures.get('parse', 0)):
+            lines.append(f"LOCAL_FAILURES: timeout={local_failures.get('timeout', 0)} parse={local_failures.get('parse', 0)}")
+
     tools_used_list = result.get("tools_used", [])
     data_hits = [t for t in tools_used_list if isinstance(t, dict) and t.get("tool") in _DATA_ACCESS_TOOLS]
     if data_hits:
