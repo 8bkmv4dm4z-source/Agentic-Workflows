@@ -48,6 +48,21 @@ def validate_action(
             "tool_name": action_alias,
             "args": dict(resolved_args) if isinstance(resolved_args, dict) else {},
         }
+    # Normalize {"tool": "finish"/"clarify", args/params/result...} — these aren't in the
+    # tool registry so the tool-alias normalizer below won't catch them.
+    _tool_key_val = str(data.get("tool", "")).strip().lower()
+    if "action" not in data and _tool_key_val in {"finish", "clarify"}:
+        _nested = data.get("args") or data.get("arguments") or data.get("params") or {}
+        if _tool_key_val == "finish":
+            _answer = (
+                _nested.get("answer") or _nested.get("result") or _nested.get("content")
+                if isinstance(_nested, dict) else str(_nested)
+            ) or ""
+            data = {"action": "finish", "answer": str(_answer)}
+        else:
+            _question = _nested.get("question", "") if isinstance(_nested, dict) else str(_nested)
+            data = {"action": "clarify", "question": str(_question)}
+        used_fallback = True
     # Normalize {"tool": "X", flat_args...} emitted by models that skip "action"+"tool_name"
     if (
         "action" not in data
@@ -56,9 +71,10 @@ def validate_action(
         and str(data["tool"]).strip().lower() in tool_registry
     ):
         tool_name = str(data.pop("tool")).strip().lower()
-        _reserved2 = {"tool", "tool_name", "action", "args", "arguments", "__mission_id"}
+        # "params" is treated as an arg-container alias alongside "args"/"arguments"
+        _reserved2 = {"tool", "tool_name", "action", "args", "arguments", "params", "__mission_id"}
         flat_args = {k: v for k, v in data.items() if k not in _reserved2}
-        resolved_args = data.get("args") or data.get("arguments") or flat_args
+        resolved_args = data.get("args") or data.get("arguments") or data.get("params") or flat_args
         data = {
             "action": "tool",
             "tool_name": tool_name,
