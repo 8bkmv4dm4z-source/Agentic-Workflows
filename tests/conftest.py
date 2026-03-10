@@ -41,7 +41,8 @@ class ScriptedProvider:
     def context_size(self) -> int:
         return 32768
 
-    def generate(self, messages):  # noqa: ANN001
+    def generate(self, messages, response_schema=None):  # noqa: ANN001
+        # response_schema ignored -- scripted responses are pre-determined
         if self._index < len(self._responses):
             value = self._responses[self._index]
             self._index += 1

@@ -66,7 +66,11 @@ def _resolve_ollama_native_chat_url(base_url: str | None = None) -> str:
 class ChatProvider(Protocol):
     """Provider contract used by the LangGraph planner node."""
 
-    def generate(self, messages: Sequence[AgentMessage]) -> str: ...
+    def generate(
+        self,
+        messages: Sequence[AgentMessage],
+        response_schema: dict | None = None,
+    ) -> str: ...
 
     def context_size(self) -> int: ...
 
@@ -200,14 +204,16 @@ class OpenAIChatProvider(_RetryingProviderBase):
     def context_size(self) -> int:
         return 128000
 
-    def generate(self, messages: Sequence[AgentMessage]) -> str:
+    def generate(self, messages: Sequence[AgentMessage], response_schema: dict | None = None) -> str:
         # Use json_schema response format to guide the model toward the expected action shape.
         # Falls back to json_object if the model does not support json_schema.
+        schema_to_use = response_schema if response_schema is not None else _OPENAI_ACTION_RESPONSE_FORMAT
+
         def _request_schema_mode() -> object:
             return self.client.chat.completions.create(
                 model=self.model,
                 messages=list(messages),
-                response_format=_OPENAI_ACTION_RESPONSE_FORMAT,
+                response_format=schema_to_use,
                 timeout=self.timeout_seconds,
             )
 
@@ -243,7 +249,8 @@ class GroqChatProvider(_RetryingProviderBase):
     def context_size(self) -> int:
         return 32768
 
-    def generate(self, messages: Sequence[AgentMessage]) -> str:
+    def generate(self, messages: Sequence[AgentMessage], response_schema: dict | None = None) -> str:
+        # response_schema ignored -- Groq has limited json_schema support
         # Keep the same JSON-object response contract across providers.
         response = self._request_with_retries(
             lambda: self.client.chat.completions.create(
@@ -337,7 +344,8 @@ class OllamaChatProvider(_RetryingProviderBase):
         return content
 
     @observe(name="provider.generate")
-    def generate(self, messages: Sequence[AgentMessage]) -> str:
+    def generate(self, messages: Sequence[AgentMessage], response_schema: dict | None = None) -> str:
+        # response_schema ignored -- Ollama does not support json_schema response_format
         if self.use_native_chat_api:
             try:
                 result = self._request_with_retries(
@@ -543,7 +551,7 @@ class LlamaCppChatProvider(_RetryingProviderBase):
         return int(os.getenv("LLAMA_CPP_N_CTX", "8192"))
 
     @observe(name="provider.generate")
-    def generate(self, messages: Sequence[AgentMessage]) -> str:
+    def generate(self, messages: Sequence[AgentMessage], response_schema: dict | None = None) -> str:
         enable_thinking = os.getenv("LLAMA_CPP_THINKING", "").strip().lower() in ("1", "true", "yes")
         extra: dict = {"enable_thinking": True} if enable_thinking else {}
 
@@ -575,7 +583,7 @@ class LlamaCppChatProvider(_RetryingProviderBase):
                 "timeout": self.timeout_seconds,
             }
             if not self._grammar_enabled:
-                kwargs["response_format"] = {"type": "json_object"}
+                kwargs["response_format"] = response_schema if response_schema is not None else {"type": "json_object"}
             if extra:
                 kwargs["extra_body"] = extra
             return self.client.chat.completions.create(**kwargs)
