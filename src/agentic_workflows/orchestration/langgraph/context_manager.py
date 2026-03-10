@@ -540,7 +540,11 @@ class ContextManager:
             # Cap summary length
             summary = summary[:800]
 
-            key_results = {"partial": True, "tools_completed": used_tools}
+            key_results: dict[str, Any] = {
+                "partial": True,
+                "tools_completed": used_tools,
+                "subtask_statuses": report.get("subtask_statuses", []),
+            }
 
             persist_ctx: dict[str, Any] = {
                 "goal": goal,
@@ -831,7 +835,25 @@ class ContextManager:
                 hits = self._cascade_cache[cache_key]
 
                 for hit in hits:
-                    line = f'[Cross-run] Similar: "{hit["goal"]}" \u2192 {hit["summary"]}'
+                    # Richer cross-run format with tools, status, and remaining work
+                    tools_used = hit.get("used_tools") or hit.get("tools_used") or []
+                    status = hit.get("status", "")
+                    tools_part = f" | Tools: {', '.join(tools_used)}" if tools_used else ""
+                    status_part = f" | Status: {status}" if status else ""
+                    remaining_part = ""
+                    if status == "partial":
+                        kr = hit.get("key_results") or {}
+                        subtask_sts = kr.get("subtask_statuses", [])
+                        if subtask_sts:
+                            remaining_tools: set[str] = set()
+                            for sub in subtask_sts:
+                                if not sub.get("satisfied", False):
+                                    remaining_tools.update(sub.get("missing_tools", []))
+                            if remaining_tools:
+                                remaining_part = f" | Remaining: {', '.join(sorted(remaining_tools))}"
+                    line = f'[Cross-run] Similar: "{hit["goal"]}"{tools_part}{status_part} | {hit["summary"]}'
+                    if remaining_part:
+                        line += remaining_part
                     cross_run_lines.append(line)
 
                 # Phase 7.4: suppress duplicate injection for the same run+goal key

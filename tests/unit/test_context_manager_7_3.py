@@ -306,3 +306,125 @@ class TestGoalCache:
         assert call_args is not None
         goal_used = call_args[0][0] if call_args[0] else call_args[1].get("goal_text", "")
         assert goal_used == "analyze data", f"Expected 'analyze data', got '{goal_used}'"
+
+
+class TestCrossRunRicherFormat:
+    """Tests for the richer cross-run injection format with tools, status, remaining."""
+
+    def test_format_includes_tools_used(self):
+        mock_store = MagicMock()
+        mock_store.query_cascade.return_value = [{
+            "id": 1, "run_id": "prev", "mission_id": "m-1",
+            "goal": "Sort numbers",
+            "summary": "Sorted 100 numbers",
+            "tools_used": ["sort_array", "write_file"],
+            "score": 0.9, "source_layer": "L0",
+        }]
+        cm = ContextManager(mission_context_store=mock_store)
+        state: dict = {"missions": ["Sort stuff"], "mission_contexts": {}, "messages": [], "step": 1}
+        result = cm.build_planner_context_injection(state)
+        assert "Tools: sort_array, write_file" in result
+
+    def test_format_includes_status_when_present(self):
+        mock_store = MagicMock()
+        mock_store.query_cascade.return_value = [{
+            "id": 1, "run_id": "prev", "mission_id": "m-1",
+            "goal": "Analyze data",
+            "summary": "Partial analysis done",
+            "tools_used": ["data_analysis"],
+            "status": "partial",
+            "score": 0.8, "source_layer": "L2",
+        }]
+        cm = ContextManager(mission_context_store=mock_store)
+        state: dict = {"missions": ["Analyze"], "mission_contexts": {}, "messages": [], "step": 1}
+        result = cm.build_planner_context_injection(state)
+        assert "Status: partial" in result
+
+    def test_format_includes_remaining_tools_for_partial(self):
+        mock_store = MagicMock()
+        mock_store.query_cascade.return_value = [{
+            "id": 1, "run_id": "prev", "mission_id": "m-1",
+            "goal": "Multi-step task",
+            "summary": "Partially done",
+            "tools_used": ["sort_array"],
+            "status": "partial",
+            "key_results": {
+                "partial": True,
+                "tools_completed": ["sort_array"],
+                "subtask_statuses": [
+                    {"id": "1a", "satisfied": True, "missing_tools": []},
+                    {"id": "1b", "satisfied": False, "missing_tools": ["write_file", "data_analysis"]},
+                ],
+            },
+            "score": 0.7, "source_layer": "L2",
+        }]
+        cm = ContextManager(mission_context_store=mock_store)
+        state: dict = {"missions": ["Multi-step"], "mission_contexts": {}, "messages": [], "step": 1}
+        result = cm.build_planner_context_injection(state)
+        assert "Remaining:" in result
+        assert "data_analysis" in result
+        assert "write_file" in result
+
+    def test_format_graceful_without_status(self):
+        """When hit has no status field, format still works (backward compat)."""
+        mock_store = MagicMock()
+        mock_store.query_cascade.return_value = [{
+            "id": 1, "run_id": "prev", "mission_id": "m-1",
+            "goal": "Simple task",
+            "summary": "Done",
+            "tools_used": [],
+            "score": 0.9, "source_layer": "L0",
+        }]
+        cm = ContextManager(mission_context_store=mock_store)
+        state: dict = {"missions": ["Simple"], "mission_contexts": {}, "messages": [], "step": 1}
+        result = cm.build_planner_context_injection(state)
+        assert "[Cross-run] Similar:" in result
+        assert "Status:" not in result
+
+
+class TestPartialPersistenceSubtaskStatuses:
+    """Tests that persist_partial_missions includes subtask_statuses in key_results."""
+
+    def test_subtask_statuses_included_in_key_results(self):
+        mock_store = MagicMock()
+        cm = ContextManager(mission_context_store=mock_store)
+        subtask_statuses = [
+            {"id": "1a", "satisfied": True, "missing_tools": []},
+            {"id": "1b", "satisfied": False, "missing_tools": ["write_file"]},
+        ]
+        state: dict = {
+            "mission_reports": [{
+                "mission_id": 1,
+                "mission": "Test mission",
+                "status": "in_progress",
+                "used_tools": ["sort_array"],
+                "tool_results": [{"tool": "sort_array", "result": {"sorted": [1, 2, 3]}}],
+                "subtask_statuses": subtask_statuses,
+            }],
+            "run_id": "run-partial-test",
+        }
+        cm.persist_partial_missions(state)
+        assert mock_store.upsert.call_count == 1
+        call_kwargs = mock_store.upsert.call_args.kwargs
+        kr = call_kwargs["key_results"]
+        assert kr["partial"] is True
+        assert kr["subtask_statuses"] == subtask_statuses
+
+    def test_empty_subtask_statuses_when_none_present(self):
+        mock_store = MagicMock()
+        cm = ContextManager(mission_context_store=mock_store)
+        state: dict = {
+            "mission_reports": [{
+                "mission_id": 1,
+                "mission": "Simple mission",
+                "status": "pending",
+                "used_tools": [],
+                "tool_results": [],
+            }],
+            "run_id": "run-empty-sub",
+        }
+        cm.persist_partial_missions(state)
+        assert mock_store.upsert.call_count == 1
+        call_kwargs = mock_store.upsert.call_args.kwargs
+        kr = call_kwargs["key_results"]
+        assert kr["subtask_statuses"] == []

@@ -274,7 +274,10 @@ class LangGraphOrchestrator:
         )
         self.strict_single_action_mode = self._env_bool("P1_STRICT_SINGLE_ACTION", False)
         self.tools: dict[str, Tool] = build_tool_registry(
-            self.memo_store, checkpoint_store=self.checkpoint_store
+            self.memo_store,
+            checkpoint_store=self.checkpoint_store,
+            mission_context_store=mission_context_store,
+            embedding_provider=embedding_provider,
         )
         self._action_json_schema: dict = self._build_action_json_schema()
         self._executor_subgraph = build_executor_subgraph(memo_store=self.memo_store)
@@ -1057,6 +1060,33 @@ class LangGraphOrchestrator:
         context_injection = self.context_manager.build_planner_context_injection(state)
         if context_injection:
             state["messages"].append({"role": "user", "content": context_injection})
+
+        # Auto-inject context hint at step 1 to nudge query_context usage
+        if (
+            state["step"] == 1
+            and self._mission_context_store is not None
+            and "query_context" in self.tools
+            and "[Cross-run]" not in (context_injection or "")
+        ):
+            try:
+                goal_text = self.context_manager._get_current_goal_text(state)
+                if goal_text:
+                    cascade_hits = self._mission_context_store.query_cascade(
+                        goal_text, top_k=1,
+                    )
+                    if cascade_hits and cascade_hits[0].get("score", 0) > 0.5:
+                        state["messages"].append({
+                            "role": "user",
+                            "content": "[Context] Prior relevant missions found. Use query_context tool for details.",
+                        })
+                        self.logger.info(
+                            "AUTO CONTEXT HINT step=1 score=%.2f goal=%s",
+                            cascade_hits[0].get("score", 0),
+                            goal_text[:60],
+                        )
+            except Exception:  # noqa: BLE001
+                pass  # non-fatal — don't block planning if cascade fails
+
         tool_hint = self._mission_tool_hint(state)
         if tool_hint:
             state["messages"].append({"role": "user", "content": f"[Orchestrator] {tool_hint}"})

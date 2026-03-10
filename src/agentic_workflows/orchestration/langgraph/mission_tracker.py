@@ -441,6 +441,11 @@ def refresh_mission_status(state: dict[str, Any], mission_index: int) -> None:
                 "expected_fibonacci_count": report.get("expected_fibonacci_count"),
             }
         ]
+    # Capture previous subtask satisfaction state for tick detection
+    previous_subtask_satisfied: dict[str, bool] = {}
+    for prev in report.get("subtask_statuses", []):
+        previous_subtask_satisfied[str(prev.get("id", ""))] = bool(prev.get("satisfied", False))
+
     subtask_statuses: list[dict[str, Any]] = []
     for subtask in subtask_contracts:
         sub_required_tools = {str(tool) for tool in subtask.get("required_tools", [])}
@@ -459,6 +464,18 @@ def refresh_mission_status(state: dict[str, Any], mission_index: int) -> None:
                 "satisfied": not sub_missing_tools and not sub_missing_files,
             }
         )
+
+    # Emit SUBTASK TICK when a subtask transitions from unsatisfied to satisfied
+    for st in subtask_statuses:
+        st_id = st["id"]
+        if st["satisfied"] and not previous_subtask_satisfied.get(st_id, False):
+            LOGGER.info(
+                "SUBTASK TICK mission_id=%s subtask_id=%s description=%s",
+                report.get("mission_id", mission_index + 1),
+                st_id,
+                st["description"][:80],
+            )
+
     report["subtask_statuses"] = subtask_statuses
     subtasks_satisfied = all(
         bool(item.get("satisfied", False)) for item in subtask_statuses
