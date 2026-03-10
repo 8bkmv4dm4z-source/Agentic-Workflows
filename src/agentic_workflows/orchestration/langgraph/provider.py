@@ -550,6 +550,29 @@ class LlamaCppChatProvider(_RetryingProviderBase):
     def context_size(self) -> int:
         return int(os.getenv("LLAMA_CPP_N_CTX", "8192"))
 
+    def with_alias(self, alias: str) -> LlamaCppChatProvider:
+        """Return a new provider instance routing to *alias* on the same server.
+
+        The clone shares the existing OpenAI client (no extra HTTP connection)
+        but sends requests to a different model alias — useful when llama-server
+        is loaded with ``--alias planner`` / ``--alias executor`` etc.
+
+        All retry/timeout settings and grammar configuration are copied from the
+        source so the alias behaves identically apart from the model name.
+        """
+        clone = LlamaCppChatProvider.__new__(LlamaCppChatProvider)
+        # _RetryingProviderBase attributes
+        clone.timeout_seconds = self.timeout_seconds
+        clone.max_retries = self.max_retries
+        clone.retry_backoff_seconds = self.retry_backoff_seconds
+        # LlamaCpp-specific attributes
+        clone._grammar_enabled = self._grammar_enabled
+        # Share the OpenAI client (same connection pool)
+        clone.client = self.client
+        # Set the alias as the model name
+        clone.model = alias
+        return clone
+
     @observe(name="provider.generate")
     def generate(self, messages: Sequence[AgentMessage], response_schema: dict | None = None) -> str:
         enable_thinking = os.getenv("LLAMA_CPP_THINKING", "").strip().lower() in ("1", "true", "yes")
