@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
 status: completed
-last_updated: "2026-03-10T17:48:40.653Z"
-last_activity: 2026-03-10 — Walkthrough, fallback provider wiring, routing stats in audit panels
+last_updated: "2026-03-10T18:12:00Z"
+last_activity: 2026-03-10 — Stabilize parser/planner/context feature (adaptive timeout, proactive compaction, debug logging)
 progress:
   total_phases: 16
   completed_phases: 14
@@ -26,8 +26,8 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 
 Phase: 7.8 (Multi-Model Provider Routing + Smart Cloud Fallback)
 Plan: 4 of 4 in current phase (07.8-01, 07.8-02, 07.8-03, 07.8-04 DONE)
-Status: Phase 7.8 COMPLETE — all 4 plans executed.
-Last activity: 2026-03-10 — Walkthrough, fallback provider wiring, routing stats in audit panels
+Status: Phase 7.8 COMPLETE — all 4 plans executed + stabilization feature.
+Last activity: 2026-03-10 — Stabilize parser/planner/context feature (adaptive timeout, proactive compaction, debug logging)
 
 Progress: [██████████] 100% (65/65 plans complete, Phase 7.8 04/04 done)
 
@@ -263,5 +263,5 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last activity: 2026-03-10 - Completed 07.8-03: Cloud fallback + route_by_signals graph wiring
-Resume file: .planning/phases/07.8-multi-model-provider-routing-+-smart-cloud-fallback/features/stabilize-parser-planner-context/FEATURE-CONTEXT.md
+Last activity: 2026-03-10 - Completed stabilize-parser-planner-context feature (adaptive timeout, proactive compaction, debug logging, strong model routing)
+Resume file: .planning/phases/07.8-multi-model-provider-routing-+-smart-cloud-fallback/features/stabilize-parser-planner-context/FEATURE-SUMMARY.md
