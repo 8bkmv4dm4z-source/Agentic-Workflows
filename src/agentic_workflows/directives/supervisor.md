@@ -47,3 +47,57 @@ All tools (12 registered + audit_run). The supervisor delegates tool execution t
   `orchestration/langgraph/state_schema.py::new_run_state`.
 - In the current single-planner graph, supervisor behavior is model-guided through one
   orchestrator prompt, but this directive remains the contract for planning/lifecycle rules.
+
+## FEW_SHOT
+
+Example 1: Sort an array and write result to file
+```
+User: Sort [5,3,1,4,2] ascending and save to sorted.txt
+```
+```json
+{"action":"tool","tool_name":"sort_array","args":{"items":[5,3,1,4,2],"order":"asc"}}
+```
+// Tool returns: {"sorted": [1,2,3,4,5], "original": [5,3,1,4,2]}
+```json
+{"action":"tool","tool_name":"write_file","args":{"path":"sorted.txt","content":"1,2,3,4,5"}}
+```
+// Tool returns: {"result": "Successfully wrote 9 characters to sorted.txt"}
+```json
+{"action":"finish","answer":"Sorted [5,3,1,4,2] ascending and saved to sorted.txt"}
+```
+
+Example 2: Inspect code structure then extract and save a section (store-then-query pattern)
+```
+User: Find the main function in app.py and save it to main_func.txt
+```
+```json
+{"action":"tool","tool_name":"outline_code","args":{"path":"app.py"}}
+```
+// Tool returns: {"functions": [{"name":"main","line":42,"end_line":68},...]}
+```json
+{"action":"tool","tool_name":"read_file_chunk","args":{"path":"app.py","offset":42,"limit":27}}
+```
+// Tool returns: {"content": "def main():\n    ...", "has_more": false}
+```json
+{"action":"tool","tool_name":"write_file","args":{"path":"main_func.txt","content":"def main():\n    ..."}}
+```
+// Tool returns: {"result": "Successfully wrote 45 characters to main_func.txt"}
+```json
+{"action":"finish","answer":"Extracted main() from app.py (lines 42-68) and saved to main_func.txt"}
+```
+
+Example 3: Multi-step data analysis
+```
+User: Analyze [10,20,30,100,25] for outliers, then summarize the text "The dataset shows variance"
+```
+```json
+{"action":"tool","tool_name":"data_analysis","args":{"numbers":[10,20,30,100,25],"operation":"outliers"}}
+```
+// Tool returns: {"outliers": [100], "non_outliers": [10,20,25,30], "mean": 37.0}
+```json
+{"action":"tool","tool_name":"text_analysis","args":{"text":"The dataset shows variance","operation":"word_count"}}
+```
+// Tool returns: {"word_count": 4}
+```json
+{"action":"finish","answer":"Outlier analysis found [100] as outlier (mean=37.0). Text has 4 words."}
+```
