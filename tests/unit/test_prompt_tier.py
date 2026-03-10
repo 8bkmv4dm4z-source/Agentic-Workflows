@@ -35,7 +35,7 @@ class TestCompactPromptContent:
             def context_size(self) -> int:
                 return 8192
 
-            def generate(self, messages):  # noqa: ANN001
+            def generate(self, messages, response_schema=None):  # noqa: ANN001
                 return '{"action":"finish","answer":"done"}'
 
         return LangGraphOrchestrator(provider=SmallProvider())  # type: ignore[arg-type]

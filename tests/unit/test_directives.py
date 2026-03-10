@@ -21,7 +21,7 @@ else:
 
 
 class DummyProvider:
-    def generate(self, messages):  # noqa: ANN001
+    def generate(self, messages, response_schema=None):  # noqa: ANN001
         return '{"action":"finish","answer":"done"}'
 
 

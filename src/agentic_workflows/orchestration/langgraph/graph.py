@@ -219,6 +219,7 @@ class LangGraphOrchestrator:
         self.tools: dict[str, Tool] = build_tool_registry(
             self.memo_store, checkpoint_store=self.checkpoint_store
         )
+        self._action_json_schema: dict = self._build_action_json_schema()
         self._executor_subgraph = build_executor_subgraph(memo_store=self.memo_store)
         self._evaluator_subgraph = build_evaluator_subgraph()
         self._invalidate_known_poisoned_cache_entries()
@@ -266,6 +267,58 @@ class LangGraphOrchestrator:
                 pass
 
         return "\n".join(lines)
+
+    def _build_action_json_schema(self) -> dict:
+        """Generate json_schema response_format from live tool registry.
+
+        Produces an anyOf schema covering every registered tool (with required
+        args as string properties) plus finish and clarify actions.
+        Cached in self._action_json_schema at __init__ time.
+        """
+        tool_variants: list[dict] = []
+        for name, tool in self.tools.items():
+            req = tool.required_args() if hasattr(tool, "required_args") else []
+            args_props: dict = {arg: {"type": "string"} for arg in req}
+            variant: dict = {
+                "type": "object",
+                "properties": {
+                    "action": {"const": "tool"},
+                    "tool_name": {"const": name},
+                    "args": {
+                        "type": "object",
+                        "properties": args_props,
+                        **( {"required": req} if req else {}),
+                    },
+                },
+                "required": ["action", "tool_name", "args"],
+            }
+            tool_variants.append(variant)
+        tool_variants += [
+            {
+                "type": "object",
+                "properties": {
+                    "action": {"const": "finish"},
+                    "answer": {"type": "string"},
+                },
+                "required": ["action", "answer"],
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "action": {"const": "clarify"},
+                    "question": {"type": "string"},
+                },
+                "required": ["action", "question"],
+            },
+        ]
+        return {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "agent_action",
+                "schema": {"anyOf": tool_variants},
+                "strict": False,
+            },
+        }
 
     def _build_system_prompt(self) -> str:
         """Construct strict planner prompt and tool/memo policy contract.
@@ -1507,13 +1560,13 @@ class LangGraphOrchestrator:
         """Protect planner generate() call with a hard wall-clock timeout."""
         timeout_seconds = self.plan_call_timeout_seconds
         if timeout_seconds <= 0:
-            return self._router.route(complexity).generate(messages)
+            return self._router.route(complexity).generate(messages, response_schema=self._action_json_schema)
 
         outbox: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
 
         def _run() -> None:
             try:
-                outbox.put(("ok", self._router.route(complexity).generate(messages)))
+                outbox.put(("ok", self._router.route(complexity).generate(messages, response_schema=self._action_json_schema)))
             except Exception as exc:  # noqa: BLE001
                 outbox.put(("err", exc))
 

@@ -21,7 +21,7 @@ class TrackedScriptedProvider:
         self.name = name
         self.call_count = 0
 
-    def generate(self, messages: list[dict]) -> str:  # type: ignore[type-arg]
+    def generate(self, messages: list[dict], response_schema: dict | None = None) -> str:  # type: ignore[type-arg]
         self.call_count += 1
         value = self._responses[min(self._index, len(self._responses) - 1)]
         self._index += 1

@@ -164,7 +164,7 @@ class QueueClearOnTimeoutTests(unittest.TestCase):
         from agentic_workflows.orchestration.langgraph.provider import ProviderTimeoutError
 
         class TimeoutProvider:
-            def generate(self, messages):  # noqa: ANN001
+            def generate(self, messages, response_schema=None):  # noqa: ANN001
                 raise ProviderTimeoutError("timeout")
 
         with tempfile.TemporaryDirectory() as td:
@@ -196,7 +196,7 @@ class StateSchemaQueueTests(unittest.TestCase):
 
 
 class DummyProvider:
-    def generate(self, messages):  # noqa: ANN001
+    def generate(self, messages, response_schema=None):  # noqa: ANN001
         return json.dumps({"action": "finish", "answer": "dummy"})
 
 
@@ -208,7 +208,7 @@ class CountingRawProvider:
         self._index = 0
         self.call_count = 0
 
-    def generate(self, messages):  # noqa: ANN001
+    def generate(self, messages, response_schema=None):  # noqa: ANN001
         self.call_count += 1
         if self._index < len(self._responses):
             value = self._responses[self._index]

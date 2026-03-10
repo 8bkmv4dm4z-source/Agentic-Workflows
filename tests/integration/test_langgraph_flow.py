@@ -24,7 +24,7 @@ class ScriptedProvider:
         self._responses = [json.dumps(item) for item in responses]
         self._index = 0
 
-    def generate(self, messages):  # noqa: ANN001
+    def generate(self, messages, response_schema=None):  # noqa: ANN001
         if self._index < len(self._responses):
             value = self._responses[self._index]
             self._index += 1
@@ -33,7 +33,7 @@ class ScriptedProvider:
 
 
 class InvalidJSONProvider:
-    def generate(self, messages):  # noqa: ANN001
+    def generate(self, messages, response_schema=None):  # noqa: ANN001
         return "not-json"
 
 
@@ -42,7 +42,7 @@ class RawScriptedProvider:
         self._responses = responses
         self._index = 0
 
-    def generate(self, messages):  # noqa: ANN001
+    def generate(self, messages, response_schema=None):  # noqa: ANN001
         if self._index < len(self._responses):
             value = self._responses[self._index]
             self._index += 1
@@ -51,7 +51,7 @@ class RawScriptedProvider:
 
 
 class ModelNotFoundProvider:
-    def generate(self, messages):  # noqa: ANN001
+    def generate(self, messages, response_schema=None):  # noqa: ANN001
         raise RuntimeError(
             "Error code: 404 - {'error': {'message': \"model 'qwen3:8b' not found\"}}"
         )
@@ -101,7 +101,7 @@ class LangGraphFlowTests(unittest.TestCase):
 
     def test_hard_timeout_handles_blocking_provider(self) -> None:
         class BlockingProvider:
-            def generate(self, messages):  # noqa: ANN001
+            def generate(self, messages, response_schema=None):  # noqa: ANN001
                 time.sleep(0.2)
                 return json.dumps({"action": "finish", "answer": "late"})
 
@@ -131,7 +131,7 @@ class LangGraphFlowTests(unittest.TestCase):
             def __init__(self) -> None:
                 self.calls = 0
 
-            def generate(self, messages):  # noqa: ANN001
+            def generate(self, messages, response_schema=None):  # noqa: ANN001
                 self.calls += 1
                 if self.calls == 1:
                     raise ProviderTimeoutError("provider timeout after 1 attempts: read timeout")
@@ -165,7 +165,7 @@ class LangGraphFlowTests(unittest.TestCase):
         from agentic_workflows.orchestration.langgraph.provider import ProviderTimeoutError
 
         class AlwaysTimeoutProvider:
-            def generate(self, messages):  # noqa: ANN001
+            def generate(self, messages, response_schema=None):  # noqa: ANN001
                 raise ProviderTimeoutError("provider timeout after 1 attempts: read timeout")
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -187,7 +187,7 @@ class LangGraphFlowTests(unittest.TestCase):
         from agentic_workflows.orchestration.langgraph.provider import ProviderTimeoutError
 
         class AlwaysTimeoutProvider:
-            def generate(self, messages):  # noqa: ANN001
+            def generate(self, messages, response_schema=None):  # noqa: ANN001
                 raise ProviderTimeoutError("provider timeout after 1 attempts: read timeout")
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -216,7 +216,7 @@ class LangGraphFlowTests(unittest.TestCase):
         from agentic_workflows.orchestration.langgraph.provider import ProviderTimeoutError
 
         class AlwaysTimeoutProvider:
-            def generate(self, messages):  # noqa: ANN001
+            def generate(self, messages, response_schema=None):  # noqa: ANN001
                 raise ProviderTimeoutError("provider timeout after 1 attempts: read timeout")
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -694,7 +694,7 @@ class LangGraphFlowTests(unittest.TestCase):
                 def __init__(self) -> None:
                     self.calls = 0
 
-                def generate(self, messages):  # noqa: ANN001
+                def generate(self, messages, response_schema=None):  # noqa: ANN001
                     self.calls += 1
                     return json.dumps({"action": "finish", "answer": "should not be needed"})
 
