@@ -41,10 +41,11 @@ from agentic_workflows.orchestration.langgraph.handoff import create_handoff, cr
 from agentic_workflows.orchestration.langgraph.memo_store import SQLiteMemoStore
 from agentic_workflows.orchestration.langgraph.mission_auditor import audit_run
 from agentic_workflows.orchestration.langgraph.mission_parser import StructuredPlan, parse_missions
-from agentic_workflows.orchestration.langgraph.model_router import ModelRouter, TaskComplexity
+from agentic_workflows.orchestration.langgraph.model_router import ModelRouter, RoutingSignals, TaskComplexity
 from agentic_workflows.orchestration.langgraph.policy import MemoizationPolicy
 from agentic_workflows.orchestration.langgraph.provider import (
     ChatProvider,
+    LlamaCppChatProvider,
     ProviderTimeoutError,
     build_provider,
 )
@@ -216,18 +217,29 @@ class LangGraphOrchestrator:
         embedding_provider: EmbeddingProvider | None = None,
         mission_context_store: MissionContextStore | None = None,
         artifact_store: ArtifactStore | None = None,
+        fallback_provider: ChatProvider | None = None,
     ) -> None:
         self.provider = provider or build_provider()
+        self._fallback_provider = fallback_provider
+        self._consecutive_parse_failures = 0
         try:
             _ctx_size = self.provider.context_size()
         except AttributeError:
             # Graceful fallback for providers that predate context_size() — treat as full tier.
             _ctx_size = 32768
         self._prompt_tier = _select_prompt_tier(_ctx_size)
-        self._router = ModelRouter(
-            strong_provider=self.provider,
-            fast_provider=fast_provider,
-        )
+        # Alias-based dual providers: read env vars for strong/fast model aliases
+        strong_alias = os.getenv("LLAMA_CPP_STRONG_ALIAS")
+        fast_alias = os.getenv("LLAMA_CPP_FAST_ALIAS")
+        if (strong_alias or fast_alias) and isinstance(self.provider, LlamaCppChatProvider):
+            _strong = self.provider.with_alias(strong_alias) if strong_alias else self.provider
+            _fast = self.provider.with_alias(fast_alias) if fast_alias else self.provider
+            self._router = ModelRouter(strong_provider=_strong, fast_provider=_fast)
+        else:
+            self._router = ModelRouter(
+                strong_provider=self.provider,
+                fast_provider=fast_provider,
+            )
         self.memo_store = memo_store or SQLiteMemoStore()
         self.checkpoint_store = checkpoint_store or SQLiteCheckpointStore()
         self.policy = policy or MemoizationPolicy()
