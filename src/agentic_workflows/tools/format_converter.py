@@ -16,6 +16,11 @@ _SUPPORTED_FORMATS = {"json", "yaml", "toml", "csv", "ini"}
 
 class FormatConverterTool(Tool):
     name = "format_converter"
+    _args_schema = {
+        "content": {"type": "string", "required": "true"},
+        "to_format": {"type": "string", "required": "true"},
+        "from_format": {"type": "string"},
+    }
     description = (
         "Convert content between data formats. "
         "Required args: content (str), to_format (str). "

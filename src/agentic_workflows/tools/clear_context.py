@@ -9,6 +9,9 @@ from .base import Tool
 
 class ClearContextTool(Tool):
     name = "clear_context"
+    _args_schema = {
+        "scope": {"type": "string"},
+    }
     description = (
         "Signal that the conversation context should be minimized after this run. "
         "Args: scope='missions'|'full'. Returns a status signal dict."

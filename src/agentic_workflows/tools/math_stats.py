@@ -27,6 +27,12 @@ SUPPORTED_OPS = {
 
 class MathStatsTool(Tool):
     name = "math_stats"
+    _args_schema = {
+        "operation": {"type": "string", "required": "true"},
+        "a": {"type": "number"},
+        "b": {"type": "number"},
+        "numbers": {"type": "array"},
+    }
     description = (
         "Performs math calculations and statistics on numbers. "
         "For single-number or two-number ops: add, subtract, multiply, divide, power, sqrt, abs. "

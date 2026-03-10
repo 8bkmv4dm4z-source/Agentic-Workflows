@@ -21,6 +21,10 @@ _BUILTIN_CATEGORIES: dict[str, list[str]] = {
 
 class ClassifyIntentTool(Tool):
     name = "classify_intent"
+    _args_schema = {
+        "text": {"type": "string", "required": "true"},
+        "categories": {"type": "object"},
+    }
     description = (
         "Classify text intent using keyword matching. "
         "Required args: text (str). "

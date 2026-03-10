@@ -9,6 +9,15 @@ _VALID_OPS = {"parse", "to_json", "column", "filter", "summary"}
 
 class ExtractTableTool(Tool):
     name = "extract_table"
+    _args_schema = {
+        "text": {"type": "string", "required": "true"},
+        "delimiter": {"type": "string"},
+        "has_header": {"type": "boolean"},
+        "operation": {"type": "string"},
+        "column": {"type": "string"},
+        "filter_col": {"type": "string"},
+        "filter_value": {"type": "string"},
+    }
     description = "Parses and queries CSV/TSV/delimited tabular data."
 
     def execute(self, args: dict[str, Any]) -> dict[str, Any]:

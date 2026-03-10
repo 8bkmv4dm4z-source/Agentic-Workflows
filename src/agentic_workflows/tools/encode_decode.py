@@ -24,6 +24,10 @@ _VALID_OPERATIONS = {
 
 class EncodeDecodeTool(Tool):
     name = "encode_decode"
+    _args_schema = {
+        "content": {"type": "string", "required": "true"},
+        "operation": {"type": "string", "required": "true"},
+    }
     description = (
         "Encode or decode content. "
         "Required args: content (str), operation (str). "

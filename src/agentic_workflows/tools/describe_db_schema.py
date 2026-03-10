@@ -12,6 +12,10 @@ from .base import Tool
 
 class DescribeDbSchemaTool(Tool):
     name = "describe_db_schema"
+    _args_schema = {
+        "path": {"type": "string", "required": "true"},
+        "operation": {"type": "string"},
+    }
     description = (
         "Introspect a SQLite .db file or CSV file to return schema metadata. "
         "Required args: path (str). "

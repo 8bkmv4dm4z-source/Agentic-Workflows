@@ -11,6 +11,13 @@ from .base import Tool
 
 class CompareTextsTool(Tool):
     name = "compare_texts"
+    _args_schema = {
+        "text1": {"type": "string"},
+        "text2": {"type": "string"},
+        "file1": {"type": "string"},
+        "file2": {"type": "string"},
+        "mode": {"type": "string"},
+    }
     description = (
         "Compare two texts and show differences. "
         "Args: text1/text2 (str) OR file1/file2 (str paths). "

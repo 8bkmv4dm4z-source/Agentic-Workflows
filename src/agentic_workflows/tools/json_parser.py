@@ -20,6 +20,12 @@ _VALID_OPERATIONS = {
 
 class JsonParserTool(Tool):
     name = "json_parser"
+    _args_schema = {
+        "text": {"type": "string", "required": "true"},
+        "operation": {"type": "string", "required": "true"},
+        "path": {"type": "string"},
+        "schema": {"type": "object"},
+    }
     description = (
         "Parse, validate, flatten, and extract data from JSON strings. "
         "Required args: text (JSON string), operation (string). "

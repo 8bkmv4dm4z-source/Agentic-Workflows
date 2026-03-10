@@ -13,6 +13,10 @@ class _SafeDict(dict):
 
 class FillTemplateTool(Tool):
     name = "fill_template"
+    _args_schema = {
+        "template": {"type": "string", "required": "true"},
+        "variables": {"type": "object", "required": "true"},
+    }
     description = "Fills a {variable_name} template with provided variables. Missing placeholders are left unchanged."
 
     def execute(self, args: dict[str, Any]) -> dict[str, Any]:

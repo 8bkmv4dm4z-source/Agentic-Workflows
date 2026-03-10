@@ -8,6 +8,10 @@ _ALGORITHMS = {"sha256", "md5", "sha1", "sha512", "sha3_256"}
 
 class HashContentTool(Tool):
     name = "hash_content"
+    _args_schema = {
+        "content": {"type": "string", "required": "true"},
+        "algorithm": {"type": "string"},
+    }
     description = "Hashes a string using sha256, md5, sha1, sha512, or sha3_256."
 
     def execute(self, args: dict[str, Any]) -> dict[str, Any]:

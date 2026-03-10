@@ -21,6 +21,14 @@ _VALID_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
 
 class HttpRequestTool(Tool):
     name = "http_request"
+    _args_schema = {
+        "url": {"type": "string", "required": "true"},
+        "method": {"type": "string"},
+        "headers": {"type": "object"},
+        "body": {"type": "string"},
+        "timeout": {"type": "number"},
+        "response_format": {"type": "string"},
+    }
     description = "Makes HTTP requests (GET/POST/PUT/PATCH/DELETE). Private IPs are blocked."
 
     def execute(self, args: dict[str, Any]) -> dict[str, Any]:

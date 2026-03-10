@@ -20,6 +20,12 @@ _VALID_OPERATIONS = {
 
 class DataAnalysisTool(Tool):
     name = "data_analysis"
+    _args_schema = {
+        "numbers": {"type": "array", "required": "true"},
+        "operation": {"type": "string", "required": "true"},
+        "threshold": {"type": "number"},
+        "numbers_b": {"type": "array"},
+    }
     description = (
         "Analyze numeric data for summary statistics, outliers, percentiles, distribution, "
         "correlation, normalization, and z-scores. "

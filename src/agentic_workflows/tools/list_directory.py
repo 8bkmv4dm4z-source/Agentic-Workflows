@@ -13,6 +13,14 @@ from .base import Tool
 
 class ListDirectoryTool(Tool):
     name = "list_directory"
+    _args_schema = {
+        "path": {"type": "string"},
+        "recursive": {"type": "boolean"},
+        "pattern": {"type": "string"},
+        "include_hidden": {"type": "boolean"},
+        "max_depth": {"type": "number"},
+        "max_results": {"type": "number"},
+    }
     description = (
         "List directory contents with optional filtering. "
         "Optional args: path (default '.'), recursive (bool), pattern (glob), "

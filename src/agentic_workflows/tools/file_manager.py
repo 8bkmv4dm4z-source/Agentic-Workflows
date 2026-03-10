@@ -14,6 +14,12 @@ _VALID_OPERATIONS = {"copy", "move", "rename", "delete", "mkdir", "stat"}
 
 class FileManagerTool(Tool):
     name = "file_manager"
+    _args_schema = {
+        "operation": {"type": "string", "required": "true"},
+        "source": {"type": "string", "required": "true"},
+        "destination": {"type": "string"},
+        "force": {"type": "boolean"},
+    }
     description = (
         "Manage files and directories. "
         "Required args: operation ('copy'|'move'|'rename'|'delete'|'mkdir'|'stat'), source (str). "

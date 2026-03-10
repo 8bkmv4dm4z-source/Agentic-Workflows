@@ -16,6 +16,14 @@ _VALID_OPS = {
 
 class DateTimeOpsTool(Tool):
     name = "datetime_ops"
+    _args_schema = {
+        "operation": {"type": "string", "required": "true"},
+        "dt": {"type": "string"},
+        "dt2": {"type": "string"},
+        "fmt": {"type": "string"},
+        "amount": {"type": "number"},
+        "unit": {"type": "string"},
+    }
     description = (
         "Temporal operations: now, parse, format, add, subtract, diff, "
         "weekday, to_timestamp, from_timestamp."

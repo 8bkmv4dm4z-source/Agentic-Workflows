@@ -5,9 +5,21 @@ from typing import Any
 class Tool:
     name: str
     description: str
+    _args_schema: dict[str, dict[str, str]] | None = None
 
     def execute(self, args: dict[str, Any]) -> dict[str, Any]:
         raise NotImplementedError("Tool must implement the execute method.")
+
+    @property
+    def args_schema(self) -> dict[str, dict[str, str]]:
+        """Return typed argument schema for this tool.
+
+        Subclasses set ``_args_schema`` class variable. Falls back to
+        ``required_args()`` regex parsing for backward compatibility.
+        """
+        if self._args_schema is not None:
+            return self._args_schema
+        return {arg: {"type": "string"} for arg in self.required_args()}
 
     def required_args(self) -> list[str]:
         """Extract required arg names from the description string.
