@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
 status: completed
-last_updated: "2026-03-10T13:47:54.683Z"
+last_updated: "2026-03-10T13:48:19.270Z"
 last_activity: 2026-03-10 — Intent classification for mission parser (TDD)
 progress:
   total_phases: 16
@@ -89,6 +89,7 @@ Progress: [██████████] 97% (57/59 plans complete, Phase 7.7 
 | Phase 07.6 P03 | 3min | 2 tasks | 6 files |
 | Phase 07.6 P04 | 6min | 2 tasks | 7 files |
 | Phase 07.7 P02 | 4min | 1 tasks | 2 files |
+| Phase 07.7 P01 | 4min | 3 tasks | 40 files |
 
 ## Accumulated Context
 
@@ -204,6 +205,7 @@ Recent decisions affecting current work:
 - [Phase 07.6-04]: parse_all_actions_json also returns (list, bool) tuple — planner uses this function not parse_action_json directly; fallback bool=True when json.loads fails on full output
 - [Phase 07.6-04]: schema_mismatch increment in except Exception block in _plan_next_action — catches ValueError from validate_action when Pydantic rejects schema
 - [Phase 07.7]: TYPE_CHECKING import guard for ChatProvider to avoid circular imports in mission_parser
+- [Phase 07.7]: args_schema property with _args_schema class var override; falls back to required_args() regex for backward compat
 
 ### Roadmap Evolution
 

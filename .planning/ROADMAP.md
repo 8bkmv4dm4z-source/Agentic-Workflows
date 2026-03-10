@@ -243,7 +243,7 @@ Plans:
   3. `_build_system_prompt()` enforces per-role token budgets (classifier ~300, planner ~1000, executor ~300); `_estimate_prompt_tokens()` helper truncates tool descriptions when over budget — unit test with 50-tool registry
   4. `StructuredPlan.intent_classification` complexity feeds into `ModelRouter.route()` — "complex" → strong, "simple" → fast — integration test with dual providers
   5. All existing tests pass unchanged
-**Plans:** 4 plans
+**Plans:** 2/4 plans executed
 Plans:
 - [ ] 07.7-01-PLAN.md — Typed Tool.args_schema replacing regex required_args() + migrate all 36 tools (2 batches) + update graph.py consumers (SC-7)
 - [ ] 07.7-02-PLAN.md — IntentClassification dataclass + LLM classifier in parse_missions() + 500ms timeout + deterministic fallback (SC-1)
