@@ -231,6 +231,8 @@ Plans:
 - [ ] 07.6-03-PLAN.md — Wave 2: upsert_cursor/get_cursor/get_active_cursors + cursor hint injection + cursor bypass (E1-E4)
 - [ ] 07.6-04-PLAN.md — Wave 3: structural_health in RunState + audit_report + env.example grammar comment + regression gate (D2, A1)
 
+**Post-phase extension (quick-5, 2026-03-10):** Tool Schema Enforcement — compact prompt now emits arg signatures (`classify_intent(text)` instead of `classify_intent`); `ChatProvider.generate()` accepts `response_schema: dict | None`; `LangGraphOrchestrator._build_action_json_schema()` generates an anyOf JSON schema from the live tool registry and passes it to providers — LlamaCpp uses it when grammar is disabled, replacing fragile GBNF. See `.planning/quick/5-tool-schema-enforcement-compact-prompt-s/`.
+
 ### Phase 07.5: Wire ArtifactStore to Runtime (INSERTED)
 
 **Goal:** Connect the currently-dead `ArtifactStore` to the live mission execution path. `MissionContext.artifacts` (already computed at `context_manager.py:492`) should be persisted to Postgres via `ArtifactStore.upsert()` inside `_persist_mission_context()`. Add `artifact_store` parameter to `LangGraphOrchestrator` and `ContextManager`, wire it in `run.py` and `user_run.py`, and add an integration test confirming artifacts appear in the DB after a mission completes.
