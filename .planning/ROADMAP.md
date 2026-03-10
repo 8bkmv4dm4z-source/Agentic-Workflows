@@ -298,13 +298,12 @@ Plans:
   4. `observability.py` gains `report_schema_compliance(role, first_attempt_success)` reporting to Langfuse; graph.py calls after each parse attempt — unit test with mock client
   5. `run_audit.py` cross-run summary shows schema compliance rate per provider — unit test with 3 mock runs
   6. All existing tests pass unchanged
-**Plans:** 5 plans
+**Plans:** 4 plans
 Plans:
-- [ ] 07.9-01-PLAN.md — query_context tool implementation + tool registry + keyword map
-- [ ] 07.9-02-PLAN.md — Supervisor few-shot update for query_context usage
-- [ ] 07.9-03-PLAN.md — Memory consolidation module + cosine clustering + CLI flag
-- [ ] 07.9-04-PLAN.md — Schema compliance Langfuse metric + graph.py call sites
-- [ ] 07.9-05-PLAN.md — Cross-run compliance dashboard in run_audit.py + WALKTHROUGH
+- [ ] 07.9-01-PLAN.md — query_context tool + registry + keyword map + supervisor few-shot (SC-1, SC-2)
+- [ ] 07.9-02-PLAN.md — Memory consolidation module + cosine clustering + CLI flag (SC-3)
+- [ ] 07.9-03-PLAN.md — Schema compliance Langfuse metric + graph.py call sites (SC-4)
+- [ ] 07.9-04-PLAN.md — Cross-run compliance dashboard in run_audit.py + WALKTHROUGH (SC-5, SC-6)
 
 **Key files:**
 - `src/agentic_workflows/tools/` — new query_context.py
@@ -356,4 +355,4 @@ Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7 → 7.1 → 7.2
 | 7.6. LLM Output Structure Stabilization (INSERTED) | 2/5 | In Progress|  |
 | 7.7. Hybrid Intent Classifier + Few-Shot Prompts (INSERTED) | 4/4 | Complete   | 2026-03-10 |
 | 7.8. Multi-Model Routing + Cloud Fallback (INSERTED) | 3/4 | In Progress|  |
-| 7.9. Dynamic Context + Compliance Observability (INSERTED) | 0/5 | Not Started | |
+| 7.9. Dynamic Context + Compliance Observability (INSERTED) | 0/4 | Not Started | |
