@@ -245,10 +245,10 @@ Plans:
   5. All existing tests pass unchanged
 **Plans:** 4 plans
 Plans:
-- [ ] 07.7-01-PLAN.md — Typed Tool.args_schema replacing regex required_args() + migrate all 36 tools + update consumers (SC-7)
+- [ ] 07.7-01-PLAN.md — Typed Tool.args_schema replacing regex required_args() + migrate all 36 tools (2 batches) + update graph.py consumers (SC-7)
 - [ ] 07.7-02-PLAN.md — IntentClassification dataclass + LLM classifier in parse_missions() + 500ms timeout + deterministic fallback (SC-1)
 - [ ] 07.7-03-PLAN.md — FEW_SHOT sections in all directives + COMPACT for executor/evaluator + per-role token budgets + _estimate_prompt_tokens (SC-2, SC-3)
-- [ ] 07.7-04-PLAN.md — Intent-driven ModelRouter wiring + format correction escalation chain + structural_health counters (SC-4, SC-5, SC-6)
+- [ ] 07.7-04-PLAN.md — Intent-driven ModelRouter wiring + format correction escalation chain + structural_health counters (SC-4, SC-6)
 
 **Key files:**
 - `src/agentic_workflows/orchestration/langgraph/mission_parser.py` — add LLM classifier
