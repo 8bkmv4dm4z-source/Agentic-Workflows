@@ -177,7 +177,10 @@ def new_run_state(system_prompt: str, user_input: str, run_id: str | None = None
         "token_budget_remaining": 100_000,
         "token_budget_used": 0,
         "mission_contexts": {},
-        "structural_health": {"json_parse_fallback": 0, "schema_mismatch": 0},
+        "structural_health": {
+            "json_parse_fallback": 0, "schema_mismatch": 0,
+            "format_correction_hints": 0, "format_retries": 0,
+        },
     }
 
 
@@ -248,10 +251,15 @@ def ensure_state_defaults(state: RunState | dict[str, Any], *, system_prompt: st
     if "mission_contexts" not in state_dict:
         state_dict["mission_contexts"] = {}
     if "structural_health" not in state_dict or not isinstance(state_dict["structural_health"], dict):
-        state_dict["structural_health"] = {"json_parse_fallback": 0, "schema_mismatch": 0}
+        state_dict["structural_health"] = {
+            "json_parse_fallback": 0, "schema_mismatch": 0,
+            "format_correction_hints": 0, "format_retries": 0,
+        }
     else:
         state_dict["structural_health"].setdefault("json_parse_fallback", 0)
         state_dict["structural_health"].setdefault("schema_mismatch", 0)
+        state_dict["structural_health"].setdefault("format_correction_hints", 0)
+        state_dict["structural_health"].setdefault("format_retries", 0)
 
     retry_counts = state_dict["retry_counts"]
     retry_counts.setdefault("invalid_json", 0)
