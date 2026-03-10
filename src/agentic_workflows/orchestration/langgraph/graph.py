@@ -157,6 +157,43 @@ def _select_prompt_tier(context_size: int) -> Literal["compact", "full"]:
     return "compact" if context_size <= 10000 else "full"
 
 
+def _read_directive_section(directive_name: str, section: str) -> str:
+    """Read a named ## section from a directive .md file.
+
+    Returns the section content stripped of leading/trailing whitespace,
+    or "" if the file or section doesn't exist.
+    """
+    path = Path(__file__).resolve().parents[2] / "directives" / f"{directive_name}.md"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    in_section = False
+    lines: list[str] = []
+    marker = f"## {section}"
+    for line in text.splitlines():
+        if line.strip() == marker:
+            in_section = True
+            continue
+        if in_section and line.startswith("## "):
+            break
+        if in_section:
+            lines.append(line)
+    return "\n".join(lines).strip()
+
+
+def _estimate_prompt_tokens(text: str) -> int:
+    """Estimate token count using len//4 heuristic."""
+    return len(text) // 4
+
+
+_ROLE_TOKEN_BUDGETS: dict[str, int] = {
+    "classifier": 300,
+    "planner": 2500,
+    "executor": 300,
+}
+
+
 class LangGraphOrchestrator:
     """State-graph orchestrator with memoization and checkpoint guardrails."""
 
@@ -343,23 +380,9 @@ class LangGraphOrchestrator:
 
         if self._prompt_tier == "compact":
             # Read only the ## COMPACT section from supervisor.md
-            supervisor_path = Path(__file__).resolve().parents[3] / "directives" / "supervisor.md"
-            compact_directive = ""
-            try:
-                text = supervisor_path.read_text(encoding="utf-8")
-                in_compact = False
-                compact_lines: list[str] = []
-                for line in text.splitlines():
-                    if line.strip() == "## COMPACT":
-                        in_compact = True
-                        continue
-                    if in_compact and line.startswith("## "):
-                        break
-                    if in_compact:
-                        compact_lines.append(line)
-                compact_directive = "\n".join(compact_lines).strip() + "\n"
-            except OSError:
-                compact_directive = "You emit exactly one JSON action per response. Pure JSON only.\n"
+            compact_directive = _read_directive_section("supervisor", "COMPACT")
+            if not compact_directive:
+                compact_directive = "You emit exactly one JSON action per response. Pure JSON only."
 
             def _tool_sig(name: str, tool: object) -> str:
                 schema = tool.args_schema if hasattr(tool, "args_schema") else {}
@@ -369,7 +392,7 @@ class LangGraphOrchestrator:
             tool_names_line = ", ".join(_tool_sig(n, t) for n, t in self.tools.items())
             return (
                 env_block
-                + compact_directive
+                + compact_directive + "\n"
                 + f"Available tools: {tool_names_line}\n"
             )
 
@@ -381,17 +404,7 @@ class LangGraphOrchestrator:
             if readable_root != writable_root
             else f"Working directory: {readable_root}\n"
         )
-        return (
-            env_block
-            + "You are a deterministic tool-using agent.\n"
-            + workspace_line
-            + (f"Codebase context:\n{codebase_ctx}\n\n" if codebase_ctx else "")
-            + "Return exactly one JSON object per response. No XML, markdown, or prose outside JSON.\n"
-            f"Available tools: {tool_list}\n\n"
-            "Response schema:\n"
-            '{"action":"tool","tool_name":"<name>","args":{...}}\n'
-            '{"action":"finish","answer":"<summary>"}\n'
-            '{"action":"clarify","question":"<question>"}\n\n'
+        tool_args_block = (
             "Tool args (each \"operation\" takes exactly ONE value, never comma-separated):\n"
             '- text_analysis: {"text":"...", "operation":"word_count"} (one of: word_count|sentence_count|char_count|key_terms|full_report|complexity_score|paragraph_count|avg_word_length|unique_words)\n'
             '- string_ops: {"text":"...", "operation":"uppercase"} (one of: uppercase|lowercase|reverse|length|trim|replace|split|count_words|startswith|endswith|contains)\n'
@@ -408,7 +421,25 @@ class LangGraphOrchestrator:
             '- run_bash: {"command":"..."}\n'
             f'- search_files: {{"pattern":"*.py", "path":"{readable_root}"}} — exclude .venv, __pycache__, .git, node_modules paths from results\n'
             "- Other tools: see tool name for usage.\n\n"
-            "Rules:\n"
+        )
+
+        # Build few-shot section (full tier only)
+        few_shot_text = _read_directive_section("supervisor", "FEW_SHOT")
+        few_shot_block = f"\n\n## Examples\n{few_shot_text}\n" if few_shot_text else ""
+
+        prompt = (
+            env_block
+            + "You are a deterministic tool-using agent.\n"
+            + workspace_line
+            + (f"Codebase context:\n{codebase_ctx}\n\n" if codebase_ctx else "")
+            + "Return exactly one JSON object per response. No XML, markdown, or prose outside JSON.\n"
+            f"Available tools: {tool_list}\n\n"
+            "Response schema:\n"
+            '{"action":"tool","tool_name":"<name>","args":{...}}\n'
+            '{"action":"finish","answer":"<summary>"}\n'
+            '{"action":"clarify","question":"<question>"}\n\n'
+            + tool_args_block
+            + "Rules:\n"
             "- One tool call per response.\n"
             "- Memoization is automatic. Do not emit extra planning subtasks.\n"
             "- Obey system feedback messages. If a tool returns an error, fix the args.\n"
@@ -421,8 +452,37 @@ class LangGraphOrchestrator:
             "- Message history is windowed automatically — completed mission summaries are preserved, raw history is evicted. Focus on the current task.\n"
             "Context injections prefixed [Cross-run] show HISTORICAL similar missions from past runs.\n"
             "They are reference examples only — they do NOT mean your current tasks are done.\n"
-            "Always execute tools to complete every task in your current mission list.\n/no_think"
+            "Always execute tools to complete every task in your current mission list.\n"
+            + few_shot_block
         )
+
+        # Per-role token budget enforcement
+        budget = _ROLE_TOKEN_BUDGETS.get("planner", 1000)
+        estimated = _estimate_prompt_tokens(prompt)
+        if estimated > budget:
+            logger = get_logger()
+            # Step 1: Truncate tool descriptions to just name + required args
+            def _short_tool_desc(name: str, tool: object) -> str:
+                schema = tool.args_schema if hasattr(tool, "args_schema") else {}
+                req_args = [k for k, v in schema.items() if v.get("required") == "true"]
+                return f"- {name}({', '.join(req_args)})" if req_args else f"- {name}"
+
+            short_tools = "\n".join(
+                _short_tool_desc(n, t) for n, t in self.tools.items()
+            )
+            prompt = prompt.replace(tool_args_block, f"Tool args:\n{short_tools}\n\n")
+            logger.warning(
+                "Prompt exceeded planner budget (%d > %d tokens), truncated tool descriptions",
+                estimated,
+                budget,
+            )
+            # Step 2: If still over, drop few-shot
+            if few_shot_block and _estimate_prompt_tokens(prompt) > budget:
+                prompt = prompt.replace(few_shot_block, "")
+                logger.warning("Prompt still over budget, dropped few-shot examples")
+
+        prompt += "/no_think"
+        return prompt
 
     def _invalidate_known_poisoned_cache_entries(self) -> None:
         """Purge known-bad cached write inputs discovered during run review."""
@@ -1117,6 +1177,52 @@ class LangGraphOrchestrator:
                 state["structural_health"]["json_parse_fallback"] = (
                     state["structural_health"].get("json_parse_fallback", 0) + 1
                 )
+            # --- Format correction escalation chain ---
+            # Targets parseable-but-non-canonical output (fallback recovered a valid action).
+            # Step 1: free hint, Step 2: retry (costs 1 LLM call), Step 3+: accept.
+            if _parse_used_fallback or _validate_used_fallback:
+                drift_count = int(state["retry_counts"].get("consecutive_format_drift", 0)) + 1
+                state["retry_counts"]["consecutive_format_drift"] = drift_count
+
+                if drift_count == 1:
+                    # Step 1: Free hint -- continue with the parsed action
+                    state["structural_health"]["format_correction_hints"] = (
+                        state["structural_health"].get("format_correction_hints", 0) + 1
+                    )
+                    state["messages"].append({
+                        "role": "user",
+                        "content": (
+                            '[Orchestrator] Your JSON format was non-standard. Use exactly: '
+                            '{"action":"tool","tool_name":"X","args":{...}} or '
+                            '{"action":"finish","answer":"X"}'
+                        ),
+                    })
+                elif drift_count == 2:
+                    # Step 2: Retry with system correction (costs 1 LLM call)
+                    state["structural_health"]["format_retries"] = (
+                        state["structural_health"].get("format_retries", 0) + 1
+                    )
+                    state["messages"].append({
+                        "role": "user",
+                        "content": (
+                            "[Orchestrator] CRITICAL: Your responses MUST use this exact format: "
+                            '{"action":"tool","tool_name":"<name>","args":{...}} -- '
+                            "nested args under the 'args' key, not flat."
+                        ),
+                    })
+                    state["pending_action"] = None  # Force re-plan
+                    return state
+                else:
+                    # drift_count >= 3: Accept and continue (already have valid parsed action)
+                    self.logger.warning(
+                        "FORMAT DRIFT ACCEPTED step=%s drift_count=%s",
+                        state["step"],
+                        drift_count,
+                    )
+            else:
+                # Reset on clean parse
+                state["retry_counts"]["consecutive_format_drift"] = 0
+
             if len(all_actions) > 1:
                 if self.strict_single_action_mode:
                     state["pending_action_queue"] = []

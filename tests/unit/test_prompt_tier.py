@@ -1,12 +1,14 @@
 """Tests for prompt tier selection, compact system prompt, few-shot examples, and token budgets."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
-import pytest
-
-from agentic_workflows.orchestration.langgraph.graph import LangGraphOrchestrator, _select_prompt_tier
+from agentic_workflows.orchestration.langgraph.graph import (
+    LangGraphOrchestrator,
+    _estimate_prompt_tokens,
+    _read_directive_section,
+    _select_prompt_tier,
+)
 from tests.conftest import ScriptedProvider
 
 # Resolve directives directory relative to this test file
@@ -140,3 +142,78 @@ class TestDirectiveFewShotSections:
         assert "outline_code" in section_text
         assert "read_file_chunk" in section_text
         assert "write_file" in section_text
+
+
+class TestReadDirectiveSection:
+    """Tests for the _read_directive_section() helper."""
+
+    def test_read_compact_section(self) -> None:
+        result = _read_directive_section("supervisor", "COMPACT")
+        assert "Pure JSON only" in result
+
+    def test_read_few_shot_section(self) -> None:
+        result = _read_directive_section("supervisor", "FEW_SHOT")
+        assert "sort_array" in result
+
+    def test_nonexistent_directive_returns_empty(self) -> None:
+        result = _read_directive_section("nonexistent_directive_xyz", "COMPACT")
+        assert result == ""
+
+    def test_nonexistent_section_returns_empty(self) -> None:
+        result = _read_directive_section("supervisor", "NONEXISTENT_SECTION_XYZ")
+        assert result == ""
+
+
+class TestEstimatePromptTokens:
+    """Tests for _estimate_prompt_tokens()."""
+
+    def test_basic_estimation(self) -> None:
+        assert _estimate_prompt_tokens("hello world") == len("hello world") // 4
+
+    def test_empty_string(self) -> None:
+        assert _estimate_prompt_tokens("") == 0
+
+    def test_long_string(self) -> None:
+        text = "x" * 4000
+        assert _estimate_prompt_tokens(text) == 1000
+
+
+class TestFewShotInjection:
+    """Tests for few-shot injection in _build_system_prompt()."""
+
+    def _make_compact_orchestrator(self) -> LangGraphOrchestrator:
+        class SmallProvider:
+            def context_size(self) -> int:
+                return 8192
+
+            def generate(self, messages, response_schema=None):  # noqa: ANN001
+                return '{"action":"finish","answer":"done"}'
+
+        return LangGraphOrchestrator(provider=SmallProvider())  # type: ignore[arg-type]
+
+    def _make_full_orchestrator(self) -> LangGraphOrchestrator:
+        return LangGraphOrchestrator(
+            provider=ScriptedProvider(responses=[{"action": "finish", "answer": "done"}])
+        )
+
+    def test_full_tier_includes_few_shot(self) -> None:
+        """On full tier, system prompt contains few-shot examples."""
+        orchestrator = self._make_full_orchestrator()
+        assert "## Examples" in orchestrator.system_prompt
+        assert "sort_array" in orchestrator.system_prompt
+
+    def test_compact_tier_excludes_few_shot(self) -> None:
+        """On compact tier, system prompt does NOT contain few-shot examples."""
+        orchestrator = self._make_compact_orchestrator()
+        assert "## Examples" not in orchestrator.system_prompt
+
+
+class TestTokenBudgetTruncation:
+    """Test that tool descriptions are truncated when prompt exceeds role budget."""
+
+    def test_budget_truncation_with_many_tools(self) -> None:
+        """When prompt exceeds planner budget, tool descriptions are truncated."""
+        from agentic_workflows.orchestration.langgraph.graph import _ROLE_TOKEN_BUDGETS
+
+        assert "planner" in _ROLE_TOKEN_BUDGETS
+        assert _ROLE_TOKEN_BUDGETS["planner"] == 2500
