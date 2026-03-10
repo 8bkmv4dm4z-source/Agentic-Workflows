@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
-status: executing
-last_updated: "2026-03-10T15:51:28.846Z"
-last_activity: 2026-03-10 — LlamaCppChatProvider.with_alias() factory method
+status: completed
+last_updated: "2026-03-10T17:18:05.655Z"
+last_activity: 2026-03-10 — Walkthrough, fallback provider wiring, routing stats in audit panels
 progress:
   total_phases: 16
-  completed_phases: 13
+  completed_phases: 14
   total_plans: 63
-  completed_plans: 62
-  percent: 97
+  completed_plans: 64
+  percent: 100
 ---
 
 # Project State
@@ -25,11 +25,11 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 ## Current Position
 
 Phase: 7.8 (Multi-Model Provider Routing + Smart Cloud Fallback)
-Plan: 3 of 4 in current phase (07.8-01, 07.8-02, 07.8-03 DONE)
-Status: Phase 7.8 in progress — Plan 03 complete (cloud fallback + route_by_signals wiring).
-Last activity: 2026-03-10 — Cloud fallback, route_by_signals wiring, alias dual providers
+Plan: 4 of 4 in current phase (07.8-01, 07.8-02, 07.8-03, 07.8-04 DONE)
+Status: Phase 7.8 COMPLETE — all 4 plans executed.
+Last activity: 2026-03-10 — Walkthrough, fallback provider wiring, routing stats in audit panels
 
-Progress: [██████████] 98% (63/65 plans complete, Phase 7.8 03/04 done)
+Progress: [██████████] 100% (65/65 plans complete, Phase 7.8 04/04 done)
 
 ## Test Status
 
