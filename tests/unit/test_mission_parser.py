@@ -1,7 +1,13 @@
+import json
+import time
 import unittest
 
 from agentic_workflows.orchestration.langgraph.mission_parser import (
+    IntentClassification,
+    MissionStep,
     StructuredPlan,
+    _classify_intent,
+    _deterministic_classify,
     _extract_missions_regex_fallback,
     parse_missions,
 )
@@ -128,6 +134,128 @@ class MissionParserTests(unittest.TestCase):
         plan = parse_missions(text)
         self.assertEqual(len(plan.flat_missions), 2)
         self.assertIn("Task 1:", plan.flat_missions[0])
+
+
+class _MockProvider:
+    """Minimal ChatProvider mock for intent classification tests."""
+
+    def __init__(self, response: str | None = None, delay: float = 0.0):
+        self._response = response
+        self._delay = delay
+
+    def generate(
+        self,
+        messages: list[dict],
+        system: str | None = None,
+        response_schema: dict | None = None,
+    ) -> str:
+        if self._delay > 0:
+            time.sleep(self._delay)
+        if self._response is None:
+            raise RuntimeError("provider error")
+        return self._response
+
+
+class IntentClassificationTests(unittest.TestCase):
+    """Tests for intent classification in mission_parser."""
+
+    def _make_simple_plan(self) -> StructuredPlan:
+        """Plan with 1 step, simple tools."""
+        steps = [MissionStep(id="1", description="sort the numbers", suggested_tools=["sort_array"])]
+        return StructuredPlan(steps=steps, flat_missions=["Task 1: sort the numbers"], parsing_method="structured")
+
+    def _make_complex_plan(self) -> StructuredPlan:
+        """Plan with 3+ steps."""
+        steps = [
+            MissionStep(id="1", description="analyze data", suggested_tools=["data_analysis"]),
+            MissionStep(id="2", description="write results", suggested_tools=["write_file"]),
+            MissionStep(id="3", description="summarize", suggested_tools=["summarize_text"]),
+        ]
+        return StructuredPlan(
+            steps=steps,
+            flat_missions=["Task 1: analyze data", "Task 2: write results", "Task 3: summarize"],
+            parsing_method="structured",
+        )
+
+    # Test 1: _deterministic_classify returns "simple" for 1-2 step plans with simple tools
+    def test_deterministic_simple_plan(self) -> None:
+        plan = self._make_simple_plan()
+        result = _deterministic_classify(plan)
+        self.assertIsInstance(result, IntentClassification)
+        self.assertEqual(result.complexity, "simple")
+        self.assertEqual(result.source, "deterministic_fallback")
+        self.assertGreater(result.confidence, 0.0)
+
+    # Test 2: _deterministic_classify returns "complex" for 3+ step plans
+    def test_deterministic_complex_many_steps(self) -> None:
+        plan = self._make_complex_plan()
+        result = _deterministic_classify(plan)
+        self.assertEqual(result.complexity, "complex")
+        self.assertEqual(result.source, "deterministic_fallback")
+
+    # Test 3: _deterministic_classify returns "complex" when parsing_method is "regex_fallback"
+    def test_deterministic_complex_regex_fallback(self) -> None:
+        steps = [MissionStep(id="1", description="do something")]
+        plan = StructuredPlan(steps=steps, flat_missions=["do something"], parsing_method="regex_fallback")
+        result = _deterministic_classify(plan)
+        self.assertEqual(result.complexity, "complex")
+
+    # Test 4: _deterministic_classify returns "complex" when complex tools are suggested
+    def test_deterministic_complex_tools(self) -> None:
+        steps = [MissionStep(id="1", description="analyze", suggested_tools=["data_analysis"])]
+        plan = StructuredPlan(steps=steps, flat_missions=["analyze"], parsing_method="structured")
+        result = _deterministic_classify(plan)
+        self.assertEqual(result.complexity, "complex")
+
+    # Test 5: _classify_intent with mock provider returning valid JSON sets source="llm"
+    def test_classify_intent_llm_success(self) -> None:
+        plan = self._make_simple_plan()
+        response = json.dumps({"complexity": "simple", "mission_type": "tool_call"})
+        provider = _MockProvider(response=response)
+        result = _classify_intent("sort [3,1,2]", plan, provider, timeout=2.0)
+        self.assertEqual(result.source, "llm")
+        self.assertEqual(result.complexity, "simple")
+        self.assertEqual(result.mission_type, "tool_call")
+
+    # Test 6: _classify_intent with timeout falls back to deterministic
+    def test_classify_intent_timeout_fallback(self) -> None:
+        plan = self._make_simple_plan()
+        response = json.dumps({"complexity": "simple", "mission_type": "tool_call"})
+        provider = _MockProvider(response=response, delay=3.0)
+        result = _classify_intent("sort [3,1,2]", plan, provider, timeout=0.1)
+        self.assertEqual(result.source, "deterministic_fallback")
+
+    # Test 7: _classify_intent with invalid JSON falls back to deterministic
+    def test_classify_intent_invalid_json_fallback(self) -> None:
+        plan = self._make_simple_plan()
+        provider = _MockProvider(response="not valid json at all")
+        result = _classify_intent("sort [3,1,2]", plan, provider, timeout=2.0)
+        self.assertEqual(result.source, "deterministic_fallback")
+
+    # Test 8: StructuredPlan.to_dict() includes intent_classification; from_dict() restores it
+    def test_structured_plan_serialization_with_intent(self) -> None:
+        plan = self._make_simple_plan()
+        plan.intent_classification = IntentClassification(
+            complexity="simple", mission_type="tool_call", confidence=0.8, source="llm"
+        )
+        d = plan.to_dict()
+        self.assertIn("intent_classification", d)
+        self.assertEqual(d["intent_classification"]["complexity"], "simple")
+
+        restored = StructuredPlan.from_dict(d)
+        self.assertIsNotNone(restored.intent_classification)
+        self.assertEqual(restored.intent_classification.complexity, "simple")
+        self.assertEqual(restored.intent_classification.source, "llm")
+
+    # Test 9: from_dict() with old data (no intent_classification key) returns None
+    def test_structured_plan_from_dict_old_data(self) -> None:
+        old_data = {
+            "steps": [{"id": "1", "description": "test"}],
+            "flat_missions": ["test"],
+            "parsing_method": "structured",
+        }
+        restored = StructuredPlan.from_dict(old_data)
+        self.assertIsNone(restored.intent_classification)
 
 
 if __name__ == "__main__":
