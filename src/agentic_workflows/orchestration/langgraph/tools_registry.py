@@ -25,6 +25,7 @@ from agentic_workflows.tools.json_parser import JsonParserTool
 from agentic_workflows.tools.list_directory import ListDirectoryTool
 from agentic_workflows.tools.math_stats import MathStatsTool
 from agentic_workflows.tools.parse_code_structure import OutlineCodeTool
+from agentic_workflows.tools.query_context import QueryContextTool
 from agentic_workflows.tools.query_db import QueryDBTool
 from agentic_workflows.tools.read_file import ReadFileTool
 from agentic_workflows.tools.read_file_chunk import ReadFileChunkTool
@@ -121,6 +122,8 @@ class RetrieveMemoTool(Tool):
 def build_tool_registry(
     store: SQLiteMemoStore,
     checkpoint_store: SQLiteCheckpointStore | None = None,
+    mission_context_store: Any = None,
+    embedding_provider: Any = None,
 ) -> dict[str, Tool]:
     """Build the full tool map used by graph execution nodes."""
     registry: dict[str, Tool] = {
@@ -164,4 +167,6 @@ def build_tool_registry(
     }
     if checkpoint_store is not None:
         registry["retrieve_run_context"] = RetrieveRunContextTool(checkpoint_store)
+    if mission_context_store is not None:
+        registry["query_context"] = QueryContextTool(mission_context_store, embedding_provider)
     return registry

@@ -66,8 +66,9 @@ TOOL_BITS: dict[str, int] = {
     "file_manager": 33,
     "encode_decode": 34,
     "validate_data": 35,
-    # Conditional tool -- appended last to preserve existing bitmasks
+    # Conditional tools -- appended last to preserve existing bitmasks
     "retrieve_run_context": 36,
+    "query_context": 37,
 }
 
 
