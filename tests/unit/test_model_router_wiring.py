@@ -72,3 +72,67 @@ def test_orchestrator_dual_provider() -> None:
     orch = LangGraphOrchestrator(provider=strong, fast_provider=fast)
 
     assert orch._router.has_dual_providers is True, "dual-provider mode: has_dual_providers must be True"
+
+
+# --- Intent-driven routing tests ---
+
+
+def test_route_by_intent_complex_returns_strong() -> None:
+    """route_by_intent with complexity='complex' should return strong provider."""
+    s = _StrongProvider()
+    f = _FastProvider()
+    router = ModelRouter(strong_provider=s, fast_provider=f)
+
+    intent = {"complexity": "complex", "mission_type": "analysis", "confidence": 0.8, "source": "llm"}
+    assert router.route_by_intent(intent_classification=intent) is s, "complex intent should route to strong"
+
+
+def test_route_by_intent_simple_returns_fast() -> None:
+    """route_by_intent with complexity='simple' should return fast provider."""
+    s = _StrongProvider()
+    f = _FastProvider()
+    router = ModelRouter(strong_provider=s, fast_provider=f)
+
+    intent = {"complexity": "simple", "mission_type": "file_io", "confidence": 0.7, "source": "deterministic_fallback"}
+    assert router.route_by_intent(intent_classification=intent) is f, "simple intent should route to fast"
+
+
+def test_route_by_intent_none_falls_back_to_task_complexity() -> None:
+    """route_by_intent with None intent should fall back to task_complexity routing."""
+    s = _StrongProvider()
+    f = _FastProvider()
+    router = ModelRouter(strong_provider=s, fast_provider=f)
+
+    # With fallback_complexity="tool_selection" -> should route to fast
+    assert router.route_by_intent(intent_classification=None, fallback_complexity="tool_selection") is f, (
+        "None intent with tool_selection fallback should route to fast"
+    )
+
+
+def test_route_by_intent_none_planning_returns_strong() -> None:
+    """route_by_intent with None intent AND fallback_complexity='planning' returns strong (backward compat)."""
+    s = _StrongProvider()
+    f = _FastProvider()
+    router = ModelRouter(strong_provider=s, fast_provider=f)
+
+    assert router.route_by_intent(intent_classification=None, fallback_complexity="planning") is s, (
+        "None intent with planning fallback should route to strong"
+    )
+
+
+def test_route_by_intent_integration_with_parse_missions() -> None:
+    """Integration: intent classification dict -> route_by_intent -> correct provider."""
+    s = _StrongProvider()
+    f = _FastProvider()
+    router = ModelRouter(strong_provider=s, fast_provider=f)
+
+    # Simulate what parse_missions produces for a simple task
+    simple_intent = {"complexity": "simple", "mission_type": "file_io", "confidence": 0.6, "source": "deterministic_fallback"}
+    assert router.route_by_intent(intent_classification=simple_intent) is f
+
+    # Simulate what parse_missions produces for a complex task
+    complex_intent = {"complexity": "complex", "mission_type": "multi_step", "confidence": 0.8, "source": "llm"}
+    assert router.route_by_intent(intent_classification=complex_intent) is s
+
+    # Simulate missing classification (backward compat)
+    assert router.route_by_intent(intent_classification=None) is s  # defaults to "planning" -> strong
