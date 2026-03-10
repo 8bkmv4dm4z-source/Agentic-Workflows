@@ -10,7 +10,7 @@ Stub implementation — both providers can be the same instance initially.
 When a second provider is configured, routing decisions take effect.
 """
 
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from agentic_workflows.orchestration.langgraph.provider import ChatProvider
@@ -48,6 +48,23 @@ class ModelRouter:
         if task_complexity in _STRONG_TASKS:
             return self._strong
         return self._fast
+
+    def route_by_intent(
+        self,
+        intent_classification: dict[str, Any] | None = None,
+        fallback_complexity: TaskComplexity = "planning",
+    ) -> ChatProvider:
+        """Route by intent classification, falling back to explicit complexity.
+
+        Accepts a dict (not the dataclass) because state stores
+        intent_classification as a dict via ``to_dict()``.
+        """
+        if intent_classification is not None:
+            complexity = intent_classification.get("complexity", "complex")
+            if complexity == "simple":
+                return self._fast
+            return self._strong
+        return self.route(fallback_complexity)
 
     @property
     def has_dual_providers(self) -> bool:

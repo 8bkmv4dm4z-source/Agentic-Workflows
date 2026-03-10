@@ -613,7 +613,10 @@ class LangGraphOrchestrator:
                 state["messages"] = system_msgs + prior_conversation + user_msgs
         state = ensure_state_defaults(state, system_prompt=self.system_prompt)
         state["rerun_context"] = dict(rerun_context or {})
-        structured_plan = parse_missions(user_input)
+        structured_plan = parse_missions(
+            user_input,
+            classifier_provider=self.provider,
+        )
         missions = structured_plan.flat_missions
         contracts = self._build_mission_contracts_from_plan(structured_plan, missions)
         state["missions"] = missions
@@ -975,7 +978,11 @@ class LangGraphOrchestrator:
                 state["step"],
                 self.plan_call_timeout_seconds,
             )
-            model_output = self._generate_with_hard_timeout(state["messages"]).strip()
+            _intent = (state.get("structured_plan") or {}).get("intent_classification")
+            model_output = self._generate_with_hard_timeout(
+                state["messages"],
+                intent_classification=_intent,
+            ).strip()
             self.logger.info("MODEL OUTPUT step=%s output=%s", state["step"], model_output[:500])
 
             # Treat a bare "{}" as semantically empty — the GBNF grammar allows
@@ -1573,18 +1580,25 @@ class LangGraphOrchestrator:
         return state
 
     def _generate_with_hard_timeout(
-        self, messages: list[dict[str, str]], complexity: TaskComplexity = "planning"
+        self,
+        messages: list[dict[str, str]],
+        complexity: TaskComplexity = "planning",
+        intent_classification: dict[str, Any] | None = None,
     ) -> str:
         """Protect planner generate() call with a hard wall-clock timeout."""
         timeout_seconds = self.plan_call_timeout_seconds
+        provider = self._router.route_by_intent(
+            intent_classification=intent_classification,
+            fallback_complexity=complexity,
+        )
         if timeout_seconds <= 0:
-            return self._router.route(complexity).generate(messages, response_schema=self._action_json_schema)
+            return provider.generate(messages, response_schema=self._action_json_schema)
 
         outbox: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
 
         def _run() -> None:
             try:
-                outbox.put(("ok", self._router.route(complexity).generate(messages, response_schema=self._action_json_schema)))
+                outbox.put(("ok", provider.generate(messages, response_schema=self._action_json_schema)))
             except Exception as exc:  # noqa: BLE001
                 outbox.put(("err", exc))
 
