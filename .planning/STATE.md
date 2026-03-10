@@ -9,8 +9,8 @@ progress:
   total_phases: 16
   completed_phases: 12
   total_plans: 59
-  completed_plans: 58
-  percent: 97
+  completed_plans: 59
+  percent: 98
 ---
 
 # Project State
@@ -25,11 +25,11 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 ## Current Position
 
 Phase: 7.7 (Hybrid Intent Classifier and Few-Shot Prompts)
-Plan: 2 of 4 in current phase (07.7-01, 07.7-02 DONE; 07.7-03, 07.7-04 pending)
-Status: Plan 02 complete — IntentClassification with LLM+deterministic hybrid classifier.
-Last activity: 2026-03-10 — Intent classification for mission parser (TDD)
+Plan: 3 of 4 in current phase (07.7-01, 07.7-02, 07.7-03 DONE; 07.7-04 pending)
+Status: Plan 03 complete — Few-shot prompts and token budgets.
+Last activity: 2026-03-10 — Few-shot JSON examples in directives + token budget enforcement
 
-Progress: [██████████] 97% (57/59 plans complete, Phase 7.7 02/04 done)
+Progress: [██████████] 98% (58/59 plans complete, Phase 7.7 03/04 done)
 
 ## Test Status
 
@@ -90,6 +90,7 @@ Progress: [██████████] 97% (57/59 plans complete, Phase 7.7 
 | Phase 07.6 P04 | 6min | 2 tasks | 7 files |
 | Phase 07.7 P02 | 4min | 1 tasks | 2 files |
 | Phase 07.7 P01 | 4min | 3 tasks | 40 files |
+| Phase 07.7 P03 | 6min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -206,6 +207,9 @@ Recent decisions affecting current work:
 - [Phase 07.6-04]: schema_mismatch increment in except Exception block in _plan_next_action — catches ValueError from validate_action when Pydantic rejects schema
 - [Phase 07.7]: TYPE_CHECKING import guard for ChatProvider to avoid circular imports in mission_parser
 - [Phase 07.7]: args_schema property with _args_schema class var override; falls back to required_args() regex for backward compat
+- [Phase 07.7]: _read_directive_section() reusable helper for reading ## sections from directive .md files; fixed path from parents[3] to parents[2]
+- [Phase 07.7]: Planner token budget 2500 (not 1000) — full prompt baseline ~1625 tokens; budget triggers truncation on bloated prompts
+- [Phase 07.7]: Few-shot injected on full tier only via ## Examples block; compact tier omits for context savings
 
 ### Roadmap Evolution
 
@@ -248,5 +252,5 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last activity: 2026-03-10 - Completed quick task 5: Tool Schema Enforcement — Compact Prompt Signatures + JSON Schema Response Format
+Last activity: 2026-03-10 - Completed 07.7-03: Few-shot prompts and token budgets
 Resume file: None
