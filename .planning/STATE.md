@@ -25,11 +25,11 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 ## Current Position
 
 Phase: 7.8 (Multi-Model Provider Routing + Smart Cloud Fallback)
-Plan: 1 of 4 in current phase (07.8-01 DONE)
-Status: Phase 7.8 in progress — Plan 01 complete (with_alias factory).
-Last activity: 2026-03-10 — LlamaCppChatProvider.with_alias() factory method
+Plan: 3 of 4 in current phase (07.8-01, 07.8-02, 07.8-03 DONE)
+Status: Phase 7.8 in progress — Plan 03 complete (cloud fallback + route_by_signals wiring).
+Last activity: 2026-03-10 — Cloud fallback, route_by_signals wiring, alias dual providers
 
-Progress: [██████████] 97% (61/63 plans complete, Phase 7.8 01/04 done)
+Progress: [██████████] 98% (63/65 plans complete, Phase 7.8 03/04 done)
 
 ## Test Status
 
@@ -94,6 +94,7 @@ Progress: [██████████] 97% (61/63 plans complete, Phase 7.8 
 | Phase 07.7 P03 | 6min | 2 tasks | 5 files |
 | Phase 07.8 P01 | 2min | 1 tasks | 2 files |
 | Phase 07.8 P02 | 5min | 1 tasks | 2 files |
+| Phase 07.8 P03 | 8min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -218,6 +219,8 @@ Recent decisions affecting current work:
 - [Phase 07.7]: Few-shot injected on full tier only via ## Examples block; compact tier omits for context savings
 - [Phase 07.8]: Used __new__ clone pattern to create LlamaCppChatProvider alias without _detect_llama_cpp_model HTTP call
 - [Phase 07.8]: Kept route_by_intent() as deprecated shim with DeprecationWarning instead of removing -- graph.py caller migrates in Plan 03
+- [Phase 07.8]: Cloud fallback is per-step (not sticky) -- each timeout/parse-failure independently tries fallback_provider
+- [Phase 07.8]: _consecutive_parse_failures is instance attribute (not state) -- resets per orchestrator lifecycle
 
 ### Roadmap Evolution
 
@@ -260,5 +263,5 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last activity: 2026-03-10 - Completed 07.7-04: Intent-driven routing + format correction escalation chain
+Last activity: 2026-03-10 - Completed 07.8-03: Cloud fallback + route_by_signals graph wiring
 Resume file: None
