@@ -301,8 +301,8 @@ Plans:
 **Plans:** 4 plans
 Plans:
 - [x] 07.9-01-PLAN.md — query_context tool + registry + keyword map + supervisor few-shot (SC-1, SC-2)
-- [ ] 07.9-02-PLAN.md — Memory consolidation module + cosine clustering + CLI flag (SC-3)
-- [ ] 07.9-03-PLAN.md — Schema compliance Langfuse metric + graph.py call sites (SC-4)
+- [x] 07.9-02-PLAN.md — Memory consolidation module + cosine clustering + CLI flag (SC-3)
+- [x] 07.9-03-PLAN.md — Schema compliance Langfuse metric + graph.py call sites (SC-4)
 - [ ] 07.9-04-PLAN.md — Cross-run compliance dashboard in run_audit.py + WALKTHROUGH (SC-5, SC-6)
 
 **Key files:**
