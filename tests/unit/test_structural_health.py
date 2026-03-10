@@ -84,9 +84,11 @@ class TestStructuralHealthKey:
             orchestrator = _make_orchestrator(provider, tmp_dir)
             result = orchestrator.run("Say hello.")
         sh = result["audit_report"]["structural_health"]
-        assert sh == {"json_parse_fallback": 0, "schema_mismatch": 0}, (
-            f"Expected zero counters for clean run; got: {sh}"
-        )
+        assert sh["json_parse_fallback"] == 0, f"Expected json_parse_fallback=0; got: {sh}"
+        assert sh["schema_mismatch"] == 0, f"Expected schema_mismatch=0; got: {sh}"
+        assert sh.get("cloud_fallback_count", 0) == 0, f"Expected cloud_fallback_count=0; got: {sh}"
+        assert sh.get("format_correction_hints", 0) == 0, f"Expected format_correction_hints=0; got: {sh}"
+        assert sh.get("format_retries", 0) == 0, f"Expected format_retries=0; got: {sh}"
 
 
 class TestFallbackCounter:

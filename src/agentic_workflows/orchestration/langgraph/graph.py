@@ -1051,9 +1051,22 @@ class LangGraphOrchestrator:
                 self.plan_call_timeout_seconds,
             )
             _intent = (state.get("structured_plan") or {}).get("intent_classification")
+            _signals: RoutingSignals = {
+                "token_budget_remaining": int(state.get("token_budget_remaining", 100000)),
+                "mission_type": (_intent or {}).get("mission_type", "unknown"),
+                "retry_count": int(state["retry_counts"].get("provider_timeout", 0)),
+                "step": state["step"],
+                "intent_classification": _intent,
+            }
+            # Track routing decision in structural_health
+            _routed_provider = self._router.route_by_signals(_signals)
+            _tier = "strong" if _routed_provider is self._router._strong else "fast"
+            state["structural_health"]["routing_decisions"][_tier] = (
+                state["structural_health"].get("routing_decisions", {}).get(_tier, 0) + 1
+            )
             model_output = self._generate_with_hard_timeout(
                 state["messages"],
-                intent_classification=_intent,
+                signals=_signals,
             ).strip()
             self.logger.info("MODEL OUTPUT step=%s output=%s", state["step"], model_output[:500])
 
@@ -1226,13 +1239,45 @@ class LangGraphOrchestrator:
                     return state
                 else:
                     # drift_count >= 3: Accept and continue (already have valid parsed action)
+                    self._consecutive_parse_failures += 1
                     self.logger.warning(
-                        "FORMAT DRIFT ACCEPTED step=%s drift_count=%s",
+                        "FORMAT DRIFT ACCEPTED step=%s drift_count=%s consecutive_parse_failures=%s",
                         state["step"],
                         drift_count,
+                        self._consecutive_parse_failures,
                     )
+                    # Cloud fallback on 2+ consecutive parse failures
+                    if self._consecutive_parse_failures >= 2 and self._fallback_provider is not None:
+                        try:
+                            self.logger.info(
+                                "CLOUD FALLBACK ATTEMPT step=%s reason=parse_failures",
+                                state["step"],
+                            )
+                            cloud_output = self._fallback_provider.generate(
+                                state["messages"], response_schema=self._action_json_schema
+                            ).strip()
+                            state["structural_health"]["cloud_fallback_count"] = (
+                                state["structural_health"].get("cloud_fallback_count", 0) + 1
+                            )
+                            state["structural_health"].setdefault("local_model_failures", {"timeout": 0, "parse": 0})
+                            state["structural_health"]["local_model_failures"]["parse"] = (
+                                state["structural_health"]["local_model_failures"].get("parse", 0) + 1
+                            )
+                            self._consecutive_parse_failures = 0
+                            if cloud_output and cloud_output != "{}":
+                                cloud_actions, _ = self._parse_all_actions_json(cloud_output)
+                                if cloud_actions:
+                                    action, _ = self._validate_action_from_dict(cloud_actions[0])
+                                    # Replace the locally-parsed action with cloud-parsed one
+                                    state["messages"][-1] = {"role": "assistant", "content": cloud_output}
+                        except Exception:  # noqa: BLE001
+                            self.logger.warning(
+                                "CLOUD FALLBACK FAILED step=%s reason=parse — using locally parsed action",
+                                state["step"],
+                            )
             else:
                 # Reset on clean parse
+                self._consecutive_parse_failures = 0
                 state["retry_counts"]["consecutive_format_drift"] = 0
 
             if len(all_actions) > 1:
@@ -1304,6 +1349,52 @@ class LangGraphOrchestrator:
                 timeout_count,
                 error_text,
             )
+            # Track local model timeout failure
+            state["structural_health"].setdefault("local_model_failures", {"timeout": 0, "parse": 0})
+            state["structural_health"]["local_model_failures"]["timeout"] = (
+                state["structural_health"]["local_model_failures"].get("timeout", 0) + 1
+            )
+
+            # --- Cloud fallback on timeout: try fallback provider before deterministic ---
+            if self._fallback_provider is not None:
+                try:
+                    self.logger.info(
+                        "CLOUD FALLBACK ATTEMPT step=%s reason=timeout",
+                        state["step"],
+                    )
+                    model_output = self._fallback_provider.generate(
+                        state["messages"], response_schema=self._action_json_schema
+                    ).strip()
+                    state["structural_health"]["cloud_fallback_count"] = (
+                        state["structural_health"].get("cloud_fallback_count", 0) + 1
+                    )
+                    self.logger.info(
+                        "CLOUD FALLBACK SUCCESS step=%s output=%s",
+                        state["step"],
+                        model_output[:200],
+                    )
+                    # Feed cloud output into normal parsing path
+                    if model_output and model_output != "{}":
+                        state["messages"].append({"role": "assistant", "content": model_output})
+                        state["policy_flags"]["planner_timeout_mode"] = False
+                        all_actions, _pf = self._parse_all_actions_json(model_output)
+                        if all_actions:
+                            action, _ = self._validate_action_from_dict(all_actions[0])
+                            state["pending_action"] = action
+                            if len(all_actions) > 1 and not self.strict_single_action_mode:
+                                state["pending_action_queue"] = all_actions[1:]
+                            self.checkpoint_store.save(
+                                run_id=state["run_id"],
+                                step=state["step"],
+                                node_name="plan_cloud_fallback",
+                                state=state,
+                            )
+                            return state
+                except Exception:  # noqa: BLE001
+                    self.logger.warning(
+                        "CLOUD FALLBACK FAILED step=%s — falling through to deterministic",
+                        state["step"],
+                    )
 
             fallback_action = self._deterministic_fallback_action(state)
             if fallback_action is not None:
@@ -1700,15 +1791,11 @@ class LangGraphOrchestrator:
     def _generate_with_hard_timeout(
         self,
         messages: list[dict[str, str]],
-        complexity: TaskComplexity = "planning",
-        intent_classification: dict[str, Any] | None = None,
+        signals: RoutingSignals,
     ) -> str:
         """Protect planner generate() call with a hard wall-clock timeout."""
         timeout_seconds = self.plan_call_timeout_seconds
-        provider = self._router.route_by_intent(
-            intent_classification=intent_classification,
-            fallback_complexity=complexity,
-        )
+        provider = self._router.route_by_signals(signals)
         if timeout_seconds <= 0:
             return provider.generate(messages, response_schema=self._action_json_schema)
 
