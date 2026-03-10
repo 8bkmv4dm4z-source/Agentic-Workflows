@@ -349,6 +349,38 @@ def _print_run_details(run_id: str, rows: list[RunSummary], checkpoint_db_path: 
         print(f"  #{call} tool={tool} status={step_status}")
 
 
+def _run_consolidation() -> None:
+    """Run memory consolidation on old missions (requires DATABASE_URL)."""
+    import os
+
+    db_url = os.environ.get("DATABASE_URL")
+    if not db_url:
+        print("ERROR: DATABASE_URL not set. Memory consolidation requires Postgres.")
+        return
+
+    try:
+        from psycopg_pool import ConnectionPool
+    except ImportError:
+        print("ERROR: psycopg_pool not installed. Run: pip install psycopg[pool]")
+        return
+
+    from agentic_workflows.storage.memory_consolidation import consolidate_memories
+
+    pool = ConnectionPool(
+        conninfo=db_url,
+        min_size=1,
+        max_size=3,
+        open=False,
+        kwargs={"autocommit": True, "prepare_threshold": 0},
+    )
+    pool.open(wait=True)
+    try:
+        result = consolidate_memories(pool, age_days=7)
+        print(f"Consolidation result: {result}")
+    finally:
+        pool.close()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Summarize LangGraph runs from checkpoint DB.")
     parser.add_argument(
@@ -359,7 +391,16 @@ def main() -> None:
     parser.add_argument(
         "--run-id", default="", help="Optional run id to print detailed tool step table"
     )
+    parser.add_argument(
+        "--consolidate",
+        action="store_true",
+        help="Run memory consolidation on old missions (requires DATABASE_URL)",
+    )
     args = parser.parse_args()
+
+    if args.consolidate:
+        _run_consolidation()
+        return
 
     rows = summarize_runs(checkpoint_db_path=args.checkpoint_db, memo_db_path=args.memo_db)
     _print_table(rows)
