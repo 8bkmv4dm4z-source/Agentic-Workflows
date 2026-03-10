@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
-status: completed
-last_updated: "2026-03-10T15:48:36.127Z"
-last_activity: 2026-03-10 — Intent-driven routing + format correction escalation chain
+status: executing
+last_updated: "2026-03-10T15:51:28.846Z"
+last_activity: 2026-03-10 — LlamaCppChatProvider.with_alias() factory method
 progress:
   total_phases: 16
   completed_phases: 13
   total_plans: 63
-  completed_plans: 61
-  percent: 100
+  completed_plans: 62
+  percent: 97
 ---
 
 # Project State
@@ -93,6 +93,7 @@ Progress: [██████████] 97% (61/63 plans complete, Phase 7.8 
 | Phase 07.7 P04 | 12min | 2 tasks | 5 files |
 | Phase 07.7 P03 | 6min | 2 tasks | 5 files |
 | Phase 07.8 P01 | 2min | 1 tasks | 2 files |
+| Phase 07.8 P02 | 5min | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -216,6 +217,7 @@ Recent decisions affecting current work:
 - [Phase 07.7]: Planner token budget 2500 (not 1000) — full prompt baseline ~1625 tokens; budget triggers truncation on bloated prompts
 - [Phase 07.7]: Few-shot injected on full tier only via ## Examples block; compact tier omits for context savings
 - [Phase 07.8]: Used __new__ clone pattern to create LlamaCppChatProvider alias without _detect_llama_cpp_model HTTP call
+- [Phase 07.8]: Kept route_by_intent() as deprecated shim with DeprecationWarning instead of removing -- graph.py caller migrates in Plan 03
 
 ### Roadmap Evolution
 
