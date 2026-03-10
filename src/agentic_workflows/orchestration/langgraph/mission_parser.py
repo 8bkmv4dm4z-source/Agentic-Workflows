@@ -7,15 +7,58 @@ support, tool suggestions, and dependency inference.  Falls back to the
 original regex extractor when structured parsing yields nothing.
 """
 
+import json
 import queue
 import re
 import threading
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from agentic_workflows.logger import get_logger
 
+if TYPE_CHECKING:
+    from agentic_workflows.orchestration.langgraph.provider import ChatProvider
+
 LOGGER = get_logger("langgraph.mission_parser")
+
+# Tools that indicate complex missions requiring the strong model
+_COMPLEX_TOOLS: set[str] = {
+    "data_analysis",
+    "outline_code",
+    "read_file_chunk",
+    "run_bash",
+    "http_request",
+}
+
+
+@dataclass
+class IntentClassification:
+    """Classification of a mission's complexity and type.
+
+    Used by ModelRouter to decide strong vs fast provider routing.
+    """
+
+    complexity: str  # "simple" | "complex"
+    mission_type: str  # "file_io", "computation", "analysis", "multi_step", "tool_call"
+    confidence: float  # 0.0-1.0
+    source: str  # "llm" | "deterministic_fallback"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "complexity": self.complexity,
+            "mission_type": self.mission_type,
+            "confidence": self.confidence,
+            "source": self.source,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> IntentClassification:
+        return cls(
+            complexity=data["complexity"],
+            mission_type=data["mission_type"],
+            confidence=data.get("confidence", 0.5),
+            source=data.get("source", "unknown"),
+        )
 
 
 @dataclass
@@ -43,12 +86,16 @@ class StructuredPlan:
     steps: list[MissionStep]
     flat_missions: list[str]  # Backward-compat with existing missions list
     parsing_method: str  # "structured" | "regex_fallback"
+    intent_classification: IntentClassification | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "steps": [step.to_dict() for step in self.steps],
             "flat_missions": list(self.flat_missions),
             "parsing_method": self.parsing_method,
+            "intent_classification": self.intent_classification.to_dict()
+            if self.intent_classification
+            else None,
         }
 
     @classmethod
@@ -64,10 +111,13 @@ class StructuredPlan:
             )
             for s in data.get("steps", [])
         ]
+        ic_data = data.get("intent_classification")
+        intent = IntentClassification.from_dict(ic_data) if ic_data else None
         return cls(
             steps=steps,
             flat_missions=data.get("flat_missions", []),
             parsing_method=data.get("parsing_method", "unknown"),
+            intent_classification=intent,
         )
 
 
@@ -207,6 +257,8 @@ def parse_missions(
     user_input: str,
     timeout_seconds: float = 5.0,
     max_plan_steps: int = 7,
+    classifier_provider: ChatProvider | None = None,
+    classifier_timeout: float = 0.5,
 ) -> StructuredPlan:
     """Parse user input into a StructuredPlan.
 
@@ -226,6 +278,9 @@ def parse_missions(
     if timeout_seconds <= 0:
         plan = _parse_missions_inner(user_input)
         limited = _enforce_step_limit(plan, max_plan_steps)
+        _apply_intent_classification(
+            limited, user_input, classifier_provider, classifier_timeout
+        )
         LOGGER.info(
             "PARSER RESULT method=%s steps=%s flat_missions=%s",
             limited.parsing_method,
@@ -249,6 +304,9 @@ def parse_missions(
     except queue.Empty:
         LOGGER.info("PARSER FALLBACK reason=timeout timeout_seconds=%.2f", timeout_seconds)
         fallback = _enforce_step_limit(_build_fallback_plan(user_input), max_plan_steps)
+        _apply_intent_classification(
+            fallback, user_input, classifier_provider, classifier_timeout
+        )
         LOGGER.info(
             "PARSER RESULT method=%s steps=%s flat_missions=%s",
             fallback.parsing_method,
@@ -260,6 +318,9 @@ def parse_missions(
     if kind == "err":
         LOGGER.info("PARSER FALLBACK reason=exception")
         fallback = _enforce_step_limit(_build_fallback_plan(user_input), max_plan_steps)
+        _apply_intent_classification(
+            fallback, user_input, classifier_provider, classifier_timeout
+        )
         LOGGER.info(
             "PARSER RESULT method=%s steps=%s flat_missions=%s",
             fallback.parsing_method,
@@ -269,6 +330,9 @@ def parse_missions(
         return fallback
 
     limited = _enforce_step_limit(payload, max_plan_steps)
+    _apply_intent_classification(
+        limited, user_input, classifier_provider, classifier_timeout
+    )
     LOGGER.info(
         "PARSER RESULT method=%s steps=%s flat_missions=%s",
         limited.parsing_method,
@@ -276,6 +340,138 @@ def parse_missions(
         len(limited.flat_missions),
     )
     return limited
+
+
+def _apply_intent_classification(
+    plan: StructuredPlan,
+    user_input: str,
+    classifier_provider: ChatProvider | None,
+    classifier_timeout: float,
+) -> None:
+    """Apply intent classification to the plan (mutates plan in place)."""
+    if classifier_provider is not None:
+        plan.intent_classification = _classify_intent(
+            user_input, plan, classifier_provider, classifier_timeout
+        )
+    else:
+        plan.intent_classification = _deterministic_classify(plan)
+
+
+def _deterministic_classify(plan: StructuredPlan) -> IntentClassification:
+    """Classify mission complexity using deterministic heuristics.
+
+    Rules:
+    - 3+ top-level steps -> complex
+    - regex_fallback parsing -> complex (indicates ambiguous input)
+    - Complex tools present -> complex
+    - Otherwise -> simple
+    """
+    top_level = [s for s in plan.steps if s.parent_id is None]
+    all_tools: set[str] = set()
+    for step in plan.steps:
+        all_tools.update(step.suggested_tools)
+
+    has_complex_tools = bool(all_tools & _COMPLEX_TOOLS)
+
+    if has_complex_tools or len(top_level) >= 3 or plan.parsing_method == "regex_fallback":
+        return IntentClassification(
+            complexity="complex",
+            mission_type="multi_step",
+            confidence=0.6,
+            source="deterministic_fallback",
+        )
+    return IntentClassification(
+        complexity="simple",
+        mission_type="tool_call",
+        confidence=0.7,
+        source="deterministic_fallback",
+    )
+
+
+_CLASSIFIER_PROMPT = """\
+Classify this mission's complexity and type.
+
+Mission: {user_input}
+Steps: {step_count}
+Suggested tools: {tools}
+
+Respond with JSON only:
+{{"complexity": "simple" or "complex", "mission_type": "file_io" or "computation" or "analysis" or "multi_step" or "tool_call"}}
+"""
+
+
+def _classify_intent(
+    user_input: str,
+    plan: StructuredPlan,
+    provider: ChatProvider,
+    timeout: float,
+) -> IntentClassification:
+    """Classify mission intent using an LLM provider with timeout fallback.
+
+    On timeout or invalid response, falls back to deterministic classification.
+    """
+    tools_str = ", ".join(
+        sorted({t for s in plan.steps for t in s.suggested_tools})
+    )
+    prompt = _CLASSIFIER_PROMPT.format(
+        user_input=user_input[:500],
+        step_count=len([s for s in plan.steps if s.parent_id is None]),
+        tools=tools_str or "none",
+    )
+
+    response_schema = {
+        "type": "object",
+        "properties": {
+            "complexity": {"type": "string", "enum": ["simple", "complex"]},
+            "mission_type": {
+                "type": "string",
+                "enum": ["file_io", "computation", "analysis", "multi_step", "tool_call"],
+            },
+        },
+        "required": ["complexity", "mission_type"],
+    }
+
+    outbox: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
+
+    def _run() -> None:
+        try:
+            result = provider.generate(
+                messages=[{"role": "user", "content": prompt}],
+                response_schema=response_schema,
+            )
+            outbox.put(("ok", result))
+        except Exception as exc:  # noqa: BLE001
+            outbox.put(("err", exc))
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+
+    try:
+        kind, payload = outbox.get(timeout=timeout)
+    except queue.Empty:
+        LOGGER.warning("INTENT CLASSIFIER timeout after %.2fs, using deterministic fallback", timeout)
+        return _deterministic_classify(plan)
+
+    if kind == "err":
+        LOGGER.warning("INTENT CLASSIFIER error: %s, using deterministic fallback", payload)
+        return _deterministic_classify(plan)
+
+    # Parse JSON response
+    try:
+        data = json.loads(payload)
+        complexity = data["complexity"]
+        mission_type = data["mission_type"]
+        if complexity not in ("simple", "complex"):
+            raise ValueError(f"Invalid complexity: {complexity}")  # noqa: TRY301
+        return IntentClassification(
+            complexity=complexity,
+            mission_type=mission_type,
+            confidence=0.8,
+            source="llm",
+        )
+    except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+        LOGGER.warning("INTENT CLASSIFIER invalid JSON response, using deterministic fallback")
+        return _deterministic_classify(plan)
 
 
 def _parse_missions_inner(user_input: str) -> StructuredPlan:
