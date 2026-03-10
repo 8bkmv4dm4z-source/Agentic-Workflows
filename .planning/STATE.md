@@ -25,11 +25,11 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 ## Current Position
 
 Phase: 7.9 (Dynamic Context Querying, Memory Consolidation, Compliance, Observability)
-Plan: 3 of 4 in current phase (07.9-01, 07.9-02, 07.9-03 DONE)
-Status: Executing Phase 7.9 — Plan 03 complete (schema compliance reporting)
-Last activity: 2026-03-10 — Schema compliance Langfuse metric wired into graph.py parse path
+Plan: 4 of 4 in current phase (07.9-01, 07.9-02, 07.9-03, 07.9-04 DONE)
+Status: Phase 7.9 COMPLETE — all 4 plans executed
+Last activity: 2026-03-10 — Compliance dashboard columns + WALKTHROUGH_PHASE7.9.md
 
-Progress: [██████████] 100% (68/68 plans complete, Phase 7.9 03/04 done)
+Progress: [██████████] 100% (69/69 plans complete, Phase 7.9 04/04 done)
 
 ## Test Status
 
@@ -96,6 +96,7 @@ Progress: [██████████] 100% (68/68 plans complete, Phase 7.9
 | Phase 07.8 P02 | 5min | 1 tasks | 2 files |
 | Phase 07.8 P03 | 8min | 3 tasks | 4 files |
 | Phase 07.9 P02 | 4min | 2 tasks | 4 files |
+| Phase 07.9 P04 | 4min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -225,6 +226,8 @@ Recent decisions affecting current work:
 - [Phase 07.9]: Union-find single-linkage clustering for memory consolidation -- O(n^2) pair comparison with path compression
 - [Phase 07.9]: Average cluster embeddings as fallback when no embedding_provider given for re-embedding merged summaries
 - [Phase 07.9]: --consolidate early-exit branch in run_audit.py main() before summary flow
+- [Phase 07.9]: Compliance rate = (steps - fallbacks - format_retries) / max(1, steps); defaults to 1.0 when structural_health absent
+- [Phase 07.9]: RunSummary new fields use defaults for backward compat with existing dataclass construction
 
 ### Roadmap Evolution
 
@@ -267,5 +270,5 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last activity: 2026-03-10 - Completed 07.9-03 schema compliance reporting
-Resume file: .planning/phases/07.9-dynamic-context-querying-memory-consolidation-compliance-observability/07.9-03-SUMMARY.md
+Last activity: 2026-03-10 - Completed 07.9-04 compliance dashboard + walkthrough (Phase 7.9 COMPLETE)
+Resume file: .planning/phases/07.9-dynamic-context-querying-memory-consolidation-compliance-observability/07.9-04-SUMMARY.md
