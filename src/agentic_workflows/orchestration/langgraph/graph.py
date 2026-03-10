@@ -1296,17 +1296,32 @@ class LangGraphOrchestrator:
             # Try to identify what tool the model was attempting so the hint is specific.
             _tool_match = re.search(
                 r'"tool_name"\s*:\s*"([^"]{1,60})"'
-                r'|"action"\s*:\s*"([^"]{1,60})"',
+                r'|"action"\s*:\s*"([^"]{1,60})"'
+                r'|"tool"\s*:\s*"([^"]{1,60})"',
                 model_output,
             )
             _attempted = None
             if _tool_match:
-                _attempted = (_tool_match.group(1) or _tool_match.group(2) or "").strip()
+                _attempted = (
+                    _tool_match.group(1) or _tool_match.group(2) or _tool_match.group(3) or ""
+                ).strip()
                 if _attempted in {"tool", "finish", "clarify"}:
                     _attempted = None  # too generic to be useful
 
+            # Detect wrong-key schema: model used "tool" instead of "action"+"tool_name"
+            _used_tool_key = bool(
+                re.search(r'"tool"\s*:\s*"', model_output)
+                and '"action"' not in model_output
+            )
+
             if invalid_count <= 2:
-                if _attempted:
+                if _used_tool_key and _attempted:
+                    retry_hint = (
+                        f'Wrong format: you used {{"tool":"{_attempted}",...}} but the required '
+                        f'format is {{"action":"tool","tool_name":"{_attempted}","args":{{...}}}}. '
+                        "Retry with the correct keys."
+                    )
+                elif _attempted:
                     retry_hint = (
                         f"Your JSON for '{_attempted}' was malformed ({error_text}). "
                         f"Fix the JSON syntax and retry '{_attempted}' with a valid JSON object. "
@@ -1314,8 +1329,9 @@ class LangGraphOrchestrator:
                     )
                 else:
                     retry_hint = (
-                        f"Invalid action ({error_text}). Return exactly one valid JSON object. "
-                        "Do not output prose."
+                        f"Invalid action ({error_text}). You MUST return one of:\n"
+                        '{"action":"tool","tool_name":"<tool>","args":{...}}\n'
+                        '{"action":"finish","answer":"<summary>"}'
                     )
             elif invalid_count <= 4:
                 retry_hint = (

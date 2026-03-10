@@ -48,6 +48,23 @@ def validate_action(
             "tool_name": action_alias,
             "args": dict(resolved_args) if isinstance(resolved_args, dict) else {},
         }
+    # Normalize {"tool": "X", flat_args...} emitted by models that skip "action"+"tool_name"
+    if (
+        "action" not in data
+        and "tool_name" not in data
+        and isinstance(data.get("tool"), str)
+        and str(data["tool"]).strip().lower() in tool_registry
+    ):
+        tool_name = str(data.pop("tool")).strip().lower()
+        _reserved2 = {"tool", "tool_name", "action", "args", "arguments", "__mission_id"}
+        flat_args = {k: v for k, v in data.items() if k not in _reserved2}
+        resolved_args = data.get("args") or data.get("arguments") or flat_args
+        data = {
+            "action": "tool",
+            "tool_name": tool_name,
+            "args": dict(resolved_args) if isinstance(resolved_args, dict) else {},
+        }
+        used_fallback = True
     if (
         data.get("action") == "tool"
         and "tool_name" not in data
