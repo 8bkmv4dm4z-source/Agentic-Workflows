@@ -883,6 +883,12 @@ class LangGraphOrchestrator:
         """Call the model planner and parse one strict JSON action."""
         state = ensure_state_defaults(state, system_prompt=self.system_prompt)
         self.context_manager.compact(state)
+        # Proactive compaction against provider context limit
+        try:
+            ctx_limit = self.provider.context_size()
+            self.context_manager.proactive_compact(state, ctx_limit)
+        except Exception:  # noqa: BLE001
+            pass  # graceful degradation -- don't crash if proactive compact fails
         pending_action = state.get("pending_action") or {}
         if pending_action.get("action") == "finish":
             return state
@@ -1478,6 +1484,48 @@ class LangGraphOrchestrator:
             return state
         except Exception as exc:
             error_text = str(exc)
+            # --- Context overflow handling: compact and retry once ---
+            if "exceed_context_size" in error_text.lower() or "context length" in error_text.lower():
+                self.logger.warning(
+                    "CONTEXT OVERFLOW step=%s -- triggering aggressive compaction and retry",
+                    state["step"],
+                )
+                try:
+                    self.context_manager.proactive_compact(state, self.provider.context_size())
+                    model_output = self._generate_with_hard_timeout(
+                        state["messages"], signals=_signals,
+                    ).strip()
+                    if model_output:
+                        state["messages"].append({"role": "assistant", "content": model_output})
+                        state["policy_flags"]["planner_timeout_mode"] = False
+                        all_actions, _pf = self._parse_all_actions_json(model_output)
+                        if all_actions:
+                            action, _ = self._validate_action_from_dict(all_actions[0])
+                            state["pending_action"] = action
+                            self.checkpoint_store.save(
+                                run_id=state["run_id"],
+                                step=state["step"],
+                                node_name="plan_context_overflow_retry",
+                                state=state,
+                            )
+                            return state
+                except Exception:  # noqa: BLE001
+                    self.logger.warning(
+                        "CONTEXT OVERFLOW RETRY FAILED step=%s -- falling through to deterministic fallback",
+                        state["step"],
+                    )
+                # Fall through to deterministic fallback
+                state["policy_flags"]["planner_timeout_mode"] = True
+                fallback_action = self._deterministic_fallback_action(state)
+                if fallback_action is not None:
+                    state["pending_action"] = fallback_action
+                    self.checkpoint_store.save(
+                        run_id=state["run_id"],
+                        step=state["step"],
+                        node_name="plan_context_overflow_fallback",
+                        state=state,
+                    )
+                    return state
             if "schema error" in error_text.lower() or "validation" in error_text.lower():
                 state["structural_health"]["schema_mismatch"] = (
                     state["structural_health"].get("schema_mismatch", 0) + 1

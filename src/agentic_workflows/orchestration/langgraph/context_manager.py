@@ -604,6 +604,51 @@ class ContextManager:
                     )
                     state["messages"].append({"role": "user", "content": hint})
 
+    def proactive_compact(self, state: dict[str, Any], ctx_limit: int) -> None:
+        """Compact messages when estimated token count approaches ctx_limit.
+
+        Called before each planner LLM call to prevent exceed_context_size_error.
+        Uses len//4 token estimation (same as token_budget tracking in graph.py).
+        Triggers at 80% of ctx_limit to leave headroom for the response.
+        """
+        messages = state.get("messages", [])
+        estimated_tokens = sum(len(str(m.get("content", ""))) // 4 for m in messages)
+        threshold = int(ctx_limit * 0.8)
+
+        if estimated_tokens <= threshold:
+            return
+
+        _logger.warning(
+            "PROACTIVE COMPACT triggered: estimated_tokens=%d threshold=%d ctx_limit=%d messages=%d",
+            estimated_tokens, threshold, ctx_limit, len(messages),
+        )
+
+        # First try standard sliding window compaction
+        self.compact(state)
+
+        # Re-estimate after compaction
+        messages = state.get("messages", [])
+        estimated_tokens_after = sum(len(str(m.get("content", ""))) // 4 for m in messages)
+
+        if estimated_tokens_after > threshold:
+            # Aggressive compaction: keep system + last 5 messages
+            system_msgs = [m for m in messages if m.get("role") == "system"]
+            non_system = [m for m in messages if m.get("role") != "system"]
+            aggressive_keep = min(5, len(non_system))
+            state["messages"] = system_msgs + non_system[-aggressive_keep:]
+            _logger.warning(
+                "AGGRESSIVE COMPACT: reduced from %d to %d messages (estimated_tokens was %d, ctx_limit=%d)",
+                len(messages), len(state["messages"]), estimated_tokens_after, ctx_limit,
+            )
+
+        # Final check -- if still over, log but do not crash
+        final_tokens = sum(len(str(m.get("content", ""))) // 4 for m in state.get("messages", []))
+        if final_tokens > ctx_limit:
+            _logger.warning(
+                "CONTEXT STILL EXCEEDS LIMIT after compaction: estimated=%d limit=%d -- provider may reject",
+                final_tokens, ctx_limit,
+            )
+
     def build_planner_context_injection(self, state: dict[str, Any]) -> str:
         """Build a context injection string from completed mission summaries.
 
