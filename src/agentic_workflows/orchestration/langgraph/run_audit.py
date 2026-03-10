@@ -38,6 +38,10 @@ class RunSummary:
     cache_reuse_misses: int
     issue_flags: str
     finalized_at: str
+    schema_compliance_rate: float = 1.0
+    json_parse_fallbacks: int = 0
+    format_retries: int = 0
+    cloud_fallback_count: int = 0
 
 
 def _connect(path: str) -> sqlite3.Connection:
@@ -169,11 +173,20 @@ def summarize_runs(
         if retries.get("duplicate_tool", 0):
             issue_flags.append("duplicate_tool_retry")
 
+        # Extract structural_health for compliance rate computation
+        sh = dict(state.get("structural_health", {}))
+        fallbacks = int(sh.get("json_parse_fallback", 0))
+        fmt_retries = int(sh.get("format_retries", 0))
+        cloud_fb = int(sh.get("cloud_fallback_count", 0))
+        step_count = int(state.get("step", row.get("step", 0)))
+        first_success = max(0, step_count - fallbacks - fmt_retries)
+        compliance_rate = first_success / max(1, step_count)
+
         summaries.append(
             RunSummary(
                 run_id=run_id,
                 status=_status_from_state(str(row["node_name"]), final_answer),
-                step_count=int(state.get("step", row.get("step", 0))),
+                step_count=step_count,
                 tools_used_count=tools_count,
                 tools_by_step=tools_str,
                 memo_entry_count=int(memo_counts.get(run_id, 0)),
@@ -188,6 +201,10 @@ def summarize_runs(
                 cache_reuse_misses=int(policy_flags.get("cache_reuse_misses", 0)),
                 issue_flags=",".join(issue_flags),
                 finalized_at=str(row["created_at"]),
+                schema_compliance_rate=compliance_rate,
+                json_parse_fallbacks=fallbacks,
+                format_retries=fmt_retries,
+                cloud_fallback_count=cloud_fb,
             )
         )
 
@@ -204,6 +221,10 @@ def _print_table(rows: list[RunSummary]) -> None:
         "status",
         "step_count",
         "tools_used",
+        "compliance",
+        "fallbacks",
+        "fmt_retry",
+        "cloud_fb",
         "memo_count",
         "invalid_json",
         "dup_tool",
@@ -225,6 +246,10 @@ def _print_table(rows: list[RunSummary]) -> None:
                 row.status,
                 str(row.step_count),
                 str(row.tools_used_count),
+                f"{row.schema_compliance_rate:.0%}",
+                str(row.json_parse_fallbacks),
+                str(row.format_retries),
+                str(row.cloud_fallback_count),
                 str(row.memo_entry_count),
                 str(row.invalid_json_retries),
                 str(row.duplicate_tool_retries),
@@ -278,6 +303,10 @@ def _write_csv(rows: list[RunSummary], csv_path: str) -> None:
                 "cache_reuse_misses",
                 "issue_flags",
                 "finalized_at",
+                "schema_compliance_rate",
+                "json_parse_fallbacks",
+                "format_retries",
+                "cloud_fallback_count",
             ]
         )
         for row in rows:
@@ -300,6 +329,10 @@ def _write_csv(rows: list[RunSummary], csv_path: str) -> None:
                     row.cache_reuse_misses,
                     row.issue_flags,
                     row.finalized_at,
+                    row.schema_compliance_rate,
+                    row.json_parse_fallbacks,
+                    row.format_retries,
+                    row.cloud_fallback_count,
                 ]
             )
     print(f"Wrote CSV summary to {output}")
