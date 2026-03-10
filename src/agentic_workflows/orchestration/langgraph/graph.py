@@ -87,6 +87,9 @@ except ImportError:  # pragma: no cover
     StructuredTool = None  # type: ignore[assignment,misc]
 
 
+_api_logger = get_logger("api_debug")
+
+
 class MemoizationPolicyViolation(RuntimeError):
     """Raised when memoization policy retries are exhausted."""
 
@@ -716,6 +719,14 @@ class LangGraphOrchestrator:
         )
         self._write_shared_plan(state)
         self.logger.info("RUN START run_id=%s missions=%s", state["run_id"], len(missions))
+        _api_logger.info(
+            "RUN_START run_id=%s missions=%d system_prompt_len=%d parser_timeout=%.1f classifier_timeout=%.1f",
+            state["run_id"],
+            len(missions),
+            len(self.system_prompt),
+            _adaptive_parser_timeout(self.provider),
+            _adaptive_classifier_timeout(self.provider),
+        )
         self.checkpoint_store.save(
             run_id=state["run_id"],
             step=state["step"],
@@ -1070,7 +1081,7 @@ class LangGraphOrchestrator:
             _intent = (state.get("structured_plan") or {}).get("intent_classification")
             _signals: RoutingSignals = {
                 "token_budget_remaining": int(state.get("token_budget_remaining", 100000)),
-                "mission_type": (_intent or {}).get("mission_type", "unknown"),
+                "mission_type": "multi_step",  # Always route planning to strong model
                 "retry_count": int(state["retry_counts"].get("provider_timeout", 0)),
                 "step": state["step"],
                 "intent_classification": _intent,
@@ -1086,6 +1097,17 @@ class LangGraphOrchestrator:
                 signals=_signals,
             ).strip()
             self.logger.info("MODEL OUTPUT step=%s output=%s", state["step"], model_output[:500])
+            _api_logger.info(
+                "PLANNER_STEP step=%s model=%s provider=%s tier=%s "
+                "routing_signals=%s tokens_est=%d output_preview=%s",
+                state["step"],
+                getattr(_routed_provider, "model", "unknown"),
+                type(_routed_provider).__name__,
+                _tier,
+                _signals,
+                len(model_output) // 4,
+                model_output[:200],
+            )
 
             # Treat a bare "{}" as semantically empty — the GBNF grammar allows
             # it syntactically but it carries no action information.  Normalising
@@ -1219,6 +1241,13 @@ class LangGraphOrchestrator:
                 state["structural_health"]["json_parse_fallback"] = (
                     state["structural_health"].get("json_parse_fallback", 0) + 1
                 )
+            _api_logger.info(
+                "PLANNER_PARSE step=%s action=%s tool=%s fallback=%s",
+                state["step"],
+                action.get("action", "unknown") if isinstance(action, dict) else "unknown",
+                action.get("tool_name", "none") if isinstance(action, dict) else "none",
+                str(_parse_used_fallback or _validate_used_fallback),
+            )
             # --- Format correction escalation chain ---
             # Targets parseable-but-non-canonical output (fallback recovered a valid action).
             # Step 1: free hint, Step 2: retry (costs 1 LLM call), Step 3+: accept.

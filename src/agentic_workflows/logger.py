@@ -104,3 +104,11 @@ def setup_dual_logging(log_dir: str = ".tmp") -> None:
         _lg = logging.getLogger(_name)
         _lg.addHandler(provider_handler)
         _lg.propagate = True
+
+    # API debug: per-step planner debug info → api.log
+    api_handler = logging.FileHandler(log_path / "api.log", mode="a")
+    api_handler.setLevel(logging.DEBUG)
+    api_handler.setFormatter(fmt)
+    _api_lg = logging.getLogger("api_debug")
+    _api_lg.addHandler(api_handler)
+    _api_lg.propagate = True
