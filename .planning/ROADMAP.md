@@ -233,6 +233,88 @@ Plans:
 
 **Post-phase extension (quick-5, 2026-03-10):** Tool Schema Enforcement — compact prompt now emits arg signatures (`classify_intent(text)` instead of `classify_intent`); `ChatProvider.generate()` accepts `response_schema: dict | None`; `LangGraphOrchestrator._build_action_json_schema()` generates an anyOf JSON schema from the live tool registry and passes it to providers — LlamaCpp uses it when grammar is disabled, replacing fragile GBNF. See `.planning/quick/5-tool-schema-enforcement-compact-prompt-s/`.
 
+### Phase 07.7: Hybrid Intent Classifier + Few-Shot Prompt Refinement (INSERTED)
+
+**Goal:** Layer an LLM-based intent classifier on top of the deterministic `mission_parser.py` to classify mission type and complexity before planning begins. Add 2-3 concrete few-shot JSON examples to each directive (supervisor, executor, evaluator). Extend compact/full tier system with per-role token budgets. Wire intent classification output into ModelRouter to replace explicit complexity params.
+**Depends on:** Phase 07.6
+**Success Criteria** (what must be TRUE):
+  1. `mission_parser.parse_missions()` accepts optional `ChatProvider`; LLM classifies mission type + complexity into `StructuredPlan.intent_classification: dict | None`; 500ms timeout with deterministic fallback — unit test with failing mock provider
+  2. supervisor.md, executor.md, evaluator.md each contain `## FEW_SHOT` section; `_build_system_prompt()` injects on "full" tier, omits on "compact" — unit test
+  3. `_build_system_prompt()` enforces per-role token budgets (classifier ~300, planner ~1000, executor ~300); `_estimate_prompt_tokens()` helper truncates tool descriptions when over budget — unit test with 50-tool registry
+  4. `StructuredPlan.intent_classification` complexity feeds into `ModelRouter.route()` — "complex" → strong, "simple" → fast — integration test with dual providers
+  5. All existing tests pass unchanged
+**Plans:** 4 plans
+Plans:
+- [ ] 07.7-01-PLAN.md — Typed Tool.args_schema replacing regex required_args() + migrate all 36 tools + update consumers (SC-7)
+- [ ] 07.7-02-PLAN.md — IntentClassification dataclass + LLM classifier in parse_missions() + 500ms timeout + deterministic fallback (SC-1)
+- [ ] 07.7-03-PLAN.md — FEW_SHOT sections in all directives + COMPACT for executor/evaluator + per-role token budgets + _estimate_prompt_tokens (SC-2, SC-3)
+- [ ] 07.7-04-PLAN.md — Intent-driven ModelRouter wiring + format correction escalation chain + structural_health counters (SC-4, SC-5, SC-6)
+
+**Key files:**
+- `src/agentic_workflows/orchestration/langgraph/mission_parser.py` — add LLM classifier
+- `src/agentic_workflows/orchestration/langgraph/graph.py` — _build_system_prompt(), token budgets
+- `src/agentic_workflows/directives/supervisor.md` — add FEW_SHOT section
+- `src/agentic_workflows/directives/executor.md` — add FEW_SHOT section
+- `src/agentic_workflows/directives/evaluator.md` — add FEW_SHOT section
+- `src/agentic_workflows/orchestration/langgraph/model_router.py` — intent-driven routing
+
+**Note:** /no_think is already wired in LlamaCppChatProvider (provider.py:564-572). No changes needed — it appends `/no_think` when `LLAMA_CPP_THINKING` is off.
+
+---
+
+### Phase 07.8: Multi-Model Provider Routing + Smart Cloud Fallback (INSERTED)
+
+**Goal:** Extend LlamaCppChatProvider to support alias-based routing for multi-model llama-server instances (e.g., `--alias planner` / `--alias executor`). Upgrade ModelRouter to infer task complexity from runtime signals (token_budget_remaining, mission type, retry count) instead of caller-supplied labels. Add automatic cloud fallback: when the local llama.cpp model fails validation (schema mismatch, repeated parse failures, timeout), auto-escalate to Groq API with retry chain tracking in structural_health.
+**Depends on:** Phase 07.7
+**Success Criteria** (what must be TRUE):
+  1. `LlamaCppChatProvider` accepts `model_alias: str | None` and has `with_alias(alias) -> LlamaCppChatProvider` factory; `generate()` passes alias as model name to llama-server — unit test asserting model field
+  2. `ModelRouter.route()` accepts `signals: RoutingSignals` TypedDict (token_budget_remaining, mission_type, retry_count, step); infers complexity: multi_step/retry>=2/budget<5000 → strong, else → fast — parametrized unit tests
+  3. `LangGraphOrchestrator.__init__` accepts `fallback_provider: ChatProvider | None`; on ProviderTimeoutError or 2 consecutive parse failures, retries on fallback_provider; events counted in `structural_health["cloud_fallback_count"]` — integration test with failing mock
+  4. `structural_health` gains: `cloud_fallback_count`, `local_model_failures`, `routing_decisions` — visible in audit_report
+  5. All existing tests pass unchanged
+**Plans:** 4 plans
+Plans:
+- [ ] 07.8-01-PLAN.md — Multi-model LlamaCpp alias support (model_alias param, with_alias factory)
+- [ ] 07.8-02-PLAN.md — Intelligent ModelRouter with RoutingSignals TypedDict + signal-based inference
+- [ ] 07.8-03-PLAN.md — Smart cloud fallback (fallback_provider, retry chain, structural_health counters)
+- [ ] 07.8-04-PLAN.md — Structural health expansion + WALKTHROUGH
+
+**Key files:**
+- `src/agentic_workflows/orchestration/langgraph/provider.py` — LlamaCppChatProvider alias routing
+- `src/agentic_workflows/orchestration/langgraph/model_router.py` — RoutingSignals, inference logic
+- `src/agentic_workflows/orchestration/langgraph/graph.py` — fallback_provider wiring, counter increments
+- `src/agentic_workflows/orchestration/langgraph/state_schema.py` — new structural_health fields
+
+---
+
+### Phase 07.9: Dynamic Context Querying + Memory Consolidation + Compliance Observability (INSERTED)
+
+**Goal:** Add a `query_context` tool that lets the LLM dynamically query pgvector during planning (using existing MissionContextStore infrastructure). Implement memory consolidation to cluster old episodic memories by semantic similarity and compress them. Wire schema compliance as a custom Langfuse metric using existing structural_health counters.
+**Depends on:** Phase 07.8
+**Success Criteria** (what must be TRUE):
+  1. `query_context` tool registered with args `{query: str, max_results: int}`; calls `MissionContextStore.query_cascade()`; returns top-N formatted results; when store is None returns empty — unit tests
+  2. `_TOOL_KEYWORD_MAP` maps "prior", "previous", "recall", "remember" → query_context; supervisor.md few-shot includes query_context example — unit test
+  3. `consolidate_memories()` in `storage/memory_consolidation.py` clusters missions >7 days by cosine similarity (0.85 threshold), replaces clusters with summaries, deletes originals transactionally; `--consolidate` CLI flag — Postgres integration test
+  4. `observability.py` gains `report_schema_compliance(role, first_attempt_success)` reporting to Langfuse; graph.py calls after each parse attempt — unit test with mock client
+  5. `run_audit.py` cross-run summary shows schema compliance rate per provider — unit test with 3 mock runs
+  6. All existing tests pass unchanged
+**Plans:** 5 plans
+Plans:
+- [ ] 07.9-01-PLAN.md — query_context tool implementation + tool registry + keyword map
+- [ ] 07.9-02-PLAN.md — Supervisor few-shot update for query_context usage
+- [ ] 07.9-03-PLAN.md — Memory consolidation module + cosine clustering + CLI flag
+- [ ] 07.9-04-PLAN.md — Schema compliance Langfuse metric + graph.py call sites
+- [ ] 07.9-05-PLAN.md — Cross-run compliance dashboard in run_audit.py + WALKTHROUGH
+
+**Key files:**
+- `src/agentic_workflows/tools/` — new query_context.py
+- `src/agentic_workflows/orchestration/langgraph/mission_parser.py` — keyword map update
+- `src/agentic_workflows/storage/memory_consolidation.py` — new module
+- `src/agentic_workflows/observability.py` — compliance metric
+- `src/agentic_workflows/orchestration/langgraph/run_audit.py` — compliance dashboard
+
+---
+
 ### Phase 07.5: Wire ArtifactStore to Runtime (INSERTED)
 
 **Goal:** Connect the currently-dead `ArtifactStore` to the live mission execution path. `MissionContext.artifacts` (already computed at `context_manager.py:492`) should be persisted to Postgres via `ArtifactStore.upsert()` inside `_persist_mission_context()`. Add `artifact_store` parameter to `LangGraphOrchestrator` and `ContextManager`, wire it in `run.py` and `user_run.py`, and add an integration test confirming artifacts appear in the DB after a mission completes.
@@ -255,7 +337,7 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7 → 7.1 → 7.2 → 7.3 → 7.4 → 7.5 → 7.6
+Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7 → 7.1 → 7.2 → 7.3 → 7.4 → 7.5 → 7.6 → 7.7 → 7.8 → 7.9
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -272,3 +354,6 @@ Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7 → 7.1 → 7.2
 | 7.4. Context Injection Dedup and Runtime Safety (INSERTED) | 4/4 | Complete   | 2026-03-08 |
 | 7.5. Wire ArtifactStore to Runtime (INSERTED) | 2/5 | Complete    | 2026-03-08 |
 | 7.6. LLM Output Structure Stabilization (INSERTED) | 2/5 | In Progress|  |
+| 7.7. Hybrid Intent Classifier + Few-Shot Prompts (INSERTED) | 0/4 | Not Started | |
+| 7.8. Multi-Model Routing + Cloud Fallback (INSERTED) | 0/4 | Not Started | |
+| 7.9. Dynamic Context + Compliance Observability (INSERTED) | 0/5 | Not Started | |
