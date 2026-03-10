@@ -2646,6 +2646,18 @@ class LangGraphOrchestrator:
                     finding.check,
                     finding.detail,
                 )
+        # Persist partial mission results for cross-run continuity
+        try:
+            partial_count = self.context_manager.persist_partial_missions(state)
+            if partial_count:
+                self.logger.info(
+                    "PARTIAL MISSIONS SAVED run_id=%s count=%s",
+                    state["run_id"], partial_count,
+                )
+        except Exception:
+            self.logger.debug(
+                "persist_partial_missions failed (non-fatal)", exc_info=True
+            )
         self._write_shared_plan(state)
         self.checkpoint_store.save(
             run_id=state["run_id"],

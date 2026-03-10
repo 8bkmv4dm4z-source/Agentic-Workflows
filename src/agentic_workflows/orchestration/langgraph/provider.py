@@ -576,7 +576,7 @@ class LlamaCppChatProvider(_RetryingProviderBase):
     @observe(name="provider.generate")
     def generate(self, messages: Sequence[AgentMessage], response_schema: dict | None = None) -> str:
         enable_thinking = os.getenv("LLAMA_CPP_THINKING", "").strip().lower() in ("1", "true", "yes")
-        extra: dict = {"enable_thinking": True} if enable_thinking else {}
+        extra: dict = {"enable_thinking": enable_thinking}
 
         # Grammar enforcement: merge GBNF grammar into extra_body so llama-server
         # constrains token sampling to valid JSON objects at the sampler level.

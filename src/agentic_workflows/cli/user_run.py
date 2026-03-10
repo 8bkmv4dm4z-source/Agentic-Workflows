@@ -23,7 +23,7 @@ import httpx
 from rich.console import Console
 from rich.panel import Panel
 
-from agentic_workflows.logger import get_logger, setup_dual_logging
+from agentic_workflows.logger import get_logger
 
 API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
 _TMP_DIR = Path(os.environ.get("TMP_DIR", ".tmp"))
@@ -372,7 +372,6 @@ def main() -> None:
     if "--debug" in sys.argv or os.environ.get("DEBUG_SSE"):
         _DEBUG = True
 
-    setup_dual_logging(log_dir=str(_TMP_DIR))
     _ensure_server_running()
     asyncio.run(interactive_session())
 

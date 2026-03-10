@@ -17,6 +17,22 @@ from typing import TYPE_CHECKING, Any
 
 from agentic_workflows.logger import get_logger
 
+# --- spaCy lazy loading for clause segmentation ---
+_spacy_nlp = None
+
+
+def _get_spacy_nlp():  # type: ignore[no-untyped-def]
+    """Lazy-load spaCy English model. Returns None if unavailable."""
+    global _spacy_nlp  # noqa: PLW0603
+    if _spacy_nlp is not None:
+        return _spacy_nlp
+    try:
+        import spacy
+        _spacy_nlp = spacy.load("en_core_web_sm")
+        return _spacy_nlp
+    except Exception:  # noqa: BLE001
+        return None
+
 if TYPE_CHECKING:
     from agentic_workflows.orchestration.langgraph.provider import ChatProvider
 
@@ -139,6 +155,8 @@ _TOOL_KEYWORD_MAP: dict[str, list[str]] = {
     "trim": ["string_ops"],
     "replace": ["string_ops"],
     "split": ["string_ops"],
+    "read": ["read_file_chunk"],
+    "read_file": ["read_file_chunk"],
     "write": ["write_file"],
     "write_file": ["write_file"],
     "save": ["write_file"],
@@ -261,7 +279,7 @@ _TOOL_KEYWORD_MAP: dict[str, list[str]] = {
 _LOCAL_PROVIDERS = {"LlamaCppChatProvider", "OllamaChatProvider"}
 _DEFAULT_LOCAL_TIMEOUT = 30.0
 _DEFAULT_CLOUD_TIMEOUT = 5.0
-_DEFAULT_LOCAL_CLASSIFIER_TIMEOUT = 5.0
+_DEFAULT_LOCAL_CLASSIFIER_TIMEOUT = 15.0
 _DEFAULT_CLOUD_CLASSIFIER_TIMEOUT = 0.5
 
 
@@ -772,16 +790,25 @@ def _enforce_step_limit(plan: StructuredPlan, max_steps: int) -> StructuredPlan:
 
 
 def _build_fallback_plan(user_input: str) -> StructuredPlan:
-    """Use the original regex extraction as fallback."""
+    """Use spaCy clause splitting, then regex extraction as fallback."""
     missions = _extract_missions_regex_fallback(user_input)
-    LOGGER.info("PARSER REGEX FALLBACK missions=%s", len(missions))
+    # Determine parsing method based on how missions were split
+    method = "spacy_clauses" if len(missions) >= 2 and _get_spacy_nlp() is not None else "regex_fallback"
+    LOGGER.info("PARSER FALLBACK method=%s missions=%s", method, len(missions))
     steps = [MissionStep(id=str(i + 1), description=m) for i, m in enumerate(missions)]
     _suggest_tools_for_steps(steps)
-    return StructuredPlan(steps=steps, flat_missions=missions, parsing_method="regex_fallback")
+    _detect_dependencies(steps)
+    return StructuredPlan(steps=steps, flat_missions=missions, parsing_method=method)
 
 
 def _extract_missions_regex_fallback(user_input: str) -> list[str]:
-    """Exact copy of the original graph.py:946-958 regex logic."""
+    """Regex extraction with prose clause splitting.
+
+    Tries numbered/task-prefixed lines first (original logic), then falls
+    back to splitting natural language prose on conjunction boundaries
+    like ", then", ", and then", "and write", etc.  Only returns
+    ["Primary mission"] when no decomposition is possible.
+    """
     lines = [line.strip() for line in user_input.splitlines() if line.strip()]
     task_lines: list[str] = []
     for line in lines:
@@ -792,4 +819,131 @@ def _extract_missions_regex_fallback(user_input: str) -> list[str]:
             task_lines.append(line)
     if task_lines:
         return task_lines
+
+    # Attempt spaCy-based clause segmentation first, then regex fallback
+    clauses = _split_prose_spacy(user_input)
+    if len(clauses) >= 2:
+        return clauses
+
+    clauses = _split_prose_clauses_regex(user_input)
+    if len(clauses) >= 2:
+        return clauses
+
     return ["Primary mission"]
+
+
+def _split_prose_spacy(text: str) -> list[str]:
+    """Split natural language into action clauses using spaCy dependency parsing.
+
+    Finds action verbs via dependency labels (ROOT, conj, advcl, xcomp) and
+    extracts their clause spans.  Returns [] if spaCy is unavailable or
+    fewer than 2 clauses with tool mappings are found.
+    """
+    nlp = _get_spacy_nlp()
+    if nlp is None:
+        return []
+
+    doc = nlp(text)
+
+    # Collect action verb tokens with their clause boundaries.
+    # "dep" is included because spaCy assigns it to chained imperatives
+    # connected by "then" (e.g., "sort X, then calculate Y, and write Z").
+    # "acl" (adjectival clause) is excluded to avoid splitting on participles
+    # like "found" in "functions found in both chunks".
+    _CLAUSE_DEPS = {"ROOT", "conj", "advcl", "xcomp", "ccomp", "dep"}
+    action_verbs = []
+    for token in doc:
+        if token.pos_ == "VERB" and token.dep_ in _CLAUSE_DEPS:
+            action_verbs.append(token)
+
+    if len(action_verbs) < 2:
+        return []
+
+    # Sort by position in text
+    action_verbs.sort(key=lambda t: t.i)
+
+    # Extract clause spans: each verb owns tokens from its start to the next verb's start
+    clauses: list[str] = []
+    for idx, verb in enumerate(action_verbs):
+        if idx < len(action_verbs) - 1:
+            # Span from this verb's leftmost dependent to next verb's leftmost dependent
+            start = verb.left_edge.i
+            end = action_verbs[idx + 1].left_edge.i
+        else:
+            # Last clause: from verb's leftmost dependent to end of sentence
+            start = verb.left_edge.i
+            end = len(doc)
+
+        span_text = doc[start:end].text.strip()
+        # Clean up leading conjunctions/punctuation
+        span_text = re.sub(r"^[,;]\s*", "", span_text)
+        span_text = re.sub(r"^(and\s+then|then|and)\s+", "", span_text, flags=re.IGNORECASE)
+        span_text = span_text.strip().rstrip(".")
+        # Skip fragments too short to be a meaningful action clause
+        if span_text and len(span_text.split()) >= 3:
+            clauses.append(span_text)
+        elif span_text and clauses:
+            # Merge short fragments back into the previous clause
+            clauses[-1] = clauses[-1].rstrip(".,;") + " " + span_text
+
+    if len(clauses) < 2:
+        return []
+
+    # Validate: at least 2 clauses must map to a known tool via verb lemma or keyword
+    tool_hits = 0
+    for clause in clauses:
+        lower = clause.lower()
+        for keyword in _TOOL_KEYWORD_MAP:
+            if keyword in lower:
+                tool_hits += 1
+                break
+    if tool_hits < 2:
+        return []
+
+    LOGGER.info(
+        "PARSER SPACY SPLIT clauses=%s verbs=%s",
+        len(clauses),
+        [v.lemma_ for v in action_verbs],
+    )
+    return clauses
+
+
+# --- Regex fallback clause splitting (kept as secondary) ---
+
+# Action verbs that signal a new step when preceded by "and" or a comma.
+_ACTION_VERBS = (
+    "sort", "write", "save", "create", "calculate", "compute", "analyze",
+    "search", "find", "read", "convert", "compare", "summarize", "generate",
+    "extract", "validate", "check", "copy", "move", "delete", "encode",
+    "decode", "list", "count", "measure", "classify", "format", "parse",
+    "produce", "make", "repeat", "echo",
+)
+_ACTION_VERB_PATTERN = "|".join(re.escape(v) for v in _ACTION_VERBS)
+
+_PROSE_SPLIT_PATTERN = re.compile(
+    r",?\s+and\s+then\s+"
+    r"|,?\s+then\s+"
+    r"|;\s*"
+    r"|(?<=\.)\s+(?=[A-Z])"
+    r"|,?\s+and\s+(?=(?:" + _ACTION_VERB_PATTERN + r")\b)",
+    re.IGNORECASE,
+)
+
+
+def _split_prose_clauses_regex(text: str) -> list[str]:
+    """Regex-based clause splitting fallback when spaCy is unavailable."""
+    raw = _PROSE_SPLIT_PATTERN.split(text.strip())
+    clauses = [c.strip().rstrip(".") for c in raw if c and c.strip()]
+    if len(clauses) < 2:
+        return []
+
+    tool_hits = 0
+    for clause in clauses:
+        lower = clause.lower()
+        for keyword in _TOOL_KEYWORD_MAP:
+            if keyword in lower:
+                tool_hits += 1
+                break
+    if tool_hits < 2:
+        return []
+    return clauses

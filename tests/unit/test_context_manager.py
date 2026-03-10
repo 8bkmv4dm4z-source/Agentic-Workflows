@@ -969,3 +969,78 @@ class TestContextManagerArtifactStore:
         assert call_kwargs["key"] == "file_path"
         assert call_kwargs["source_tool"] == "write_file"
         assert call_kwargs["run_id"] == "test-run-01"
+
+
+class TestPersistPartialMissions:
+    """persist_partial_missions saves incomplete missions with status='partial'."""
+
+    def test_partial_missions_persisted(self):
+        mock_store = MagicMock()
+        cm = ContextManager(mission_context_store=mock_store)
+        state = {
+            "run_id": "run-partial-01",
+            "mission_reports": [
+                {
+                    "mission_id": 1,
+                    "mission": "Sort and write file",
+                    "status": "completed",
+                    "used_tools": ["sort_array"],
+                    "tool_results": [{"tool": "sort_array", "result": "[1,2,3]"}],
+                },
+                {
+                    "mission_id": 2,
+                    "mission": "Analyze data and compute stats",
+                    "status": "in_progress",
+                    "used_tools": ["data_analysis"],
+                    "tool_results": [{"tool": "data_analysis", "result": '{"mean": 5.0}'}],
+                },
+            ],
+        }
+        count = cm.persist_partial_missions(state)
+        assert count == 1  # only mission 2 (incomplete)
+        mock_store.upsert.assert_called_once()
+        call_kwargs = mock_store.upsert.call_args[1]
+        assert call_kwargs["status"] == "partial"
+        assert call_kwargs["mission_id"] == "2"
+        assert "data_analysis" in call_kwargs["summary"]
+
+    def test_no_partial_when_all_completed(self):
+        mock_store = MagicMock()
+        cm = ContextManager(mission_context_store=mock_store)
+        state = {
+            "run_id": "run-all-done",
+            "mission_reports": [
+                {"mission_id": 1, "mission": "Task 1", "status": "completed",
+                 "used_tools": ["sort_array"], "tool_results": []},
+            ],
+        }
+        count = cm.persist_partial_missions(state)
+        assert count == 0
+        mock_store.upsert.assert_not_called()
+
+    def test_no_store_returns_zero(self):
+        cm = ContextManager()  # no store
+        state = {
+            "run_id": "run-no-store",
+            "mission_reports": [
+                {"mission_id": 1, "mission": "Task 1", "status": "in_progress",
+                 "used_tools": [], "tool_results": []},
+            ],
+        }
+        assert cm.persist_partial_missions(state) == 0
+
+    def test_partial_with_no_tools_includes_goal(self):
+        mock_store = MagicMock()
+        cm = ContextManager(mission_context_store=mock_store)
+        state = {
+            "run_id": "run-no-tools",
+            "mission_reports": [
+                {"mission_id": 1, "mission": "Compute fibonacci", "status": "pending",
+                 "used_tools": [], "tool_results": []},
+            ],
+        }
+        count = cm.persist_partial_missions(state)
+        assert count == 1
+        call_kwargs = mock_store.upsert.call_args[1]
+        assert call_kwargs["status"] == "partial"
+        assert "Compute fibonacci" in call_kwargs["summary"]

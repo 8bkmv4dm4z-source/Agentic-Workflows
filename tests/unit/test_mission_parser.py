@@ -136,6 +136,53 @@ class MissionParserTests(unittest.TestCase):
         self.assertIn("Task 1:", plan.flat_missions[0])
 
 
+    def test_prose_clause_splitting_then(self) -> None:
+        """Single-line prose with 'then' and 'and <verb>' splits into steps."""
+        text = (
+            "Sort the array [42, 7, 19, 3, 88, 15, 31] in ascending order, "
+            "then calculate the mean and median of the sorted result, "
+            "and write a summary to results.txt"
+        )
+        plan = parse_missions(text, timeout_seconds=0)
+        self.assertEqual(len(plan.steps), 3)
+        self.assertIn("sort_array", plan.steps[0].suggested_tools)
+        self.assertIn("math_stats", plan.steps[1].suggested_tools)
+        self.assertIn("write_file", plan.steps[2].suggested_tools)
+        # Sequential dependencies
+        self.assertEqual(plan.steps[0].dependencies, [])
+        self.assertIn("1", plan.steps[1].dependencies)
+        self.assertIn("2", plan.steps[2].dependencies)
+
+    def test_prose_clause_no_split_on_noun_and(self) -> None:
+        """'and' connecting nouns (not action verbs) should NOT split."""
+        text = "Calculate the mean and median of [1, 2, 3]"
+        plan = parse_missions(text, timeout_seconds=0)
+        self.assertEqual(len(plan.steps), 1)
+
+    def test_prose_clause_semicolons(self) -> None:
+        """Semicolons split into separate steps."""
+        text = "Sort [3,1,2]; write the result to output.txt"
+        plan = parse_missions(text, timeout_seconds=0)
+        self.assertEqual(len(plan.steps), 2)
+        self.assertIn("sort_array", plan.steps[0].suggested_tools)
+        self.assertIn("write_file", plan.steps[1].suggested_tools)
+
+    def test_prose_clause_and_then(self) -> None:
+        """'and then' splits into separate steps."""
+        text = "Sort the numbers and then write them to a file"
+        plan = parse_missions(text, timeout_seconds=0)
+        self.assertEqual(len(plan.steps), 2)
+
+    def test_prose_no_tool_matches_stays_single(self) -> None:
+        """Prose with conjunctions but no tool-keyword matches stays single."""
+        text = "Think about the problem, then explain it, and summarize your thoughts"
+        plan = parse_missions(text, timeout_seconds=0)
+        # 'summarize' matches summarize_text but no second tool => stays single
+        # Actually 'explain' has no tool match, 'think' has no tool match
+        # Only 'summarize' matches => tool_hits < 2 => single
+        self.assertEqual(len(plan.steps), 1)
+
+
 class _MockProvider:
     """Minimal ChatProvider mock for intent classification tests."""
 

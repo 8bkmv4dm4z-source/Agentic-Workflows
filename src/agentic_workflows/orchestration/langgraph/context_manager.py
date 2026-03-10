@@ -505,6 +505,100 @@ class ContextManager:
         except Exception as exc:  # noqa: BLE001
             self._logger.warning("on_mission_complete persist failed (non-fatal): %s", exc)
 
+    def persist_partial_missions(self, state: dict[str, Any]) -> int:
+        """Persist incomplete missions with status='partial' for cross-run continuity.
+
+        Called from _finalize() when the run ends with incomplete missions (e.g. timeout).
+        Returns the number of partial missions persisted.
+        """
+        if self._store is None:
+            return 0
+
+        mission_reports = state.get("mission_reports", [])
+        persisted = 0
+        for report in mission_reports:
+            status = str(report.get("status", ""))
+            if status == "completed":
+                continue  # already persisted by on_mission_complete
+
+            mission_id = str(report.get("mission_id", "unknown"))
+            goal = str(report.get("mission", ""))
+            used_tools = report.get("used_tools", []) or []
+            tool_results = report.get("tool_results", []) or []
+
+            # Build a partial summary from whatever tools were executed
+            if tool_results:
+                tool_summaries = []
+                for tr in tool_results[:5]:  # cap to avoid huge summaries
+                    t = tr.get("tool", "unknown")
+                    r = str(tr.get("result", ""))[:200]
+                    tool_summaries.append(f"{t}: {r}")
+                summary = f"Partial ({len(used_tools)} tools executed: {', '.join(used_tools)}). " + "; ".join(tool_summaries)
+            else:
+                summary = f"Partial (no tools executed). Goal: {goal[:200]}"
+
+            # Cap summary length
+            summary = summary[:800]
+
+            key_results = {"partial": True, "tools_completed": used_tools}
+
+            persist_ctx: dict[str, Any] = {
+                "goal": goal,
+                "summary": summary,
+                "used_tools": list(used_tools),
+                "key_results": key_results,
+                "run_id": state.get("run_id", "unknown"),
+                "mission_id": mission_id,
+                "artifacts": [],
+            }
+            try:
+                self._persist_mission_context_with_status(persist_ctx, status="partial")
+                persisted += 1
+            except Exception as exc:  # noqa: BLE001
+                self._logger.warning(
+                    "persist_partial_missions failed mission_id=%s (non-fatal): %s",
+                    mission_id, exc,
+                )
+        if persisted:
+            self._logger.info(
+                "PARTIAL PERSIST run_id=%s count=%s",
+                state.get("run_id", "unknown"), persisted,
+            )
+        return persisted
+
+    def _persist_mission_context_with_status(
+        self, mission_context: dict, *, status: str = "completed",  # type: ignore[type-arg]
+    ) -> None:
+        """Persist a mission context with explicit status (completed or partial)."""
+        if self._store is None and self._artifact_store is None:
+            return
+        try:
+            goal = mission_context.get("goal", "") or ""
+            summary = mission_context.get("summary", "") or ""
+            tools_used = mission_context.get("used_tools", []) or []
+            key_results = mission_context.get("key_results", {}) or {}
+            run_id = str(mission_context.get("run_id", "unknown"))
+            mission_id = str(mission_context.get("mission_id", "unknown"))
+
+            if self._embedding_provider is not None:
+                embedding = self._embedding_provider.embed_sync(goal)
+            else:
+                embedding = [0.0] * 384
+
+            if self._store is not None:
+                self._store.upsert(
+                    run_id=run_id,
+                    mission_id=mission_id,
+                    goal=goal,
+                    status=status,
+                    summary=summary,
+                    tools_used=list(tools_used),
+                    key_results=dict(key_results),
+                    embedding=embedding,
+                )
+        except Exception as exc:  # noqa: BLE001
+            self._logger.warning("_persist_mission_context_with_status failed (non-fatal): %s", exc)
+
     def on_tool_result(
         self,
         state: dict[str, Any],
