@@ -118,6 +118,7 @@ def test_no_embedding_provider_passes_none():
 def test_tool_not_registered_without_store():
     """build_tool_registry without mission_context_store does not include query_context."""
     from unittest.mock import MagicMock as MM
+
     from agentic_workflows.orchestration.langgraph.tools_registry import build_tool_registry
 
     mock_memo = MM()
@@ -128,6 +129,7 @@ def test_tool_not_registered_without_store():
 def test_tool_registered_with_store():
     """build_tool_registry with mission_context_store registers query_context."""
     from unittest.mock import MagicMock as MM
+
     from agentic_workflows.orchestration.langgraph.tools_registry import build_tool_registry
 
     mock_memo = MM()

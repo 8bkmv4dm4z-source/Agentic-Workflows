@@ -7,8 +7,6 @@ bypass of seen_tool_signatures dedup in graph.py.
 """
 from __future__ import annotations
 
-import pytest
-
 # Import MissionContextStore — must import without error
 from agentic_workflows.storage.mission_context_store import MissionContextStore
 
@@ -153,12 +151,11 @@ class TestEvictionHint:
 class TestCursorResumeBypass:
     def test_cursor_resume_bypass_seen_signatures(self) -> None:
         """Action dict with __cursor_resume=True bypasses seen_tool_signatures dedup in graph.py planner."""
-        import json
-
-        from agentic_workflows.orchestration.langgraph.graph import LangGraphOrchestrator
 
         # Verify the bypass logic is present in the source
         import inspect
+
+        from agentic_workflows.orchestration.langgraph.graph import LangGraphOrchestrator
         source = inspect.getsource(LangGraphOrchestrator._execute_action)
         assert "__cursor_resume" in source, (
             "_execute_action must contain __cursor_resume bypass logic"

@@ -113,7 +113,7 @@ def _print_audit_panel(
     fallback_count = sh.get("cloud_fallback_count", 0)
     local_failures = sh.get("local_model_failures", {})
     if routing or fallback_count or local_failures:
-        print(f"\n  Routing & Fallback:")
+        print("\n  Routing & Fallback:")
         if routing:
             print(f"    Routing: strong={routing.get('strong', 0)} fast={routing.get('fast', 0)}")
         if fallback_count:

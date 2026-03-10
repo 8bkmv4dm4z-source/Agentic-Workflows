@@ -25,7 +25,11 @@ if TYPE_CHECKING:
     from agentic_workflows.storage.mission_context_store import MissionContextStore
 
 from agentic_workflows.logger import get_logger
-from agentic_workflows.observability import get_langfuse_callback_handler, observe, report_schema_compliance
+from agentic_workflows.observability import (
+    get_langfuse_callback_handler,
+    observe,
+    report_schema_compliance,
+)
 from agentic_workflows.orchestration.langgraph import (
     action_parser,
     content_validator,
@@ -46,7 +50,10 @@ from agentic_workflows.orchestration.langgraph.mission_parser import (
     _adaptive_parser_timeout,
     parse_missions,
 )
-from agentic_workflows.orchestration.langgraph.model_router import ModelRouter, RoutingSignals, TaskComplexity
+from agentic_workflows.orchestration.langgraph.model_router import (
+    ModelRouter,
+    RoutingSignals,
+)
 from agentic_workflows.orchestration.langgraph.policy import MemoizationPolicy
 from agentic_workflows.orchestration.langgraph.provider import (
     ChatProvider,
@@ -2768,7 +2775,7 @@ class LangGraphOrchestrator:
     def _validate_action(self, model_output: str) -> tuple[dict[str, Any], bool]:
         return action_parser.validate_action(model_output, self.tools)
 
-    def _parse_action_json(self, model_output: str, state: "RunState | None" = None) -> tuple[dict[str, Any], bool]:
+    def _parse_action_json(self, model_output: str, state: RunState | None = None) -> tuple[dict[str, Any], bool]:
         step = (state or {}).get("step", 0)
         return action_parser.parse_action_json(model_output, step=step)
 

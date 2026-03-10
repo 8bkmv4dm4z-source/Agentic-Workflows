@@ -6,8 +6,6 @@ import pathlib
 import tempfile
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 
 class TestReportSchemaCompliance:
     """Unit tests for report_schema_compliance Langfuse integration."""
@@ -97,14 +95,13 @@ class TestSchemaComplianceWiring:
         self, mock_report: MagicMock
     ) -> None:
         """Verify _plan_next_action triggers report_schema_compliance."""
-        from tests.conftest import ScriptedProvider
-
         from agentic_workflows.orchestration.langgraph.checkpoint_store import (
             SQLiteCheckpointStore,
         )
         from agentic_workflows.orchestration.langgraph.graph import (
             LangGraphOrchestrator,
         )
+        from tests.conftest import ScriptedProvider
 
         db_path = pathlib.Path(tempfile.mkdtemp()) / "test.db"
 

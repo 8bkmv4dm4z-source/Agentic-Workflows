@@ -7,8 +7,6 @@ SC-2 (Phase 07.5 Plan 02): artifact_store constructor wiring tests.
 """
 from unittest.mock import MagicMock
 
-import pytest
-
 from agentic_workflows.orchestration.langgraph.graph import LangGraphOrchestrator
 
 

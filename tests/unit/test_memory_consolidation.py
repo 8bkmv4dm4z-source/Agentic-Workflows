@@ -2,17 +2,12 @@
 
 from __future__ import annotations
 
-import math
-
-import pytest
-
 from agentic_workflows.storage.memory_consolidation import (
     _cluster_by_similarity,
     _cosine_similarity,
     _merge_cluster_summary,
     consolidate_memories,
 )
-
 
 # ---------------------------------------------------------------------------
 # _cosine_similarity

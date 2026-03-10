@@ -84,7 +84,7 @@ class TestArtifactStoreRuntime:
 
     def test_no_artifacts_when_pool_none(self, pg_pool, clean_pg):
         """SC-1 extended: ArtifactStore(pool=None) is a no-op — no rows inserted."""
-        provider = MockEmbeddingProvider()
+        _provider = MockEmbeddingProvider()  # noqa: F841
         artifact_store_no_pool = ArtifactStore(pool=None)
         cm = ContextManager(artifact_store=artifact_store_no_pool)
 
