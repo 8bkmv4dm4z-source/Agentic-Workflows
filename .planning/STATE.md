@@ -4,7 +4,7 @@ milestone: v1.5
 milestone_name: milestone
 status: completed
 last_updated: "2026-03-10T20:20:07.077Z"
-last_activity: 2026-03-10 — Compliance dashboard columns + WALKTHROUGH_PHASE7.9.md
+last_activity: 2026-03-10 — Quick-6: spaCy clause splitting, partial mission persistence, provider fix
 progress:
   total_phases: 16
   completed_phases: 15
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 Phase: 7.9 (Dynamic Context Querying, Memory Consolidation, Compliance, Observability)
 Plan: 4 of 4 in current phase (07.9-01, 07.9-02, 07.9-03, 07.9-04 DONE)
 Status: Phase 7.9 COMPLETE — all 4 plans executed
-Last activity: 2026-03-10 — Compliance dashboard columns + WALKTHROUGH_PHASE7.9.md
+Last activity: 2026-03-10 — Quick-6: spaCy clause splitting, partial mission persistence, provider fix
 
 Progress: [██████████] 100% (69/69 plans complete, Phase 7.9 04/04 done)
 
@@ -228,6 +228,9 @@ Recent decisions affecting current work:
 - [Phase 07.9]: --consolidate early-exit branch in run_audit.py main() before summary flow
 - [Phase 07.9]: Compliance rate = (steps - fallbacks - format_retries) / max(1, steps); defaults to 1.0 when structural_health absent
 - [Phase 07.9]: RunSummary new fields use defaults for backward compat with existing dataclass construction
+- [Quick-6]: spaCy lazy-loading with en_core_web_sm for clause splitting; regex fallback kept as secondary
+- [Quick-6]: enable_thinking explicitly sent as false (not omitted) to suppress Qwen3 think tokens
+- [Quick-6]: persist_partial_missions() called in _finalize() after audit for cross-run continuity of timed-out missions
 
 ### Roadmap Evolution
 
@@ -261,6 +264,7 @@ Recent decisions affecting current work:
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 5 | Tool Schema Enforcement — Compact Prompt Signatures + JSON Schema Response Format | 2026-03-10 | 613b09b | [5-tool-schema-enforcement-compact-prompt-s](./quick/5-tool-schema-enforcement-compact-prompt-s/) |
+| 6 | spaCy clause splitting, partial mission persistence, provider enable_thinking fix | 2026-03-10 | 0c7b78c | [6-commit-and-document-all-session-changes-](./quick/6-commit-and-document-all-session-changes-/) |
 
 ### Blockers/Concerns
 
@@ -270,5 +274,5 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last activity: 2026-03-10 - Completed 07.9-04 compliance dashboard + walkthrough (Phase 7.9 COMPLETE)
-Resume file: .planning/phases/07.9-dynamic-context-querying-memory-consolidation-compliance-observability/07.9-04-SUMMARY.md
+Last activity: 2026-03-10 - Quick-6: spaCy clause splitting, partial mission persistence, provider fix (0c7b78c)
+Resume file: .planning/quick/6-commit-and-document-all-session-changes-/6-SUMMARY.md
