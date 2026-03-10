@@ -277,8 +277,9 @@ class LangGraphOrchestrator:
         """
         tool_variants: list[dict] = []
         for name, tool in self.tools.items():
-            req = tool.required_args() if hasattr(tool, "required_args") else []
-            args_props: dict = {arg: {"type": "string"} for arg in req}
+            schema = tool.args_schema if hasattr(tool, "args_schema") else {}
+            args_props = {aname: {"type": meta.get("type", "string")} for aname, meta in schema.items()}
+            req = [aname for aname, meta in schema.items() if meta.get("required") == "true"]
             variant: dict = {
                 "type": "object",
                 "properties": {
@@ -287,7 +288,7 @@ class LangGraphOrchestrator:
                     "args": {
                         "type": "object",
                         "properties": args_props,
-                        **( {"required": req} if req else {}),
+                        **({"required": req} if req else {}),
                     },
                 },
                 "required": ["action", "tool_name", "args"],
@@ -361,8 +362,9 @@ class LangGraphOrchestrator:
                 compact_directive = "You emit exactly one JSON action per response. Pure JSON only.\n"
 
             def _tool_sig(name: str, tool: object) -> str:
-                req = tool.required_args() if hasattr(tool, "required_args") else []
-                return f"{name}({', '.join(req)})" if req else name
+                schema = tool.args_schema if hasattr(tool, "args_schema") else {}
+                arg_names = list(schema.keys())
+                return f"{name}({', '.join(arg_names)})" if arg_names else name
 
             tool_names_line = ", ".join(_tool_sig(n, t) for n, t in self.tools.items())
             return (
