@@ -2,15 +2,19 @@ from __future__ import annotations
 
 """Cost-aware model router for multi-tier provider selection.
 
-Implements a 70/30 routing split: lightweight tasks (tool selection,
-continuation) use a fast/cheap provider; complex tasks (planning,
-evaluation, error recovery) use a strong provider.
+Implements signal-based routing: runtime signals (retry count, token budget,
+mission type, intent classification) drive strong-vs-fast provider selection.
 
-Stub implementation — both providers can be the same instance initially.
-When a second provider is configured, routing decisions take effect.
+Threshold logic (route_by_signals):
+- retry_count >= _RETRY_STRONG_THRESHOLD -> strong
+- token_budget_remaining < _BUDGET_STRONG_THRESHOLD -> strong
+- mission_type == "multi_step" -> strong
+- intent complexity "complex" -> strong (tiebreaker)
+- otherwise -> fast
 """
 
-from typing import TYPE_CHECKING, Any, Literal
+import warnings
+from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 if TYPE_CHECKING:
     from agentic_workflows.orchestration.langgraph.provider import ChatProvider
@@ -31,9 +35,23 @@ _STRONG_TASKS: frozenset[TaskComplexity] = frozenset({
     "error_recovery",
 })
 
+# Signal-based routing thresholds
+_BUDGET_STRONG_THRESHOLD = 5000
+_RETRY_STRONG_THRESHOLD = 2
+
+
+class RoutingSignals(TypedDict):
+    """Runtime signals used by route_by_signals() for model selection."""
+
+    token_budget_remaining: int
+    mission_type: str
+    retry_count: int
+    step: int
+    intent_classification: dict[str, Any] | None
+
 
 class ModelRouter:
-    """Route tasks to strong or fast providers based on complexity classification."""
+    """Route tasks to strong or fast providers based on complexity or runtime signals."""
 
     def __init__(
         self,
@@ -49,21 +67,65 @@ class ModelRouter:
             return self._strong
         return self._fast
 
+    def route_by_signals(self, signals: RoutingSignals) -> ChatProvider:
+        """Route based on runtime signals with threshold-based logic.
+
+        Priority order (first match wins):
+        1. retry_count >= threshold -> strong (error recovery needs best model)
+        2. token_budget_remaining < threshold -> strong (low budget = get it right)
+        3. mission_type == "multi_step" -> strong (complex orchestration)
+        4. intent complexity "complex" -> strong (tiebreaker)
+        5. intent complexity "simple" -> fast
+        6. default -> fast
+        """
+        # 1. High retry count -> strong
+        if signals["retry_count"] >= _RETRY_STRONG_THRESHOLD:
+            return self._strong
+
+        # 2. Low budget -> strong
+        if signals["token_budget_remaining"] < _BUDGET_STRONG_THRESHOLD:
+            return self._strong
+
+        # 3. Multi-step mission -> strong
+        if signals["mission_type"] == "multi_step":
+            return self._strong
+
+        # 4-5. Intent complexity as tiebreaker
+        intent = signals.get("intent_classification")
+        if intent is not None:
+            complexity = intent.get("complexity", "complex")
+            if complexity == "simple":
+                return self._fast
+            return self._strong
+
+        # 6. Default -> fast
+        return self._fast
+
     def route_by_intent(
         self,
         intent_classification: dict[str, Any] | None = None,
         fallback_complexity: TaskComplexity = "planning",
     ) -> ChatProvider:
-        """Route by intent classification, falling back to explicit complexity.
+        """Deprecated: use route_by_signals() instead.
 
-        Accepts a dict (not the dataclass) because state stores
-        intent_classification as a dict via ``to_dict()``.
+        Kept as backward-compat shim until all callers migrate (Plan 03).
+        Delegates to route_by_signals with default signal values.
         """
+        warnings.warn(
+            "route_by_intent() is deprecated; use route_by_signals()",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        signals: RoutingSignals = {
+            "token_budget_remaining": 100_000,
+            "mission_type": "unknown",
+            "retry_count": 0,
+            "step": 0,
+            "intent_classification": intent_classification,
+        }
         if intent_classification is not None:
-            complexity = intent_classification.get("complexity", "complex")
-            if complexity == "simple":
-                return self._fast
-            return self._strong
+            return self.route_by_signals(signals)
+        # No intent: fall back to task complexity routing
         return self.route(fallback_complexity)
 
     @property

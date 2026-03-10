@@ -5,8 +5,14 @@ Tests verify:
 - Tool_selection/continuation tasks route to fast provider
 - Single-provider mode has has_dual_providers=False
 - LangGraphOrchestrator wires self._router correctly
+- Signal-based routing via route_by_signals()
+- route_by_intent() deprecated shim still works (backward compat until Plan 03)
 """
 from __future__ import annotations
+
+import warnings
+
+import pytest
 
 from agentic_workflows.orchestration.langgraph.graph import LangGraphOrchestrator
 from agentic_workflows.orchestration.langgraph.model_router import ModelRouter
@@ -74,27 +80,140 @@ def test_orchestrator_dual_provider() -> None:
     assert orch._router.has_dual_providers is True, "dual-provider mode: has_dual_providers must be True"
 
 
-# --- Intent-driven routing tests ---
+# --- Signal-based routing tests (route_by_signals) ---
+
+
+def _make_signals(
+    *,
+    retry_count: int = 0,
+    token_budget_remaining: int = 50_000,
+    mission_type: str = "unknown",
+    step: int = 1,
+    intent_classification: dict | None = None,
+) -> dict:
+    """Helper to build a RoutingSignals-compatible dict."""
+    return {
+        "token_budget_remaining": token_budget_remaining,
+        "mission_type": mission_type,
+        "retry_count": retry_count,
+        "step": step,
+        "intent_classification": intent_classification,
+    }
+
+
+@pytest.mark.parametrize(
+    "signals_kwargs, expected_provider_name, reason",
+    [
+        # Retry threshold: retry_count >= 2 -> strong
+        ({"retry_count": 2, "token_budget_remaining": 50_000}, "strong", "retry threshold"),
+        ({"retry_count": 5, "token_budget_remaining": 50_000}, "strong", "retry well above threshold"),
+        # Budget threshold: budget < 5000 -> strong
+        ({"retry_count": 0, "token_budget_remaining": 3000}, "strong", "budget below threshold"),
+        ({"retry_count": 0, "token_budget_remaining": 4999}, "strong", "budget just below threshold"),
+        # Mission type: multi_step -> strong
+        ({"retry_count": 0, "token_budget_remaining": 50_000, "mission_type": "multi_step"}, "strong", "multi_step mission"),
+        # Intent complexity: complex -> strong
+        (
+            {"retry_count": 0, "token_budget_remaining": 50_000, "mission_type": "single_step", "intent_classification": {"complexity": "complex"}},
+            "strong",
+            "complex intent tiebreaker",
+        ),
+        # Intent complexity: simple -> fast
+        (
+            {"retry_count": 0, "token_budget_remaining": 50_000, "mission_type": "single_step", "intent_classification": {"complexity": "simple"}},
+            "fast",
+            "simple intent routes fast",
+        ),
+        # Default: unknown mission, no intent -> fast
+        ({"retry_count": 0, "token_budget_remaining": 50_000, "mission_type": "unknown"}, "fast", "default routes fast"),
+        # No intent, single_step -> fast
+        ({"retry_count": 0, "token_budget_remaining": 50_000, "mission_type": "single_step"}, "fast", "single_step no intent routes fast"),
+        # Retry overrides everything else
+        (
+            {"retry_count": 5, "token_budget_remaining": 50_000, "mission_type": "single_step", "intent_classification": {"complexity": "simple"}},
+            "strong",
+            "retry overrides simple intent",
+        ),
+        # Budget threshold: exact boundary (5000) -> fast (not < 5000)
+        ({"retry_count": 0, "token_budget_remaining": 5000}, "fast", "budget at exact threshold routes fast"),
+    ],
+    ids=[
+        "retry_threshold",
+        "retry_high",
+        "budget_low",
+        "budget_just_below",
+        "multi_step_mission",
+        "complex_intent",
+        "simple_intent",
+        "default_fast",
+        "single_step_no_intent",
+        "retry_overrides_simple",
+        "budget_exact_boundary",
+    ],
+)
+def test_route_by_signals(signals_kwargs: dict, expected_provider_name: str, reason: str) -> None:
+    """Parametrized test for signal-based routing logic."""
+    s = _StrongProvider()
+    f = _FastProvider()
+    router = ModelRouter(strong_provider=s, fast_provider=f)
+
+    signals = _make_signals(**signals_kwargs)
+    result = router.route_by_signals(signals)
+
+    expected = s if expected_provider_name == "strong" else f
+    assert result is expected, f"Expected {expected_provider_name} for {reason}, got {result.name}"
+
+
+def test_route_by_signals_has_dual_providers() -> None:
+    """has_dual_providers still works with signal-based routing."""
+    s = _StrongProvider()
+    f = _FastProvider()
+    router = ModelRouter(strong_provider=s, fast_provider=f)
+    assert router.has_dual_providers is True
+
+    single = ModelRouter(strong_provider=s)
+    assert single.has_dual_providers is False
+
+
+# --- Deprecated route_by_intent backward-compat tests ---
+
+
+def test_route_by_intent_deprecated_emits_warning() -> None:
+    """route_by_intent() emits DeprecationWarning when called."""
+    s = _StrongProvider()
+    f = _FastProvider()
+    router = ModelRouter(strong_provider=s, fast_provider=f)
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        router.route_by_intent(intent_classification={"complexity": "complex"})
+        assert len(w) == 1
+        assert issubclass(w[0].category, DeprecationWarning)
+        assert "route_by_signals" in str(w[0].message)
 
 
 def test_route_by_intent_complex_returns_strong() -> None:
-    """route_by_intent with complexity='complex' should return strong provider."""
+    """route_by_intent with complexity='complex' should return strong provider (backward compat)."""
     s = _StrongProvider()
     f = _FastProvider()
     router = ModelRouter(strong_provider=s, fast_provider=f)
 
     intent = {"complexity": "complex", "mission_type": "analysis", "confidence": 0.8, "source": "llm"}
-    assert router.route_by_intent(intent_classification=intent) is s, "complex intent should route to strong"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        assert router.route_by_intent(intent_classification=intent) is s
 
 
 def test_route_by_intent_simple_returns_fast() -> None:
-    """route_by_intent with complexity='simple' should return fast provider."""
+    """route_by_intent with complexity='simple' should return fast provider (backward compat)."""
     s = _StrongProvider()
     f = _FastProvider()
     router = ModelRouter(strong_provider=s, fast_provider=f)
 
     intent = {"complexity": "simple", "mission_type": "file_io", "confidence": 0.7, "source": "deterministic_fallback"}
-    assert router.route_by_intent(intent_classification=intent) is f, "simple intent should route to fast"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        assert router.route_by_intent(intent_classification=intent) is f
 
 
 def test_route_by_intent_none_falls_back_to_task_complexity() -> None:
@@ -103,10 +222,9 @@ def test_route_by_intent_none_falls_back_to_task_complexity() -> None:
     f = _FastProvider()
     router = ModelRouter(strong_provider=s, fast_provider=f)
 
-    # With fallback_complexity="tool_selection" -> should route to fast
-    assert router.route_by_intent(intent_classification=None, fallback_complexity="tool_selection") is f, (
-        "None intent with tool_selection fallback should route to fast"
-    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        assert router.route_by_intent(intent_classification=None, fallback_complexity="tool_selection") is f
 
 
 def test_route_by_intent_none_planning_returns_strong() -> None:
@@ -115,24 +233,6 @@ def test_route_by_intent_none_planning_returns_strong() -> None:
     f = _FastProvider()
     router = ModelRouter(strong_provider=s, fast_provider=f)
 
-    assert router.route_by_intent(intent_classification=None, fallback_complexity="planning") is s, (
-        "None intent with planning fallback should route to strong"
-    )
-
-
-def test_route_by_intent_integration_with_parse_missions() -> None:
-    """Integration: intent classification dict -> route_by_intent -> correct provider."""
-    s = _StrongProvider()
-    f = _FastProvider()
-    router = ModelRouter(strong_provider=s, fast_provider=f)
-
-    # Simulate what parse_missions produces for a simple task
-    simple_intent = {"complexity": "simple", "mission_type": "file_io", "confidence": 0.6, "source": "deterministic_fallback"}
-    assert router.route_by_intent(intent_classification=simple_intent) is f
-
-    # Simulate what parse_missions produces for a complex task
-    complex_intent = {"complexity": "complex", "mission_type": "multi_step", "confidence": 0.8, "source": "llm"}
-    assert router.route_by_intent(intent_classification=complex_intent) is s
-
-    # Simulate missing classification (backward compat)
-    assert router.route_by_intent(intent_classification=None) is s  # defaults to "planning" -> strong
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        assert router.route_by_intent(intent_classification=None, fallback_complexity="planning") is s
