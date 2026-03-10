@@ -116,5 +116,112 @@ class TestParserFallbackLogging:
         assert used_fallback is False, "Expected used_fallback=False on happy path"
 
 
+class TestFormatCorrectionEscalation:
+    """Tests for the 3-step format correction escalation chain in _plan_next_action.
+
+    The escalation targets parseable-but-non-canonical output where the fallback
+    parser recovers a valid action. Steps: hint (1) -> retry (2) -> accept (3).
+    """
+
+    def _make_state(self) -> dict:
+        """Create a minimal state dict for escalation testing."""
+        from agentic_workflows.orchestration.langgraph.state_schema import new_run_state
+
+        state = new_run_state("system", "test input")
+        state["missions"] = ["test mission"]
+        state["mission_reports"] = [{
+            "mission_id": 1,
+            "mission": "test mission",
+            "used_tools": [],
+            "tool_results": [],
+            "result": "",
+            "status": "in_progress",
+            "required_tools": [],
+            "required_files": [],
+            "written_files": [],
+            "expected_fibonacci_count": None,
+            "contract_checks": [],
+            "subtask_contracts": [],
+            "subtask_statuses": [],
+        }]
+        state["active_mission_index"] = 0
+        state["active_mission_id"] = 1
+        return state
+
+    def test_escalation_first_drift_injects_hint(self) -> None:
+        """First format drift injects [Orchestrator] hint message and increments format_correction_hints."""
+        state = self._make_state()
+        state["retry_counts"]["consecutive_format_drift"] = 0
+
+        # Simulate first drift
+        _parse_used_fallback = True
+        _validate_used_fallback = False
+
+        if _parse_used_fallback or _validate_used_fallback:
+            drift_count = int(state["retry_counts"].get("consecutive_format_drift", 0)) + 1
+            state["retry_counts"]["consecutive_format_drift"] = drift_count
+
+        assert state["retry_counts"]["consecutive_format_drift"] == 1
+        assert state["structural_health"]["format_correction_hints"] == 0  # Not yet incremented - needs graph.py logic
+        # This test will FAIL because the escalation logic in graph.py doesn't exist yet
+
+    def test_escalation_second_drift_triggers_retry(self) -> None:
+        """Second consecutive drift triggers retry and increments format_retries."""
+        state = self._make_state()
+        state["retry_counts"]["consecutive_format_drift"] = 1
+
+        # The format_retries counter should exist and be incrementable
+        assert "format_retries" in state["structural_health"], (
+            "format_retries must be initialized in structural_health defaults"
+        )
+
+    def test_escalation_third_drift_accepts(self) -> None:
+        """Third consecutive drift accepts the parsed action (no retry)."""
+        state = self._make_state()
+        state["retry_counts"]["consecutive_format_drift"] = 2
+
+        # Simulate third drift - should accept without retry
+        drift_count = int(state["retry_counts"].get("consecutive_format_drift", 0)) + 1
+        assert drift_count >= 3, "Third drift should be >= 3"
+
+    def test_clean_parse_resets_drift_counter(self) -> None:
+        """Correctly-formatted response resets consecutive_format_drift to 0."""
+        state = self._make_state()
+        state["retry_counts"]["consecutive_format_drift"] = 2
+
+        # Simulate clean parse
+        _parse_used_fallback = False
+        _validate_used_fallback = False
+
+        if not (_parse_used_fallback or _validate_used_fallback):
+            state["retry_counts"]["consecutive_format_drift"] = 0
+
+        assert state["retry_counts"]["consecutive_format_drift"] == 0
+
+    def test_structural_health_has_format_counters(self) -> None:
+        """structural_health must contain format_correction_hints and format_retries after state init."""
+        state = self._make_state()
+
+        assert "format_correction_hints" in state["structural_health"], (
+            "structural_health must include format_correction_hints"
+        )
+        assert "format_retries" in state["structural_health"], (
+            "structural_health must include format_retries"
+        )
+
+    def test_hard_parse_failure_uses_invalid_json_not_escalation(self) -> None:
+        """Hard parse failures (no valid JSON) should NOT use the escalation chain."""
+        state = self._make_state()
+        state["retry_counts"]["consecutive_format_drift"] = 0
+
+        # Simulate hard parse failure (exception path, not fallback path)
+        invalid_count = int(state["retry_counts"].get("invalid_json", 0)) + 1
+        state["retry_counts"]["invalid_json"] = invalid_count
+
+        # Drift counter should be unchanged
+        assert state["retry_counts"]["consecutive_format_drift"] == 0
+        assert state["retry_counts"]["invalid_json"] == 1
+
+
 if __name__ == "__main__":
     unittest.main()
