@@ -183,6 +183,7 @@ def new_run_state(system_prompt: str, user_input: str, run_id: str | None = None
             "cloud_fallback_count": 0,
             "local_model_failures": {"timeout": 0, "parse": 0},
             "routing_decisions": {"strong": 0, "fast": 0},
+            "parser_timeout_count": 0,
         },
     }
 
@@ -266,6 +267,7 @@ def ensure_state_defaults(state: RunState | dict[str, Any], *, system_prompt: st
         state_dict["structural_health"].setdefault("cloud_fallback_count", 0)
         state_dict["structural_health"].setdefault("local_model_failures", {"timeout": 0, "parse": 0})
         state_dict["structural_health"].setdefault("routing_decisions", {"strong": 0, "fast": 0})
+        state_dict["structural_health"].setdefault("parser_timeout_count", 0)
 
     retry_counts = state_dict["retry_counts"]
     retry_counts.setdefault("invalid_json", 0)

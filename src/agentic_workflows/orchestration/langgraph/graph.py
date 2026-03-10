@@ -40,7 +40,12 @@ from agentic_workflows.orchestration.langgraph.context_manager import ContextMan
 from agentic_workflows.orchestration.langgraph.handoff import create_handoff, create_handoff_result
 from agentic_workflows.orchestration.langgraph.memo_store import SQLiteMemoStore
 from agentic_workflows.orchestration.langgraph.mission_auditor import audit_run
-from agentic_workflows.orchestration.langgraph.mission_parser import StructuredPlan, parse_missions
+from agentic_workflows.orchestration.langgraph.mission_parser import (
+    StructuredPlan,
+    _adaptive_classifier_timeout,
+    _adaptive_parser_timeout,
+    parse_missions,
+)
 from agentic_workflows.orchestration.langgraph.model_router import ModelRouter, RoutingSignals, TaskComplexity
 from agentic_workflows.orchestration.langgraph.policy import MemoizationPolicy
 from agentic_workflows.orchestration.langgraph.provider import (
@@ -687,8 +692,14 @@ class LangGraphOrchestrator:
         state["rerun_context"] = dict(rerun_context or {})
         structured_plan = parse_missions(
             user_input,
+            timeout_seconds=_adaptive_parser_timeout(self.provider),
             classifier_provider=self.provider,
+            classifier_timeout=_adaptive_classifier_timeout(self.provider),
         )
+        if structured_plan.parsing_method == "regex_fallback":
+            state["structural_health"]["parser_timeout_count"] = (
+                state["structural_health"].get("parser_timeout_count", 0) + 1
+            )
         missions = structured_plan.flat_missions
         contracts = self._build_mission_contracts_from_plan(structured_plan, missions)
         state["missions"] = missions

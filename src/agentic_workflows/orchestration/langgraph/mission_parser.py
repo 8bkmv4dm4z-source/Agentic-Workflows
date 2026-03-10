@@ -8,6 +8,7 @@ original regex extractor when structured parsing yields nothing.
 """
 
 import json
+import os
 import queue
 import re
 import threading
@@ -253,6 +254,42 @@ _TOOL_KEYWORD_MAP: dict[str, list[str]] = {
 }
 
 
+_LOCAL_PROVIDERS = {"LlamaCppChatProvider", "OllamaChatProvider"}
+_DEFAULT_LOCAL_TIMEOUT = 30.0
+_DEFAULT_CLOUD_TIMEOUT = 5.0
+_DEFAULT_LOCAL_CLASSIFIER_TIMEOUT = 5.0
+_DEFAULT_CLOUD_CLASSIFIER_TIMEOUT = 0.5
+
+
+def _adaptive_parser_timeout(provider: ChatProvider | None) -> float:
+    """Return parser timeout in seconds, adaptive to provider type.
+
+    Local models (LlamaCpp/Ollama) get 30s; cloud (Groq/OpenAI) get 5s.
+    P1_PARSER_TIMEOUT_SECONDS env var overrides all auto-detection.
+    """
+    env_override = os.getenv("P1_PARSER_TIMEOUT_SECONDS")
+    if env_override:
+        try:
+            val = float(env_override)
+            if val > 0:
+                return val
+        except ValueError:
+            pass
+    if provider is not None and type(provider).__name__ in _LOCAL_PROVIDERS:
+        return _DEFAULT_LOCAL_TIMEOUT
+    return _DEFAULT_CLOUD_TIMEOUT
+
+
+def _adaptive_classifier_timeout(provider: ChatProvider | None) -> float:
+    """Return intent classifier timeout in seconds, adaptive to provider type.
+
+    Local models (LlamaCpp/Ollama) get 5s; cloud (Groq/OpenAI) get 0.5s.
+    """
+    if provider is not None and type(provider).__name__ in _LOCAL_PROVIDERS:
+        return _DEFAULT_LOCAL_CLASSIFIER_TIMEOUT
+    return _DEFAULT_CLOUD_CLASSIFIER_TIMEOUT
+
+
 def parse_missions(
     user_input: str,
     timeout_seconds: float = 5.0,
@@ -302,7 +339,7 @@ def parse_missions(
     try:
         kind, payload = outbox.get(timeout=timeout_seconds)
     except queue.Empty:
-        LOGGER.info("PARSER FALLBACK reason=timeout timeout_seconds=%.2f", timeout_seconds)
+        LOGGER.warning("PARSER FALLBACK reason=timeout timeout_seconds=%.2f", timeout_seconds)
         fallback = _enforce_step_limit(_build_fallback_plan(user_input), max_plan_steps)
         _apply_intent_classification(
             fallback, user_input, classifier_provider, classifier_timeout
