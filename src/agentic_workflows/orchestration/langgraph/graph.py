@@ -307,7 +307,11 @@ class LangGraphOrchestrator:
             except OSError:
                 compact_directive = "You emit exactly one JSON action per response. Pure JSON only.\n"
 
-            tool_names_line = ", ".join(self.tools.keys())
+            def _tool_sig(name: str, tool: object) -> str:
+                req = tool.required_args() if hasattr(tool, "required_args") else []
+                return f"{name}({', '.join(req)})" if req else name
+
+            tool_names_line = ", ".join(_tool_sig(n, t) for n, t in self.tools.items())
             return (
                 env_block
                 + compact_directive
@@ -362,7 +366,7 @@ class LangGraphOrchestrator:
             "- Message history is windowed automatically — completed mission summaries are preserved, raw history is evicted. Focus on the current task.\n"
             "Context injections prefixed [Cross-run] show HISTORICAL similar missions from past runs.\n"
             "They are reference examples only — they do NOT mean your current tasks are done.\n"
-            "Always execute tools to complete every task in your current mission list."
+            "Always execute tools to complete every task in your current mission list.\n/no_think"
         )
 
     def _invalidate_known_poisoned_cache_entries(self) -> None:
