@@ -9,6 +9,12 @@ from .base import Tool
 
 class RetrieveRunContextTool(Tool):
     name = "retrieve_run_context"
+    _args_schema = {
+        "operation": {"type": "string", "required": "true"},
+        "run_id": {"type": "string"},
+        "include": {"type": "array"},
+        "limit": {"type": "number"},
+    }
     description = (
         "Retrieve context from previous agent runs. "
         "Required args: operation ('last_run'|'get_run'|'list_runs'|'get_summary'). "

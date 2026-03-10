@@ -17,6 +17,15 @@ _SOFT_TIMEOUT = 10.0  # seconds
 
 class SearchContentTool(Tool):
     name = "search_content"
+    _args_schema = {
+        "pattern": {"type": "string", "required": "true"},
+        "path": {"type": "string"},
+        "file_pattern": {"type": "string"},
+        "max_results": {"type": "number"},
+        "context_lines": {"type": "number"},
+        "case_sensitive": {"type": "boolean"},
+        "is_regex": {"type": "boolean"},
+    }
     description = (
         "Search file contents for a pattern (grep-like). "
         "Required args: pattern (str). "

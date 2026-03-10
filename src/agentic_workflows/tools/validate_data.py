@@ -30,6 +30,11 @@ _IP_RE = re.compile(
 
 class ValidateDataTool(Tool):
     name = "validate_data"
+    _args_schema = {
+        "data": {"type": "object", "required": "true"},
+        "rules": {"type": "object", "required": "true"},
+        "mode": {"type": "string"},
+    }
     description = (
         "Validate a data dict against declarative rules. "
         "Required args: data (dict), rules (dict of field -> rule or list of rules). "

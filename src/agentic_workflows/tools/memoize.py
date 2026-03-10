@@ -5,6 +5,10 @@ from agentic_workflows.tools.base import Tool
 
 class MemoizeTool(Tool):
     name = "memoize"
+    _args_schema = {
+        "key": {"type": "string", "required": "true"},
+        "value": {"type": "string", "required": "true"},
+    }
     description = "Memoizes the result of a tool call by writing a key-value pair to a file."
 
     def execute(self, args: dict[str, Any]) -> dict[str, Any]:

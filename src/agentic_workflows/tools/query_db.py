@@ -10,6 +10,13 @@ _VALID_OPS = {"insert", "query", "list", "delete", "count"}
 
 class QueryDBTool(Tool):
     name = "query_db"
+    _args_schema = {
+        "operation": {"type": "string", "required": "true"},
+        "question": {"type": "string"},
+        "answer": {"type": "string"},
+        "question_id": {"type": "number"},
+        "db_path": {"type": "string"},
+    }
     description = (
         "Q&A store backed by SQLite. "
         "Operations: insert, query (LIKE search), list, delete, count."

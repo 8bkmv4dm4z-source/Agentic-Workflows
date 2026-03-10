@@ -21,6 +21,16 @@ SUPPORTED_OPS = {
 
 class StringOpsTool(Tool):
     name = "string_ops"
+    _args_schema = {
+        "text": {"type": "string", "required": "true"},
+        "operation": {"type": "string", "required": "true"},
+        "old": {"type": "string"},
+        "new": {"type": "string"},
+        "delimiter": {"type": "string"},
+        "prefix": {"type": "string"},
+        "suffix": {"type": "string"},
+        "substring": {"type": "string"},
+    }
     description = (
         "Performs string manipulation operations. "
         f"Supported operations: {', '.join(sorted(SUPPORTED_OPS))}."

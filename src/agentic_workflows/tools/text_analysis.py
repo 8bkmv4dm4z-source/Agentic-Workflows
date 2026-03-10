@@ -128,6 +128,10 @@ _VALID_OPERATIONS = {
 
 class TextAnalysisTool(Tool):
     name = "text_analysis"
+    _args_schema = {
+        "text": {"type": "string", "required": "true"},
+        "operation": {"type": "string", "required": "true"},
+    }
     description = (
         "Analyze text for word count, sentence count, key terms, complexity, and more. "
         "Required args: text (string), operation (string). "

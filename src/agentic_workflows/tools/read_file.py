@@ -11,6 +11,11 @@ from .base import Tool
 
 class ReadFileTool(Tool):
     name = "read_file"
+    _args_schema = {
+        "path": {"type": "string", "required": "true"},
+        "start_line": {"type": "number"},
+        "end_line": {"type": "number"},
+    }
     description = (
         "Read the contents of a file. "
         "Required args: path (str). "

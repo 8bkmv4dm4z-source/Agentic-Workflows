@@ -23,6 +23,10 @@ _EPS = 1e-9
 
 class RecognizePatternTool(Tool):
     name = "recognize_pattern"
+    _args_schema = {
+        "text": {"type": "string", "required": "true"},
+        "pattern_types": {"type": "array"},
+    }
     description = (
         "Recognizes patterns in text: email, url, date, phone, ip_address, hex_color, "
         "fibonacci_sequence, arithmetic_sequence, geometric_sequence."

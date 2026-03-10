@@ -18,6 +18,11 @@ MAX_OUTLINE_ITEMS = 30  # cap per category to keep result context-friendly
 
 class OutlineCodeTool(Tool):
     name = "outline_code"
+    _args_schema = {
+        "path": {"type": "string", "required": "true"},
+        "operations": {"type": "array"},
+        "max_items": {"type": "number"},
+    }
     description = (
         "Show the outline of a source file: functions, classes, and imports with line numbers. "
         "Use this instead of read_file when you need to understand a file's structure without reading all its content. "

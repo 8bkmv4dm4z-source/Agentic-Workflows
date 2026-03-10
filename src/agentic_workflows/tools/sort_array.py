@@ -7,6 +7,10 @@ from agentic_workflows.tools.base import Tool
 
 class SortArrayTool(Tool):
     name = "sort_array"
+    _args_schema = {
+        "items": {"type": "array", "required": "true"},
+        "order": {"type": "string"},
+    }
     description = "Sorts a list of numbers or strings. Returns the sorted list and basic metadata."
 
     def execute(self, args: dict[str, Any]) -> dict[str, Any]:

@@ -13,6 +13,11 @@ DEFAULT_CHUNK_LINES = 150
 
 class ReadFileChunkTool(Tool):
     name = "read_file_chunk"
+    _args_schema = {
+        "path": {"type": "string", "required": "true"},
+        "offset": {"type": "number"},
+        "limit": {"type": "number"},
+    }
     description = (
         "Read a large file in chunks to avoid filling the context window. "
         "Required args: path (str). "

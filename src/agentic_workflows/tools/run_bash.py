@@ -24,6 +24,11 @@ _MAX_OUTPUT_BYTES = 64 * 1024  # 64 KB per stream
 
 class RunBashTool(Tool):
     name = "run_bash"
+    _args_schema = {
+        "command": {"type": "string", "required": "true"},
+        "timeout": {"type": "number"},
+        "cwd": {"type": "string"},
+    }
     description = (
         "Run a bash command and return stdout, stderr, and returncode. "
         "Required args: command (string). "

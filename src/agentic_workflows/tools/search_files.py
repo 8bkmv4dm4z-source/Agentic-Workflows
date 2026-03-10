@@ -11,6 +11,11 @@ from .base import Tool
 
 class SearchFilesTool(Tool):
     name = "search_files"
+    _args_schema = {
+        "pattern": {"type": "string", "required": "true"},
+        "path": {"type": "string"},
+        "max_results": {"type": "number"},
+    }
     description = (
         "Search for files matching a glob pattern. "
         "Required args: pattern (str, glob). "

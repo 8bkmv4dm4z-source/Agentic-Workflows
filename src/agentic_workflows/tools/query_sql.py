@@ -24,6 +24,16 @@ _DEFAULT_MAX_ROWS = 1000
 
 class QuerySqlTool(Tool):
     name = "query_sql"
+    _args_schema = {
+        "operation": {"type": "string", "required": "true"},
+        "db_uri": {"type": "string"},
+        "path": {"type": "string"},
+        "table": {"type": "string"},
+        "sql": {"type": "string"},
+        "max_rows": {"type": "number"},
+        "allow_writes": {"type": "boolean"},
+        "timeout": {"type": "number"},
+    }
     description = (
         "Execute SQL queries against SQLite or Postgres databases. "
         "Required args: operation ('list_tables'|'get_schema'|'run_query'|'count_rows'). "

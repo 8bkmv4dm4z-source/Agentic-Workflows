@@ -16,6 +16,10 @@ def _check_shebang_guard(path: str, content: str) -> dict[str, Any] | None:
 
 class WriteFileTool(Tool):
     name = "write_file"
+    _args_schema = {
+        "path": {"type": "string", "required": "true"},
+        "content": {"type": "string", "required": "true"},
+    }
     description = "Writes content to a file. Overwrites if exists."
 
     def execute(self, args: dict[str, Any]) -> dict[str, Any]:

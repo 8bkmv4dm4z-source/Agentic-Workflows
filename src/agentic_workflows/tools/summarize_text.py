@@ -14,6 +14,11 @@ from .text_analysis import _STOP_WORDS
 
 class SummarizeTextTool(Tool):
     name = "summarize_text"
+    _args_schema = {
+        "text": {"type": "string", "required": "true"},
+        "max_sentences": {"type": "number"},
+        "method": {"type": "string"},
+    }
     description = (
         "Summarize text using extractive methods. "
         "Required args: text (str). "

@@ -7,6 +7,13 @@ from agentic_workflows.tools.base import Tool
 
 class UpdateFileSectionTool(Tool):
     name = "update_file_section"
+    _args_schema = {
+        "path": {"type": "string", "required": "true"},
+        "section_marker": {"type": "string", "required": "true"},
+        "new_content": {"type": "string", "required": "true"},
+        "end_marker": {"type": "string"},
+        "create_if_missing": {"type": "boolean"},
+    }
     description = (
         "Updates a section of a file identified by a marker string. "
         "Replaces content from the marker to the next ## heading or EOF."

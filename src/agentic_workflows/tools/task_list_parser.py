@@ -9,6 +9,9 @@ from agentic_workflows.tools.base import Tool
 
 class TaskListParserTool(Tool):
     name = "task_list_parser"
+    _args_schema = {
+        "text": {"type": "string", "required": "true"},
+    }
     description = (
         "Parse raw task text into structured task list with sub-tasks and tool suggestions. "
         "Required args: text (string)."

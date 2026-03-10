@@ -22,6 +22,12 @@ _VALID_OPERATIONS = {
 
 class RegexMatcherTool(Tool):
     name = "regex_matcher"
+    _args_schema = {
+        "text": {"type": "string", "required": "true"},
+        "pattern": {"type": "string", "required": "true"},
+        "operation": {"type": "string", "required": "true"},
+        "replacement": {"type": "string"},
+    }
     description = (
         "Apply regex operations on text: find, replace, split, match, extract groups. "
         "Required args: text (string), pattern (regex string), operation (string). "
