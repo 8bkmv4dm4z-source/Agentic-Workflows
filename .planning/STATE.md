@@ -280,6 +280,7 @@ Recent decisions affecting current work:
 | 7.2 | Wave 2: persistent WAL connection + set dedup + bounded list caps | Fix | 2026-03-08 | 55e1922 | ✓ Complete |
 | 7.2 | Wave 3: auto-derived annotated fields + prepare_state single source of truth | Refactor | 2026-03-08 | 6ed752b | ✓ Complete |
 | 7.2 | Wave 3 final: P1_BASH_ENABLED guard, memoize prompt removal, 144 tool contract tests | Security+Test | 2026-03-08 | e3f3214 | ✓ Complete |
+| 8 | retrieve_tool_result tool — planner-callable cache retrieval with chunking | Extend | 2026-03-11 | b51dee8 | ✓ Complete |
 
 ### Quick Tasks Completed
 
@@ -296,5 +297,5 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last activity: 2026-03-10 - Quick-6: spaCy clause splitting, partial mission persistence, provider fix (0c7b78c)
+Last activity: 2026-03-11 - Completed Extend feature for Phase 08: retrieve_tool_result tool — planner-callable cache retrieval with chunking
 Resume file: None
