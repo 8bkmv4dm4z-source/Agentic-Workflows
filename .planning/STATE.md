@@ -250,6 +250,9 @@ Recent decisions affecting current work:
 - [Phase 08]: LARGE_RESULT_THRESHOLD defined at module level in context_manager.py (env-configurable, default 2000); compact pointer format locked: [Result truncated — N chars stored] Tool: X | Key: hash[:8] | Summary: Z...
 - [Phase 08]: LARGE_RESULT_THRESHOLD defined at module level in context_manager.py (env-configurable, default 2000); compact pointer format locked: [Result truncated — N chars stored] Tool: X | Key: hash[:8] | Summary: Z...
 - [Phase 08]: ToolResultCache wired through app.py → orchestrator.py → ContextManager; pool=None safe in CI
+- [Phase 08 extend]: Option A key design: full 64-char args_hash in compact pointer (not truncated); planner passes verbatim to retrieve_tool_result — zero new SQL
+- [Phase 08 extend]: get_by_key() added to ToolResultCache for hash-only lookup; pool=None returns None safely; lazy TTL eviction with WARNING log
+- [Phase 08 extend]: Four-element compact pointer format locked: size+chunks hint, tool+full_key, summary, → call hint with example
 
 ### Roadmap Evolution
 
