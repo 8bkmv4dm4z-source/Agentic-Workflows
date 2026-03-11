@@ -232,6 +232,17 @@ def extract_summary_from_result(tool_name: str, result: dict[str, Any]) -> dict[
             return {"sorted": str(sorted_val)}
         return {}
 
+    if tool_name == "list_directory":
+        entries = result.get("entries", [])
+        names = [e["name"] for e in entries[:20] if "name" in e]
+        paths = [e["path"] for e in entries[:10] if "path" in e]
+        summary: dict[str, str] = {}
+        if names:
+            summary["files"] = ", ".join(names)
+        if paths:
+            summary["paths"] = ", ".join(paths)
+        return summary
+
     # Generic: truncate to 200 chars
     raw = json.dumps(result, default=str)
     return {"result": raw[:200]}
@@ -450,6 +461,27 @@ class ContextManager:
         ctx.status = "completed"
         ctx.summary = summary
 
+        # Bug 4 fix: build a compact "COMPLETED" marker so the planner knows to finish
+        # rather than keep paginating to retrieve more data.  Use key_results counts or
+        # the last tool name + a brief excerpt from key_results.
+        _last_tool = ctx.tools_used[-1] if ctx.tools_used else "unknown"
+        _kr_brief = ""
+        for _k, _v in list(ctx.key_results.items())[:2]:
+            _short_v = str(_v)[:60].replace("\n", " ")
+            _kr_brief += f" {_k}={_short_v}"
+        total_missions = len(state.get("missions", []))
+        _is_last_mission = (total_missions == 0) or (mission_id >= total_missions)
+        if _is_last_mission:
+            _next_directive = "All missions complete. Synthesize results and call finish."
+        else:
+            _next_directive = f"Proceed to Mission {mission_id + 1}."
+        _completion_marker = (
+            f"[Orchestrator] Mission {mission_id} ✓ COMPLETED"
+            f" (tool: {_last_tool}{_kr_brief})."
+            " All data has been retrieved. Do not call retrieve_tool_result again for this mission."
+            f" {_next_directive}"
+        )
+
         # Identify messages belonging to this mission via step_range
         messages: list[dict[str, Any]] = state.get("messages", [])
         step_range = ctx.step_range
@@ -475,11 +507,14 @@ class ContextManager:
                 "role": "user",
                 "content": f"[Orchestrator] {summary}",
             }
+            # Insert completion marker first, then original summary below it
             keep.insert(insert_pos, summary_msg)
+            keep.insert(insert_pos, {"role": "user", "content": _completion_marker})
             state["messages"] = keep
         else:
-            # No step_range: just append summary
+            # No step_range: just append summary and completion marker
             removed_count = 0
+            state["messages"].append({"role": "user", "content": _completion_marker})
             state["messages"].append({
                 "role": "user",
                 "content": f"[Orchestrator] {summary}",
@@ -771,6 +806,19 @@ class ContextManager:
         _truncation_map: dict[str, str] = {}  # args_hash → compact pointer string
         _truncations = 0
         _tool_compact_lines: list[str] = []
+
+        # Build set of cache keys that have already been retrieved this run.
+        # Once retrieve_tool_result(key=X) appears in tool_history, the pointer
+        # for key X must NOT be re-injected — the planner already acted on it.
+        # Re-injecting the pointer after retrieval causes an infinite loop where
+        # the planner calls retrieve_tool_result offset=0 over and over.
+        _already_retrieved_keys: set[str] = set()
+        for _rec in state.get("tool_history", []):
+            if _rec.get("tool") == "retrieve_tool_result":
+                _rtr_key = str(_rec.get("args", {}).get("key", ""))
+                if _rtr_key:
+                    _already_retrieved_keys.add(_rtr_key)
+
         for record in state.get("tool_history", [])[-10:]:
             import json as _json  # noqa: PLC0415
 
@@ -780,8 +828,15 @@ class ContextManager:
             if len(result_str) <= _LARGE_RESULT_THRESHOLD:
                 continue
             tool_name = record.get("tool", "unknown")
+            # Bug 1 fix: never re-cache retrieve_tool_result results.
+            if tool_name == "retrieve_tool_result":
+                continue
             args = record.get("args", {})
             args_hash = make_args_hash(tool_name, args)
+            # Skip pointer injection if this key was already retrieved by the planner.
+            # The caching below is still done (idempotent), but we suppress the pointer
+            # so the planner stops looping on the same retrieve call.
+            _skip_pointer = args_hash in _already_retrieved_keys
             summary = result_str[:200]
             if self._tool_result_cache is not None:
                 self._tool_result_cache.store(
@@ -790,6 +845,8 @@ class ContextManager:
                     full_result=result_str,
                     summary=summary,
                 )
+            if _skip_pointer:
+                continue  # already retrieved — don't re-inject the pointer
             _compact = (
                 f"[Result truncated — {len(result_str)} chars stored | chunks: {_DEFAULT_CHUNK_SIZE} chars each]\n"
                 f"Tool: {tool_name} | Key: {args_hash}\n"

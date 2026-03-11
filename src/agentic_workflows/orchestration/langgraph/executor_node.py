@@ -430,10 +430,15 @@ class ExecutorNodeMixin:
             tool_args.setdefault("step", state["step"])
 
         signature = f"{tool_name}:{json.dumps(tool_args, sort_keys=True, default=str)}"
-        # Cursor-resumption actions bypass duplicate detection (narrowly scoped to read_file_chunk)
-        _is_cursor_resume = (
-            action.get("__cursor_resume") is True
-            and tool_name == "read_file_chunk"
+        # Cursor-resumption actions bypass duplicate detection.
+        # read_file_chunk: bypass always when __cursor_resume=True.
+        # retrieve_tool_result: bypass ONLY when offset > 0 (pagination).
+        #   offset=0 with the same key is a genuine duplicate — block it.
+        #   Bug 3 fix: prevents infinite retrieve loop on same (key, offset=0) pair.
+        _rtr_offset = int(tool_args.get("offset", 0)) if tool_name == "retrieve_tool_result" else 0
+        _is_cursor_resume = action.get("__cursor_resume") is True and (
+            tool_name == "read_file_chunk"
+            or (tool_name == "retrieve_tool_result" and _rtr_offset > 0)
         )
         if not _is_cursor_resume and signature in state["seen_tool_signatures"]:
             duplicate_retry_count = int(state["retry_counts"].get("duplicate_tool", 0)) + 1
@@ -465,6 +470,98 @@ class ExecutorNodeMixin:
                     state=state,
                 )
                 return state
+
+            # Cross-mission result replay: if a prior successful result exists in
+            # tool_history for this exact signature, inject it as a synthetic
+            # TOOL_RESULT so the planner can advance to the next sub-task.
+            # This converts a blocking duplicate into a cached replay — the planner
+            # receives a result message and is no longer stuck in a dedup loop.
+            prior_result: dict[str, Any] | None = None
+            for record in reversed(state.get("tool_history", [])):
+                if (
+                    record.get("tool") == tool_name
+                    and json.dumps(record.get("args", {}), sort_keys=True, default=str)
+                    == json.dumps(tool_args, sort_keys=True, default=str)
+                    and "error" not in record.get("result", {})
+                ):
+                    prior_result = record.get("result")
+                    break
+
+            if prior_result is not None:
+                self.logger.info(  # type: ignore[attr-defined]
+                    "TOOL DEDUP REPLAY step=%s tool=%s injecting prior result from tool_history",
+                    state["step"],
+                    tool_name,
+                )
+                # Replay the prior result into tool_history so _route_to_specialist
+                # detects success (post_len > pre_len) and mission tracking fires.
+                call_number = len(state["tool_history"]) + 1
+                state["tool_call_counts"][tool_name] = (
+                    int(state["tool_call_counts"].get(tool_name, 0)) + 1
+                )
+                state["tool_history"].append(
+                    {
+                        "call": call_number,
+                        "tool": tool_name,
+                        "args": tool_args,
+                        "result": prior_result,
+                    }
+                )
+                _pre_statuses_dup = {
+                    int(r.get("mission_id", i + 1)): str(r.get("status", ""))
+                    for i, r in enumerate(state.get("mission_reports", []))
+                }
+                self._record_mission_tool_event(  # type: ignore[attr-defined]
+                    state,
+                    tool_name,
+                    prior_result,
+                    mission_index=mission_index if mission_index >= 0 else None,
+                    tool_args=tool_args,
+                )
+                for _i, _r in enumerate(state.get("mission_reports", [])):
+                    _mid = int(_r.get("mission_id", _i + 1))
+                    if (
+                        str(_r.get("status", "")) == "completed"
+                        and _pre_statuses_dup.get(_mid) != "completed"
+                        and isinstance(state.get("mission_contexts"), dict)
+                    ):
+                        with contextlib.suppress(Exception):
+                            self.context_manager.on_mission_complete(state, _mid)  # type: ignore[attr-defined]
+                _tool_result_json_dup = json.dumps(prior_result)
+                _threshold_dup = getattr(self.context_manager, "large_result_threshold", 800)  # type: ignore[attr-defined]
+                # retrieve_tool_result is exempt from truncation — see normal path comment above.
+                if tool_name == "retrieve_tool_result":
+                    _tool_result_for_msg_dup = _tool_result_json_dup
+                elif len(_tool_result_json_dup) > _threshold_dup:
+                    _tool_result_for_msg_dup = (
+                        f"[tool_result: {tool_name}, {len(_tool_result_json_dup)} chars, "
+                        f"replayed from prior step]"
+                    )
+                else:
+                    _tool_result_for_msg_dup = _tool_result_json_dup
+                progress_hint_dup = (
+                    self._progress_hint_message(state)  # type: ignore[attr-defined]
+                    or "Continue with the next task or finish when all tasks are complete."
+                )
+                state["messages"].append(
+                    {
+                        "role": "system",
+                        "content": (
+                            f"TOOL_RESULT #{call_number} ({tool_name}) [replayed from prior "
+                            f"step — result already available]: {_tool_result_for_msg_dup}\n"
+                            f"{progress_hint_dup}"
+                        ),
+                    }
+                )
+                state["pending_action"] = None
+                self.checkpoint_store.save(  # type: ignore[attr-defined]
+                    run_id=state["run_id"],
+                    step=state["step"],
+                    node_name="execute_duplicate_replay",
+                    state=state,
+                )
+                return state
+
             guidance = (
                 f"Next incomplete task: {next_mission}."
                 if next_mission
@@ -606,15 +703,35 @@ class ExecutorNodeMixin:
             self._progress_hint_message(state)  # type: ignore[attr-defined]
             or "Continue with the next task or finish when all tasks are complete."
         )
+        # After a complete retrieve_tool_result (has_more=False), tell the planner exactly
+        # what to do with the retrieved data rather than leaving it with a generic hint.
+        if (
+            tool_name == "retrieve_tool_result"
+            and not validation_error
+            and isinstance(tool_result, dict)
+            and not tool_result.get("has_more", True)
+        ):
+            _next_mission_text = self._next_incomplete_mission(state)  # type: ignore[attr-defined]
+            if _next_mission_text:
+                progress_hint = (
+                    "Retrieved tool result successfully. "
+                    f"Now use this data to proceed with: {_next_mission_text}. "
+                    "Call the appropriate tool — do NOT call retrieve_tool_result again for the same key."
+                )
         if validation_error:
             progress_hint = (
                 "Previous tool output failed deterministic content validation. "
                 f"Fix and rerun this task. {validation_error}"
             )
         # Gate: truncate large tool results BEFORE they enter state["messages"].
+        # retrieve_tool_result is exempt — its output is already chunked by the caller-specified
+        # `limit` parameter. Truncating it would mean the planner can never read the data it
+        # specifically requested, causing an infinite retrieve loop.
         _tool_result_json = json.dumps(tool_result)
         _threshold = getattr(self.context_manager, "large_result_threshold", 800)  # type: ignore[attr-defined]
-        if len(_tool_result_json) > _threshold:
+        if tool_name == "retrieve_tool_result":
+            _tool_result_for_msg = _tool_result_json
+        elif len(_tool_result_json) > _threshold:
             _tool_result_for_msg = (
                 f"[tool_result: {tool_name}, {len(_tool_result_json)} chars, stored in context]"
             )
