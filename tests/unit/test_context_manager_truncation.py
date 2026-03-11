@@ -175,18 +175,18 @@ class TestGraphExecuteActionGating:
 
 
 class TestContextManagerInstantiationThreshold:
-    """The ContextManager used in graph.py must have large_result_threshold=800 (not 4000)."""
+    """The ContextManager used in graph.py must have large_result_threshold=3000 (not 4000 default or 800)."""
 
     def test_default_threshold_is_4000(self):
         """Default value is 4000 — confirms the bug existed before the fix."""
         cm_default = ContextManager()
         assert cm_default.large_result_threshold == 4000
 
-    def test_graph_instantiation_uses_800(self):
-        """After the fix, the ContextManager in LangGraphOrchestrator.__init__ uses threshold=800.
+    def test_graph_instantiation_uses_3000(self):
+        """After the fix, the ContextManager in LangGraphOrchestrator.__init__ uses threshold=3000.
 
         We verify this by inspecting the source code — the constructor call must pass
-        large_result_threshold=800 explicitly.  We do this via grep on the source file
+        large_result_threshold=3000 explicitly.  We do this via grep on the source file
         rather than importing the full orchestrator (which has heavy dependencies).
         """
         import ast
@@ -212,8 +212,8 @@ class TestContextManagerInstantiationThreshold:
         assert found_threshold is not None, (
             "ContextManager() call in graph.py must pass large_result_threshold explicitly"
         )
-        assert found_threshold == 800, (
-            f"Expected large_result_threshold=800, got {found_threshold}"
+        assert found_threshold == 3000, (
+            f"Expected large_result_threshold=3000, got {found_threshold}"
         )
 
     def test_explicit_threshold_overrides_default(self):

@@ -316,7 +316,7 @@ class LangGraphOrchestrator(
         self._artifact_store = artifact_store
         self._tool_result_cache = tool_result_cache
         self.context_manager = ContextManager(
-            large_result_threshold=800,
+            large_result_threshold=3000,
             sliding_window_cap=20,
             mission_context_store=mission_context_store,
             embedding_provider=embedding_provider,

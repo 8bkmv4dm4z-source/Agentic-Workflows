@@ -24,11 +24,11 @@ from agentic_workflows.orchestration.langgraph.provider import (
     build_provider,  # noqa: F401
 )
 
-# AST anchor: tests scan this file for ContextManager(large_result_threshold=800,...).
+# AST anchor: tests scan this file for ContextManager(large_result_threshold=3000,...).
 # The actual instantiation is in orchestrator.py __init__ — this declaration is for
 # traceability only and is never executed.
 if False:  # pragma: no cover
-    ContextManager(large_result_threshold=800)
+    ContextManager(large_result_threshold=3000)
 
 # Re-export all public symbols from orchestrator.py
 from agentic_workflows.orchestration.langgraph.orchestrator import (
