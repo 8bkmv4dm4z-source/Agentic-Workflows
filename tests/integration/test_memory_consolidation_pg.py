@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 
 import pytest
+
+
+def _goal_hash(goal: str) -> str:
+    """Compute SHA-256 of normalised goal text (mirrors mission_context_store logic)."""
+    return hashlib.sha256(goal.strip().lower().encode()).hexdigest()
 
 psycopg_pool = pytest.importorskip("psycopg_pool")
 
@@ -37,12 +43,13 @@ class TestConsolidationPostgres:
             ):
                 conn.execute(
                     "INSERT INTO mission_contexts "
-                    "(run_id, mission_id, goal, summary, tools_used, embedding, status, created_at) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, 'completed', NOW() - INTERVAL '10 days')",
+                    "(run_id, mission_id, goal, goal_hash, summary, tools_used, embedding, status, created_at) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, 'completed', NOW() - INTERVAL '10 days')",
                     (
                         f"run-old-{i}",
                         i,
                         goal,
+                        _goal_hash(goal),
                         f"summary {i}",
                         ["sort_array"],
                         emb,
@@ -66,11 +73,12 @@ class TestConsolidationPostgres:
 
         with pg_pool.connection() as conn:
             for i, emb in enumerate([emb_a, emb_b]):
+                goal = f"Recent goal {i}"
                 conn.execute(
                     "INSERT INTO mission_contexts "
-                    "(run_id, mission_id, goal, summary, tools_used, embedding, status) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, 'completed')",
-                    (f"run-recent-{i}", i, f"Recent goal {i}", f"summary {i}", ["write_file"], emb),
+                    "(run_id, mission_id, goal, goal_hash, summary, tools_used, embedding, status) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, 'completed')",
+                    (f"run-recent-{i}", i, goal, _goal_hash(goal), f"summary {i}", ["write_file"], emb),
                 )
 
         result = consolidate_memories(pg_pool, age_days=7, similarity_threshold=0.85)

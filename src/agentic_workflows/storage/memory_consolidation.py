@@ -10,6 +10,7 @@ Uses psycopg3 sync %s placeholders.
 
 from __future__ import annotations
 
+import hashlib
 import math
 from typing import TYPE_CHECKING, Any
 
@@ -233,14 +234,18 @@ def consolidate_memories(
                 "DELETE FROM mission_contexts WHERE id = ANY(%s)",
                 (ids_to_delete,),
             )
+            goal_hash = hashlib.sha256(
+                base["goal"].strip().lower().encode()
+            ).hexdigest()
             conn.execute(
                 "INSERT INTO mission_contexts "
-                "(run_id, mission_id, goal, summary, tools_used, embedding, status) "
-                "VALUES (%s, %s, %s, %s, %s, %s, 'completed')",
+                "(run_id, mission_id, goal, goal_hash, summary, tools_used, embedding, status) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, 'completed')",
                 (
                     base["run_id"],
                     base["mission_id"],
                     base["goal"],
+                    goal_hash,
                     summary,
                     merged_tools,
                     str(merged_embedding) if merged_embedding else None,

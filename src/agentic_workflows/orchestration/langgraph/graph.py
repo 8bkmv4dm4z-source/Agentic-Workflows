@@ -706,7 +706,7 @@ class LangGraphOrchestrator:
         structured_plan = parse_missions(
             user_input,
             timeout_seconds=_adaptive_parser_timeout(self.provider),
-            classifier_provider=self.provider,
+            classifier_provider=None,
             classifier_timeout=_adaptive_classifier_timeout(self.provider),
         )
         if structured_plan.parsing_method == "regex_fallback":
