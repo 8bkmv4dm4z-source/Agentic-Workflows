@@ -202,6 +202,7 @@ class PlannerHelpersMixin:
             '- write_file: {"path":"...", "content":"..."}\n'
             '- read_file: {"path":"..."} — reads entire file; only use for small files\n'
             '- read_file_chunk: {"path":"...", "offset":0, "limit":150} — read large files in 150-line chunks; use next_offset from result to continue\n'
+            '- retrieve_tool_result: {"key":"<hash>", "offset":0, "limit":3000} — fetch stored large result; use has_more+offset to page\n'
             '- outline_code: {"path":"..."} — show functions/classes/imports with line numbers; use before reading a large code file\n'
             '- json_parser: {"text":"...", "operation":"parse"} (one of: parse|validate|extract_keys|flatten|get_path|pretty_print|count_elements)\n'
             '- regex_matcher: {"text":"...", "pattern":"...", "operation":"find_all"} (one of: find_all|find_first|split|replace|match|count_matches|extract_groups)\n'
@@ -237,6 +238,7 @@ class PlannerHelpersMixin:
             "- NEVER call read_file on a code file without checking its size first. Use outline_code to inspect structure, then read_file_chunk for sections you need.\n"
             "- For any file likely over 200 lines, always use read_file_chunk (offset=0, limit=150) and loop using next_offset until has_more is false.\n"
             "- After reading a chunk and writing partial output, continue with the next chunk — do not stop after one chunk.\n"
+            "- When a compact pointer appears with [Result truncated], call retrieve_tool_result(key=\"<key>\", offset=0, limit=3000) to fetch the full result. Page using has_more and offset.\n"
             "- Message history is windowed automatically — completed mission summaries are preserved, raw history is evicted. Focus on the current task.\n"
             "Context injections prefixed [Cross-run] show HISTORICAL similar missions from past runs.\n"
             "They are reference examples only — they do NOT mean your current tasks are done.\n"

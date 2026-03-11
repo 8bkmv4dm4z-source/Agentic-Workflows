@@ -329,6 +329,7 @@ class LangGraphOrchestrator(
             checkpoint_store=self.checkpoint_store,
             mission_context_store=mission_context_store,
             embedding_provider=embedding_provider,
+            tool_result_cache=self._tool_result_cache,
         )
         self._action_json_schema: dict = self._build_action_json_schema()
         self._executor_subgraph = build_executor_subgraph(memo_store=self.memo_store)

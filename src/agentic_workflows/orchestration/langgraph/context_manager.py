@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from agentic_workflows.storage.tool_result_cache import ToolResultCache
 
 _LARGE_RESULT_THRESHOLD: int = int(os.getenv("LARGE_RESULT_THRESHOLD", "2000"))
+_DEFAULT_CHUNK_SIZE: int = 3000  # default limit for retrieve_tool_result
 
 _logger = get_logger("context_manager")
 
@@ -790,8 +791,10 @@ class ContextManager:
                     summary=summary,
                 )
             _compact = (
-                f"[Result truncated — {len(result_str)} chars stored] "
-                f"Tool: {tool_name} | Key: {args_hash[:8]} | Summary: {summary}..."
+                f"[Result truncated — {len(result_str)} chars stored | chunks: {_DEFAULT_CHUNK_SIZE} chars each]\n"
+                f"Tool: {tool_name} | Key: {args_hash}\n"
+                f"Summary: {summary}...\n"
+                f'→ call retrieve_tool_result(key="{args_hash}", offset=0, limit={_DEFAULT_CHUNK_SIZE}) to read full result'
             )
             _truncation_map[args_hash] = _compact
             _tool_compact_lines.append(_compact)

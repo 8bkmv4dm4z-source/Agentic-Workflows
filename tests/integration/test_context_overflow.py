@@ -59,7 +59,14 @@ def test_large_result_never_reaches_planner_raw() -> None:
 
 
 def test_compact_pointer_format_matches_spec() -> None:
-    """Compact pointer matches the locked format: [Result truncated — N chars stored] Tool: X | Key: Y | Summary: Z..."""
+    """Compact pointer matches the four-element locked format from FEATURE-CONTEXT.md.
+
+    Expected format:
+        [Result truncated — N chars stored | chunks: 3000 chars each]
+        Tool: my_tool | Key: <full_hash>
+        Summary: <first 200 chars>...
+        → call retrieve_tool_result(key="<full_hash>", offset=0, limit=3000) to read full result
+    """
     cache = ToolResultCache(pool=None)
     cm = ContextManager(tool_result_cache=cache)
 
@@ -81,12 +88,13 @@ def test_compact_pointer_format_matches_spec() -> None:
 
     injection = cm.build_planner_context_injection(state)
 
-    # Must match exact format components
+    # Must match all four locked elements
     assert "[Result truncated —" in injection
-    assert "chars stored]" in injection
+    assert "chunks: 3000 chars each]" in injection
     assert "Tool: my_tool" in injection
     assert "Key:" in injection
     assert "Summary:" in injection
+    assert "retrieve_tool_result" in injection
 
 
 def test_full_result_retrievable_from_cache() -> None:

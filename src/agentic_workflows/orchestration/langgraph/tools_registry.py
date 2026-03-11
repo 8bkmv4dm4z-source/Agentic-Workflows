@@ -32,6 +32,7 @@ from agentic_workflows.tools.read_file_chunk import ReadFileChunkTool
 from agentic_workflows.tools.recognize_pattern import RecognizePatternTool
 from agentic_workflows.tools.regex_matcher import RegexMatcherTool
 from agentic_workflows.tools.retrieve_run_context import RetrieveRunContextTool
+from agentic_workflows.tools.retrieve_tool_result import RetrieveToolResultTool
 from agentic_workflows.tools.run_bash import RunBashTool
 from agentic_workflows.tools.search_content import SearchContentTool
 from agentic_workflows.tools.search_files import SearchFilesTool
@@ -124,6 +125,7 @@ def build_tool_registry(
     checkpoint_store: SQLiteCheckpointStore | None = None,
     mission_context_store: Any = None,
     embedding_provider: Any = None,
+    tool_result_cache: Any = None,
 ) -> dict[str, Tool]:
     """Build the full tool map used by graph execution nodes."""
     registry: dict[str, Tool] = {
@@ -169,4 +171,6 @@ def build_tool_registry(
         registry["retrieve_run_context"] = RetrieveRunContextTool(checkpoint_store)
     if mission_context_store is not None:
         registry["query_context"] = QueryContextTool(mission_context_store, embedding_provider)
+    if tool_result_cache is not None:
+        registry["retrieve_tool_result"] = RetrieveToolResultTool(tool_result_cache)
     return registry
