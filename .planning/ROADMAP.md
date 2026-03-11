@@ -314,6 +314,27 @@ Plans:
 
 ---
 
+### Phase 8: Multi-Model SYCL Routing and Planner Bottleneck Resolution
+
+**Goal:** Two objectives: (1) Wire multi-SYCL-server support so executor and planner roles route to distinct llama-server processes on different ports; refactor the ~1700-line `graph.py` monolith into a structured `orchestration/langgraph/` sub-module directory. (2) Fix the planner overwhelm bottleneck — when a mission produces large output the planner context floods, causing provider failures and partial results; fix via lazy result truncation + pgvector-backed result summarization caching before the next planner step.
+**Depends on**: Phase 7.9
+**Requirements**: SYCL-01, SYCL-02, BTLNK-01, BTLNK-02
+**Success Criteria** (what must be TRUE):
+  1. Two llama-server processes on different ports can serve the planner and executor roles — `LlamaCppChatProvider` accepts a port override and the orchestrator instantiates role-specific providers at startup
+  2. `graph.py` is decomposed into focused sub-modules (no single file >600 lines); existing tests pass unchanged after the refactor
+  3. A mission producing output >threshold chars never causes the next planner step to receive more than the configured context cap — verified by an integration test with a large synthetic tool result
+  4. Large results are persisted to Postgres/pgvector and replaced with a compact summary pointer before planner injection — a unit test confirms the full result is retrievable and the injected text is ≤ cap
+**Plans**: 5 plans
+
+Plans:
+- [ ] 08-01-PLAN.md — Wave 0: Failing test stubs for SYCL-01, BTLNK-01, BTLNK-02
+- [ ] 08-02-PLAN.md — with_port() factory + orchestrator role-specific provider wiring (SYCL-01)
+- [ ] 08-03-PLAN.md — graph.py decomposition into sub-modules + re-export shim (SYCL-02)
+- [ ] 08-04-PLAN.md — ToolResultCache store class + migration 006 (BTLNK-02)
+- [ ] 08-05-PLAN.md — ContextManager large-result interception + wiring chain (BTLNK-01, BTLNK-02)
+
+---
+
 ### Phase 07.5: Wire ArtifactStore to Runtime (INSERTED)
 
 **Goal:** Connect the currently-dead `ArtifactStore` to the live mission execution path. `MissionContext.artifacts` (already computed at `context_manager.py:492`) should be persisted to Postgres via `ArtifactStore.upsert()` inside `_persist_mission_context()`. Add `artifact_store` parameter to `LangGraphOrchestrator` and `ContextManager`, wire it in `run.py` and `user_run.py`, and add an integration test confirming artifacts appear in the DB after a mission completes.
@@ -336,7 +357,7 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7 → 7.1 → 7.2 → 7.3 → 7.4 → 7.5 → 7.6 → 7.7 → 7.8 → 7.9
+Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7 → 7.1 → 7.2 → 7.3 → 7.4 → 7.5 → 7.6 → 7.7 → 7.8 → 7.9 → 8
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -356,3 +377,4 @@ Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7 → 7.1 → 7.2
 | 7.7. Hybrid Intent Classifier + Few-Shot Prompts (INSERTED) | 4/4 | Complete   | 2026-03-10 |
 | 7.8. Multi-Model Routing + Cloud Fallback (INSERTED) | 3/4 | In Progress|  |
 | 7.9. Dynamic Context + Compliance Observability (INSERTED) | 4/4 | Complete   | 2026-03-10 |
+| 8. Multi-Model SYCL Routing and Planner Bottleneck Resolution | 0/5 | Planned |  |
