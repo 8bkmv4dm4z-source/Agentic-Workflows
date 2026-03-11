@@ -997,6 +997,7 @@ def _build_orchestrator() -> tuple[LangGraphOrchestrator, Any]:
     embedding_provider = None
     mission_context_store = None
     artifact_store = None
+    tool_result_cache = None
 
     if db_url:
         try:
@@ -1019,6 +1020,11 @@ def _build_orchestrator() -> tuple[LangGraphOrchestrator, Any]:
             mission_context_store = MissionContextStore(pool=pool, embedding_provider=embedding_provider)
             from agentic_workflows.storage.artifact_store import ArtifactStore
             artifact_store = ArtifactStore(pool=pool, embedding_provider=embedding_provider)
+            try:
+                from agentic_workflows.storage.tool_result_cache import ToolResultCache as _TRC
+                tool_result_cache = _TRC(pool=pool)
+            except ImportError:
+                tool_result_cache = None
         except Exception as exc:  # noqa: BLE001
             print(f"[warn] Could not connect to Postgres — running without vector memory: {exc}")
             pool = None
@@ -1036,6 +1042,7 @@ def _build_orchestrator() -> tuple[LangGraphOrchestrator, Any]:
         embedding_provider=embedding_provider,
         mission_context_store=mission_context_store,
         artifact_store=artifact_store,
+        tool_result_cache=tool_result_cache,  # Phase 08-05: ToolResultCache wiring
         fallback_provider=fallback_provider,
     ), pool
 

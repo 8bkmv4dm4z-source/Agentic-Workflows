@@ -106,6 +106,14 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     mission_context_store = MissionContextStore(pool=pool, embedding_provider=embedding_provider)
     artifact_store = ArtifactStore(pool=pool, embedding_provider=embedding_provider)
     application.state.artifact_store = artifact_store
+
+    # Phase 08-05 (BTLNK-01): ToolResultCache — active when DATABASE_URL is set
+    try:
+        from agentic_workflows.storage.tool_result_cache import ToolResultCache
+        tool_result_cache = ToolResultCache(pool=pool)
+    except ImportError:
+        tool_result_cache = None
+
     log.info(
         "api.startup",
         semantic_layer="enabled" if pool is not None else "disabled(sqlite)",
@@ -125,7 +133,8 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         checkpoint_store=checkpoint_store,
         embedding_provider=embedding_provider,
         mission_context_store=mission_context_store,
-        artifact_store=artifact_store,  # NEW — was created above, now forwarded
+        artifact_store=artifact_store,
+        tool_result_cache=tool_result_cache,  # Phase 08-05: ToolResultCache wiring
         fallback_provider=fallback_provider,
     )
     application.state.orchestrator = orchestrator

@@ -68,6 +68,7 @@ class UserSession:
         embedding_provider = None
         mission_context_store = None
         artifact_store: Any = None
+        tool_result_cache: Any = None
         self._pg_pool: Any = None
 
         if db_url:
@@ -93,6 +94,11 @@ class UserSession:
                 )
                 from agentic_workflows.storage.artifact_store import ArtifactStore
                 artifact_store = ArtifactStore(pool=self._pg_pool, embedding_provider=embedding_provider)
+                try:
+                    from agentic_workflows.storage.tool_result_cache import ToolResultCache as _TRC
+                    tool_result_cache = _TRC(pool=self._pg_pool)
+                except ImportError:
+                    tool_result_cache = None
             except Exception as exc:  # noqa: BLE001
                 _LOG.warning("Could not connect to Postgres — running without vector memory: %s", exc)
                 self._pg_pool = None
@@ -103,6 +109,7 @@ class UserSession:
             embedding_provider=embedding_provider,
             mission_context_store=mission_context_store,
             artifact_store=artifact_store,
+            tool_result_cache=tool_result_cache,  # Phase 08-05: ToolResultCache wiring
         )
 
     def _on_route(self, *, specialist: str, tool: str, mission_id: int) -> None:

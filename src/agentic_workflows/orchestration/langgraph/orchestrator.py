@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from agentic_workflows.context.embedding_provider import EmbeddingProvider
     from agentic_workflows.storage.artifact_store import ArtifactStore
     from agentic_workflows.storage.mission_context_store import MissionContextStore
+    from agentic_workflows.storage.tool_result_cache import ToolResultCache
 
 from agentic_workflows.logger import get_logger
 from agentic_workflows.observability import (
@@ -245,6 +246,7 @@ class LangGraphOrchestrator(
         mission_context_store: MissionContextStore | None = None,
         artifact_store: ArtifactStore | None = None,
         fallback_provider: ChatProvider | None = None,
+        tool_result_cache: ToolResultCache | None = None,
     ) -> None:
         self.provider = provider or _provider_module.build_provider()
         self._fallback_provider = fallback_provider
@@ -312,12 +314,14 @@ class LangGraphOrchestrator(
         self._embedding_provider = embedding_provider
         self._mission_context_store = mission_context_store
         self._artifact_store = artifact_store
+        self._tool_result_cache = tool_result_cache
         self.context_manager = ContextManager(
             large_result_threshold=800,
             sliding_window_cap=20,
             mission_context_store=mission_context_store,
             embedding_provider=embedding_provider,
             artifact_store=artifact_store,
+            tool_result_cache=tool_result_cache,
         )
         self.strict_single_action_mode = self._env_bool("P1_STRICT_SINGLE_ACTION", False)
         self.tools = build_tool_registry(
