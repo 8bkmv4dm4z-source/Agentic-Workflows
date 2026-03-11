@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
 status: completed
-last_updated: "2026-03-11T14:52:23.298Z"
+last_updated: "2026-03-11T15:01:22.451Z"
 last_activity: "2026-03-10 — Quick-6: spaCy clause splitting, partial mission persistence, provider fix"
 progress:
   total_phases: 17
-  completed_phases: 15
+  completed_phases: 16
   total_plans: 72
-  completed_plans: 72
+  completed_plans: 73
   percent: 100
 ---
 
@@ -101,6 +101,7 @@ Progress: [██████████] 100% (69/69 plans complete, Phase 7.9
 | Phase 08 P04 | 144s | 2 tasks | 4 files |
 | Phase 08 P02 | 7 | 2 tasks | 5 files |
 | Phase 08 P03 | 90 | 2 tasks | 8 files |
+| Phase 08 P05 | 7 | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -246,6 +247,9 @@ Recent decisions affecting current work:
 - [Phase 08]: _generate_with_hard_timeout provider param takes priority over router when not None; _plan_next_action passes self._planner_provider
 - [Phase 08]: Used mixin inheritance pattern for graph.py decomposition (Option B over Option A) because methods reference self and can't be pure functions
 - [Phase 08]: graph.py kept as 99-line re-export shim; patchable names added for test compatibility
+- [Phase 08]: LARGE_RESULT_THRESHOLD defined at module level in context_manager.py (env-configurable, default 2000); compact pointer format locked: [Result truncated — N chars stored] Tool: X | Key: hash[:8] | Summary: Z...
+- [Phase 08]: LARGE_RESULT_THRESHOLD defined at module level in context_manager.py (env-configurable, default 2000); compact pointer format locked: [Result truncated — N chars stored] Tool: X | Key: hash[:8] | Summary: Z...
+- [Phase 08]: ToolResultCache wired through app.py → orchestrator.py → ContextManager; pool=None safe in CI
 
 ### Roadmap Evolution
 
