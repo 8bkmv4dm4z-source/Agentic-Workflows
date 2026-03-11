@@ -4,206 +4,186 @@
 
 ## Tech Debt
 
-**Pervasive `type: ignore` suppression (315 occurrences):**
-- Issue: 315 `# type: ignore` comments throughout core orchestration modules, plus 18 full-module `ignore_errors = true` overrides in `pyproject.toml` for modules including `graph.py`, `provider.py`, `context_manager.py`, `run.py`, `user_run.py`, and `app.py`
-- Files: `src/agentic_workflows/orchestration/langgraph/planner_helpers.py`, `planner_node.py`, `executor_node.py`, `context_manager.py`, `provider.py`, and most orchestration modules
-- Impact: mypy gives no safety signal on the highest-risk code paths. Type errors in the orchestration core are invisible until runtime.
-- Fix approach: Enable mypy on one module at a time, starting with `state_schema.py` (already clean), then `model_router.py`, then progressively re-enable the full-module overrides.
+**Anthropic Provider Missing — Graph Wiring Exists Without Provider Class:**
+- Issue: `orchestrator.py` and `planner_node.py` detect `P1_PROVIDER=anthropic` and wire a LangGraph `ToolNode` path, but `provider.py`'s `build_provider()` raises `ValueError` if `P1_PROVIDER=anthropic` is set — no `AnthropicChatProvider` class exists.
+- Files: `src/agentic_workflows/orchestration/langgraph/provider.py:703-736`, `src/agentic_workflows/orchestration/langgraph/orchestrator.py:357-392`
+- Impact: Setting `P1_PROVIDER=anthropic` crashes at provider build, making the entire ToolNode/ReAct path dead code for the documented Anthropic use case.
+- Fix approach: Implement `AnthropicChatProvider(ChatProvider)` using `langchain-anthropic` or `anthropic` SDK and register it in `build_provider()`.
 
-**Hardcoded `mission_type="multi_step"` routing always selects strong model:**
-- Issue: In `planner_node.py:256`, the routing signal `mission_type` is hardcoded to `"multi_step"` with comment `# Always route planning to strong model`. This means `ModelRouter.route_by_signals()` signal #3 always fires, short-circuiting budget-aware or intent-aware routing for planner calls.
-- Files: `src/agentic_workflows/orchestration/langgraph/planner_node.py:256`
-- Impact: The multi-provider routing system is partially bypassed for the most frequent (planner) LLM calls; fast provider never used for planning even when intent is `"simple"`.
-- Fix approach: Pass the actual `mission_type` from `structured_plan.intent_classification` instead of a hardcoded constant.
+**`mission_type` Hardcoded to `"multi_step"` in Routing Signals:**
+- Issue: `planner_node.py:256` hardcodes `"mission_type": "multi_step"` in every call to `route_by_signals()`, bypassing the `ModelRouter`'s signal-based logic for simple vs. complex tasks. The `fast` provider is never selected by this path.
+- Files: `src/agentic_workflows/orchestration/langgraph/planner_node.py:254-260`, `src/agentic_workflows/orchestration/langgraph/model_router.py:90`
+- Impact: Cost savings from fast/strong routing are never realised during planning; all calls go to the strong provider.
+- Fix approach: Read actual `mission_type` from `state["structured_plan"]["intent_classification"]` or pass `"unknown"` and rely on other signal thresholds.
 
-**Deprecated `route_by_intent()` not fully removed:**
-- Issue: `ModelRouter.route_by_intent()` marked `DeprecationWarning` since "Plan 03" but still present. No callers found in `src/` at time of analysis (migration appears complete), but the deprecated path remains in the public API.
+**Legacy P0 Core Module Dead Code:**
+- Issue: `src/agentic_workflows/core/` (orchestrator.py, main.py, llm_provider.py, agent_state.py) is explicitly omitted from coverage in `pyproject.toml` with comment "Legacy P0 baseline — superseded by LangGraph orchestrator", but the code still ships. `core/main.py` is only referenced from within core itself.
+- Files: `src/agentic_workflows/core/orchestrator.py`, `src/agentic_workflows/core/main.py`, `src/agentic_workflows/core/llm_provider.py`
+- Impact: Dead code adds maintenance surface; `core/llm_provider.py` duplicates URL resolution logic from `orchestration/langgraph/provider.py`.
+- Fix approach: Delete `core/orchestrator.py`, `core/main.py`, `core/llm_provider.py`; keep `core/agent_state.py` only if still imported by tests (it is: `tests/unit/test_agent_state.py`).
+
+**`graph.py` Is Now a Pure Re-Export Shim with an `if False:` Anchor:**
+- Issue: `graph.py:30-31` contains `if False: ContextManager(large_result_threshold=3000)` as an "AST anchor" so that tests scanning this file's text still find the instantiation. This is a fragile documentation-by-dead-code pattern.
+- Files: `src/agentic_workflows/orchestration/langgraph/graph.py:27-31`
+- Impact: If tests are refactored to not scan AST, this dead code becomes confusing. Searching for `ContextManager(large_result_threshold=3000)` returns a misleading result.
+- Fix approach: Update test grep patterns to point to `orchestrator.py` where the actual instantiation lives; remove the `if False:` block.
+
+**Token Budget Estimation Uses Character-Count ÷ 4 Approximation:**
+- Issue: Token usage is estimated as `len(text) // 4` (`planner_node.py:281,364-365`). This is inaccurate for non-ASCII content (e.g. Chinese, Japanese) and structured JSON outputs where the ratio differs significantly.
+- Files: `src/agentic_workflows/orchestration/langgraph/planner_node.py:281,364-369`
+- Impact: Token budget depletion (`planner_timeout_mode`) may trigger too early or too late, causing either wasted LLM calls or premature shutdown of multi-mission runs.
+- Fix approach: Use `tiktoken` or provider-reported token counts (OpenAI responses include `usage`) for accurate tracking.
+
+**`route_by_intent()` Deprecated Shim Still Present:**
+- Issue: `model_router.py:104-129` marks `route_by_intent()` as deprecated with a `DeprecationWarning` and a comment "until all callers migrate (Plan 03)". No callers appear to use it in production code.
 - Files: `src/agentic_workflows/orchestration/langgraph/model_router.py:104-129`
-- Impact: Maintenance surface; future callers could accidentally use the deprecated path.
-- Fix approach: Remove after confirming no external callers; one-liner deletion.
+- Impact: Low — but emits runtime warnings if accidentally called. Signals incomplete migration.
+- Fix approach: Grep for callers; if none remain, remove the method.
 
-**Legacy P0 baseline (`core/`, `agents/`) never removed:**
-- Issue: `src/agentic_workflows/core/orchestrator.py` (316 lines), `core/main.py`, and `agents/local_agent.py` are excluded from coverage and mypy (`pyproject.toml` omit list) but still exist in the package. They are not imported anywhere in the active codebase.
-- Files: `src/agentic_workflows/core/orchestrator.py`, `src/agentic_workflows/core/main.py`, `src/agentic_workflows/agents/local_agent.py`
-- Impact: Dead weight; anyone reading the codebase will be confused about which orchestrator is authoritative.
-- Fix approach: Delete or move to `archive/` — they are not tested and not imported.
+**`run.py` and `user_run.py` Excluded from Coverage:**
+- Issue: Both `src/agentic_workflows/orchestration/langgraph/run.py` (1112 lines) and `src/agentic_workflows/orchestration/langgraph/user_run.py` (377 lines) are coverage-excluded as "interactive CLI scripts". They contain substantial orchestration logic (orchestrator construction, provider wiring, dual-logging setup).
+- Files: `pyproject.toml:70-78`, `src/agentic_workflows/orchestration/langgraph/run.py`, `src/agentic_workflows/orchestration/langgraph/user_run.py`
+- Impact: Regressions in `_build_orchestrator()`, provider fallback logic, or Postgres wiring go undetected.
+- Fix approach: Extract orchestrator-construction logic into a testable factory function; keep only the `if __name__ == "__main__":` block excluded from coverage.
 
-**Duplicate SQL migration directory:**
-- Issue: `db/migrations/005_sub_task_cursors.sql` exists in both `db/migrations/` and `storage/migrations/`. No migration runner or version-tracking table found.
-- Files: `db/migrations/`, `storage/migrations/005_sub_task_cursors.sql`
-- Impact: Schema drift risk; unclear which directory is authoritative. Migrations must be applied manually.
-- Fix approach: Remove the duplicate directory, add a `schema_version` table, and document the apply procedure.
-
-**File handle leak in `user_run.py`:**
-- Issue: `open(_TMP_DIR / "server_logs.txt", "a")` at line 154 is stored in module-level `_server_log_fh` but never explicitly closed. Suppressed with `# noqa: SIM115`.
-- Files: `src/agentic_workflows/cli/user_run.py:154`
-- Impact: File handle leaked for the process lifetime when the auto-server-start path is used.
-- Fix approach: Use `contextlib.ExitStack` or register a `signal.atexit` to close the handle.
-
-**`seen_tool_signatures` stored as `set[str]` in RunState:**
-- Issue: `RunState` declares `seen_tool_signatures: set[str]` (state_schema.py:86). SQLite checkpoint serialization uses `json.dumps(value, default=str)` — `set` is not JSON-serializable; `default=str` will serialize a set as its string representation `"{'sig1', 'sig2'}"` rather than a list, breaking deserialization. `ensure_state_defaults` converts lists back to sets (line 221-222), but the round-trip through SQLite is lossy.
-- Files: `src/agentic_workflows/orchestration/langgraph/state_schema.py:86`, `src/agentic_workflows/storage/sqlite.py:213`
-- Impact: After a checkpoint restore the duplicate-tool guard may fail to detect previously seen calls, or the set may deserialize as a single garbled string entry.
-- Fix approach: Store as `list[str]` in state; convert to `set` inside the executor for O(1) lookup, convert back to `list` before returning from the node.
+---
 
 ## Known Bugs
 
-**Daemon threads not cancellable on provider timeout:**
-- Symptoms: When `_generate_with_hard_timeout()` or `parse_missions_with_timeout()` times out, the spawned daemon thread continues running in the background until the underlying HTTP call completes or the process exits. For Ollama/slow providers this can be minutes.
-- Files: `src/agentic_workflows/orchestration/langgraph/planner_helpers.py:643`, `src/agentic_workflows/orchestration/langgraph/mission_parser.py:359`, `src/agentic_workflows/orchestration/langgraph/mission_parser.py:505`
-- Trigger: Any planner call that exceeds `P1_PLAN_CALL_TIMEOUT_SECONDS`
-- Workaround: Set socket-level timeouts on the provider (granular `httpx.Timeout` applied in provider.py for Ollama). Anthropic/OpenAI paths rely solely on the queue timeout, leaving the thread live.
+**Recursion Limit Multiplier Inconsistency Between CLAUDE.md and Code:**
+- Symptoms: `CLAUDE.md` states "Recursion limit = max_steps × 3" but both `orchestrator.py:503` and `api/routes/run.py:98` use `max_steps * 9`.
+- Files: `src/agentic_workflows/orchestration/langgraph/orchestrator.py:503`, `src/agentic_workflows/api/routes/run.py:98`
+- Trigger: Documentation is stale relative to code. Actual limit is 9×, not 3×.
+- Workaround: Accept 9× as correct (prevents LangGraph's internal recursion guard from firing before `max_steps` check fires); update CLAUDE.md.
 
-**Ollama Intel Arc iGPU GPU acceleration broken:**
-- Symptoms: Ollama uses CPU (no GPU offload) on Intel Arc graphics, causing very slow inference; SYCL/Vulkan backends both fail upstream.
-- Files: `src/agentic_workflows/orchestration/langgraph/provider.py` (OllamaChatProvider), `.env` / `OLLAMA_NUM_GPU`
-- Trigger: Running with Ollama on a system with Intel Arc GPU without `OLLAMA_NUM_GPU=0`
-- Workaround: Set `OLLAMA_NUM_GPU=0` to force CPU, or migrate to IPEX-LLM/SYCL.
-
-**Empty `{}` JSON output from grammar-constrained LlamaCpp:**
-- Symptoms: LlamaCpp with GBNF grammar occasionally produces `{}` as model output, which is treated as "empty" after detection in `planner_node.py:289` and triggers the empty-output escalation path.
-- Files: `src/agentic_workflows/orchestration/langgraph/planner_node.py:289-294`
-- Trigger: Grammar-constrained sampling on certain quantized models; harder to reproduce with `json_schema` mode.
-- Workaround: System detects and falls through to retry; non-fatal but wastes a planner step and a LLM call.
+---
 
 ## Security Considerations
 
-**`run_bash` uses `shell=True` with user-provided command string:**
-- Risk: When `P1_BASH_ENABLED=true`, the LLM-generated `command` argument is passed directly to `subprocess.run(..., shell=True)`. The denylist in `check_bash_command()` relies on substring matching (`if pattern in command`), which can be bypassed with shell quoting, variable expansion, or multi-statement chaining (`;`, `&&`, `$(...)`).
-- Files: `src/agentic_workflows/tools/run_bash.py:68-75`, `src/agentic_workflows/tools/_security.py:90-120`
-- Current mitigation: Disabled by default (`P1_BASH_ENABLED` env gate); sandbox path check via `P1_TOOL_SANDBOX_ROOT`; python bare-call guard; denylist patterns via `P1_BASH_DENIED_PATTERNS`.
-- Recommendations: Replace `shell=True` with `shlex.split()` + list-form `subprocess.run`; add an allowlist-only mode (`P1_BASH_ALLOWED_COMMANDS` already exists but is opt-in); never enable in production without container sandboxing.
+**SSRF Protection Incomplete — IPv6 and DNS Rebinding Not Covered:**
+- Risk: `http_request.py` blocks private IPv4 ranges via `_PRIVATE_PREFIXES` tuple and `socket.gethostbyname()` resolution, but does not block IPv6 loopback (`::1`), IPv6 private ranges (`fc00::/7`, `fe80::/10`), or IPv4-mapped IPv6 addresses (`::ffff:127.0.0.1`). DNS rebinding attacks (resolve to public IP at check time, then rebind to private) are also not mitigated.
+- Files: `src/agentic_workflows/tools/http_request.py:12-17`, `src/agentic_workflows/tools/http_request.py:49-56`, `src/agentic_workflows/tools/http_request.py:103-104`
+- Current mitigation: IPv4 private ranges blocked; domain allowlist via `P1_HTTP_ALLOWED_DOMAINS` (off by default).
+- Recommendations: Use `ipaddress.ip_address(ip).is_private` (Python stdlib, covers IPv6) instead of startswith prefix matching; resolve all returned addresses (A + AAAA) and reject if any is private.
 
-**API key middleware disabled by default:**
-- Risk: The `APIKeyMiddleware` has an explicit dev-passthrough: if `API_KEY` env var is not set, all requests pass without any authentication. This is a latent production misconfiguration risk.
-- Files: `src/agentic_workflows/api/middleware/api_key.py:26-27`
-- Current mitigation: Documented in middleware docstring. No test enforces that `API_KEY` is set in staging/production deployments.
-- Recommendations: Add a startup check that warns (or optionally errors) when `API_KEY` is unset and `ENVIRONMENT != "development"`.
+**All Security Guardrails Are Off by Default:**
+- Risk: `validate_path_within_sandbox()`, `check_bash_command()`, `check_http_domain()`, and `check_content_size()` all return `None` (allow) when their respective env vars (`P1_TOOL_SANDBOX_ROOT`, `P1_BASH_DENIED_PATTERNS`, `P1_HTTP_ALLOWED_DOMAINS`, `P1_WRITE_FILE_MAX_BYTES`) are unset. A deployment that omits these vars has no filesystem, bash, or HTTP guardrails.
+- Files: `src/agentic_workflows/tools/_security.py:59-83`, `src/agentic_workflows/tools/_security.py:90-120`, `src/agentic_workflows/tools/_security.py:127-146`
+- Current mitigation: Comment in `_security.py` notes guardrails are "env-var gated and off by default".
+- Recommendations: Document required production env vars in `.env.example` with recommended values; consider safe defaults (e.g. `P1_TOOL_SANDBOX_ROOT` defaulting to `AGENT_WORKDIR` when set).
 
-**No rate limiting on `/run` endpoint:**
-- Risk: `POST /run` accepts arbitrary user input and starts a full LLM orchestration run per request. There is no per-client, per-IP, or global rate limit.
-- Files: `src/agentic_workflows/api/routes/run.py:42`, `src/agentic_workflows/api/app.py`
-- Current mitigation: SSE stream duration cap via `SSE_MAX_DURATION_SECONDS` (default 300s).
-- Recommendations: Add a token-bucket rate limiter (e.g., `slowapi`) keyed on `client_ip` before the orchestrator is invoked.
+**API Key Middleware Passes All Requests When `API_KEY` Env Var Unset:**
+- Risk: `APIKeyMiddleware` has an explicit dev passthrough: if `API_KEY` is not set, every request is allowed through. There is no warning or log message emitted at startup when auth is disabled.
+- Files: `src/agentic_workflows/api/middleware/api_key.py:22-27`
+- Current mitigation: None at the framework level — operator must remember to set `API_KEY`.
+- Recommendations: Emit a `WARNING` log at startup when `API_KEY` is absent. Consider a `P1_AUTH_DISABLED=true` explicit opt-in rather than implicit passthrough.
 
-**User input flows unsanitized into LLM message history:**
-- Risk: `user_input` from the API body is placed directly into `state["messages"]` as a `user` role message with no sanitization. A malicious user could attempt prompt injection via crafted input.
-- Files: `src/agentic_workflows/orchestration/langgraph/lifecycle_nodes.py:517`, `src/agentic_workflows/api/routes/run.py:44`
-- Current mitigation: System prompt (from directives) establishes agent role before user messages. Tool calls are validated against a registry.
-- Recommendations: Add a maximum `user_input` length cap at the API layer (e.g., 10k characters); log suspicious patterns (injected system tags, role-switching attempts).
+**CORS Defaults to Localhost-Only (Correct) But `allow_credentials=True`:**
+- Risk: `app.py:182` sets `allow_credentials=True` alongside wildcard methods/headers. If `CORS_ORIGINS` is misconfigured to `["*"]`, credentials (cookies, auth headers) would be sent cross-origin to any domain.
+- Files: `src/agentic_workflows/api/app.py:179-185`
+- Current mitigation: Default origins are `localhost:3000` and `localhost:8080`. The `["*"]` wildcard is not the default.
+- Recommendations: Add startup validation to reject `allow_origins=["*"]` when `allow_credentials=True` is also set.
 
-**SSE stream reconnect uses HMAC token but active_streams dict is in-memory only:**
-- Risk: `active_streams` is a plain `dict` on `app.state`. In multi-worker deployments (e.g., `uvicorn --workers N`), a reconnecting client will get a 404 if it hits a different worker. The stream is gone.
-- Files: `src/agentic_workflows/api/routes/run.py:71`, `src/agentic_workflows/api/app.py:143`
-- Current mitigation: Single-worker deployments are the assumed target.
-- Recommendations: Document the single-worker requirement explicitly; or use Redis pub/sub for cross-worker stream state.
+---
 
 ## Performance Bottlenecks
 
-**Token budget uses len//4 character-count heuristic:**
-- Problem: All token budget tracking uses `len(text) // 4` (defined in `planner_helpers.py:698-699` and applied in `planner_node.py:364-369` and `context_manager.py:757`). This is a rough approximation — off by 20-40% for code/JSON payloads and 2-3x for CJK text.
-- Files: `src/agentic_workflows/orchestration/langgraph/planner_helpers.py:698`, `src/agentic_workflows/orchestration/langgraph/planner_node.py:364`, `src/agentic_workflows/orchestration/langgraph/context_manager.py:757`
-- Cause: Avoiding tokenizer dependency for portability across providers.
-- Improvement path: Add optional `tiktoken` integration for OpenAI paths; accept the approximation for Ollama/Groq where true token counts are unavailable without an extra API call.
+**Synchronous LLM Calls Block the FastAPI Event Loop:**
+- Problem: `api/routes/run.py:78` wraps `orchestrator.run()` in `anyio.to_thread.run_sync()`, but `orchestrator.run()` itself blocks inside `_generate_with_hard_timeout()` using `threading.Thread` + `queue.Queue.get(timeout=...)`. This is a synchronous blocking pattern inside an async executor thread.
+- Files: `src/agentic_workflows/orchestration/langgraph/planner_helpers.py:637-656`, `src/agentic_workflows/api/routes/run.py:155-170`
+- Cause: LangGraph's `invoke()` and provider SDKs (openai, groq) have no native async interface in the current integration.
+- Improvement path: Use `AsyncOpenAI`/`AsyncGroq` clients and LangGraph's `ainvoke()` to eliminate thread-based blocking for these providers.
 
-**ContextManager `_cascade_cache` uses simple FIFO eviction:**
-- Problem: `_cascade_cache` and `_embed_cache` are capped at 200 entries (`_CACHE_MAX_SIZE`) with "oldest half evicted" when full. For long-lived FastAPI workers with high request diversity this means frequent cache misses and Postgres round-trips (2-second timeout each) on every planner step.
-- Files: `src/agentic_workflows/orchestration/langgraph/context_manager.py:42-44`
-- Cause: No LRU eviction; FIFO eviction can discard frequently-accessed entries.
-- Improvement path: Replace with `functools.lru_cache` or `cachetools.LRUCache`.
+**`state["messages"]` Grows Unbounded Relative to Run Duration:**
+- Problem: Every planner step appends at least one message to `state["messages"]` (tool results, progress hints, context injections). The `ContextManager.compact()` sliding window only trims the list to `sliding_window_cap=20` entries, but tool results are appended as full-content messages before they are truncated. Long runs with many tool calls and large results can produce very large message lists before compaction fires.
+- Files: `src/agentic_workflows/orchestration/langgraph/executor_node.py:283,359,393,412,464`, `src/agentic_workflows/orchestration/langgraph/context_manager.py:716-730`
+- Cause: Compaction only triggers when `len(messages) > sliding_window_cap`; large individual messages can still fill context windows.
+- Improvement path: Truncate individual tool-result messages at the append site (currently done in `executor_node.py:726` for one path, but not all append sites).
 
-**`context_manager.py` is 1054 lines — single-class god object:**
-- Problem: `MissionContextManager` handles context injection, sliding-window compaction, cascade retrieval, embedding, partial-mission persistence, and cross-run summaries in one 1054-line file.
-- Files: `src/agentic_workflows/orchestration/langgraph/context_manager.py`
-- Cause: Incremental phase-by-phase additions without refactoring.
-- Improvement path: Extract into `context/injection.py`, `context/compaction.py`, `context/cascade.py`.
+**`_cascade_cache` / `_embed_cache` Eviction Is O(n) FIFO:**
+- Problem: `context_manager.py:44` sets `_CACHE_MAX_SIZE=200`. When the limit is reached, the oldest half is evicted. Iterating over a dict to remove the first `n//2` entries is O(n) and blocks the ContextManager on each eviction event.
+- Files: `src/agentic_workflows/orchestration/langgraph/context_manager.py:43-44`
+- Cause: Standard dict iteration for eviction; acceptable at 200 entries but not at larger scales.
+- Improvement path: Use `collections.OrderedDict` or `functools.lru_cache`; eviction is then O(1).
 
-**`run.py` is 1112 lines and excluded from coverage and mypy:**
-- Problem: The main CLI entrypoint `run.py` contains orchestration helpers, UI rendering, audit reporting, and run lifecycle management in a single file. It is both the largest source file and excluded from both mypy and coverage.
-- Files: `src/agentic_workflows/orchestration/langgraph/run.py`
-- Cause: Run logic accreted over phases without restructuring.
-- Improvement path: Extract UI helpers into `run_ui.py` (already partially done), audit into `run_audit.py` (already exists), lifecycle into lifecycle module.
+---
 
 ## Fragile Areas
 
-**`_sequential_node` wrapper silently zeros Annotated list fields:**
-- Files: `src/agentic_workflows/orchestration/langgraph/orchestrator.py:176-193`
-- Why fragile: Every graph node must be wrapped with `_sequential_node()` to avoid `operator.add` doubling list fields. If a new node is added without this wrapper, lists silently double each step. The derived field set `_ANNOTATED_LIST_FIELDS` auto-updates, but the wrapping requirement is not enforced by any test or type system.
-- Safe modification: Always register new graph nodes via `_sequential_node(fn)`. Add a test that runs a single step and asserts list field lengths stay constant.
-- Test coverage: Integration tests catch regression indirectly via output correctness, not via explicit field-length assertion.
+**`_dedup_then_tool_node()` Anthropic Path Deduplication Is Stateless Across Reconnects:**
+- Files: `src/agentic_workflows/orchestration/langgraph/executor_node.py:81-114`
+- Why fragile: The wrapper checks `state.get("seen_tool_signatures", set())` for duplicates before calling `ToolNode`. If a client reconnects to a stream and the run is resumed, `seen_tool_signatures` must be re-hydrated from the checkpoint; if it is not, previously-executed tools can replay.
+- Safe modification: Always ensure `seen_tool_signatures` is checkpointed and reloaded before invoking the dedup wrapper.
+- Test coverage: No test for the reconnect-then-dedup scenario.
 
-**`ensure_state_defaults` requires manual sync with RunState fields:**
-- Files: `src/agentic_workflows/orchestration/langgraph/state_schema.py:200-290`
-- Why fragile: Every new `RunState` field must be manually added to `ensure_state_defaults()` and `new_run_state()`. Missing an entry causes `KeyError` at runtime when the field is first accessed. There is no static check.
-- Safe modification: After adding a field to `RunState`, search for `ensure_state_defaults` and `new_run_state` and add a corresponding default.
-- Test coverage: Partial — `test_run_helpers.py` covers some defaults but not all fields.
+**`graph.py` Re-Export Shim Couples Test Patching to Module Paths:**
+- Files: `src/agentic_workflows/orchestration/langgraph/graph.py:18-52`
+- Why fragile: Tests that `patch("agentic_workflows.orchestration.langgraph.graph.build_provider")` depend on `graph.py` re-exporting the name. If `graph.py` is removed (the logical next refactor step), all such patches silently become no-ops unless tests update their patch targets.
+- Safe modification: Run `grep -r "graph.build_provider\|graph.ContextManager"` across tests before removing any re-export; update patch targets to `orchestrator.py` or `provider.py` directly.
+- Test coverage: Re-export shim is not itself tested.
 
-**Mission parser fallback silently swallows parsing exceptions:**
-- Files: `src/agentic_workflows/orchestration/langgraph/mission_parser.py:356-388`
-- Why fragile: The threaded parser catches all exceptions and logs `PARSER FALLBACK reason=exception` at INFO level (not WARNING). The fallback plan is a single-step catch-all, which will always succeed but may miss multi-mission intent entirely.
-- Safe modification: At minimum log the original exception at WARNING level; consider re-raising after a structured fallback for debugging.
-- Test coverage: `test_mission_parser.py` tests the fallback path but uses scripted triggers, not real LLM exceptions.
+**Bare `except Exception: pass` Swallows Provider Failures Silently:**
+- Files: `src/agentic_workflows/orchestration/langgraph/provider.py:358,401,486,682,699`, `src/agentic_workflows/orchestration/langgraph/planner_node.py:45,228,497,622`
+- Why fragile: 37 total `except Exception` clauses in source; several (marked `# noqa: BLE001`) swallow errors completely with a bare `pass`, making provider fallback failures invisible without debug logging enabled.
+- Safe modification: Replace `pass` with at minimum `_LOG.debug("silent fallback: %s", exc)` so failures surface during development.
+- Test coverage: Silent failure branches are untested by design in most cases.
 
-**Broad `except Exception: pass` patterns mask failures silently:**
-- Files: `src/agentic_workflows/orchestration/langgraph/provider.py:357,389,400`, `src/agentic_workflows/orchestration/langgraph/planner_node.py:228,497,622,729`, `src/agentic_workflows/orchestration/langgraph/lifecycle_nodes.py:177,197`
-- Why fragile: At least 15 bare `except Exception: pass` (or `pass`-equivalent) clauses across core orchestration nodes. Silent swallowing means unexpected errors are invisible in logs, making debugging production failures very difficult.
-- Safe modification: Replace `pass` with at minimum `self.logger.debug(..., exc_info=True)` to emit traceback at debug level without changing behavior.
-- Test coverage: None — by definition these paths fail silently.
+**`SQLiteCheckpointStore` Uses a Single Shared `sqlite3.Connection`:**
+- Files: `src/agentic_workflows/orchestration/langgraph/checkpoint_store.py:51,96`
+- Why fragile: One `threading.Lock()` guards a single connection object. If multiple threads call `save()` and `load()` concurrently (e.g. SSE streaming + background audit), the lock contention serialises all I/O. SQLite's `check_same_thread=False` mode is required but not confirmed to be set.
+- Safe modification: Use `sqlite3.connect(..., check_same_thread=False)` explicitly and consider connection-per-thread for high-concurrency FastAPI deployments.
+- Test coverage: Concurrency is not tested.
+
+---
 
 ## Scaling Limits
 
-**SQLite checkpoint store:**
-- Current capacity: Single-file SQLite, one writer at a time.
-- Limit: Concurrent runs from multiple threads/workers will serialize on SQLite write locks; at ~10 concurrent runs performance degrades significantly.
-- Scaling path: `DATABASE_URL` env var enables Postgres via `checkpoint_postgres.py`; SQLite is development-only.
+**SQLite Default for Checkpoint and Memo Stores:**
+- Current capacity: In-process SQLite file; adequate for single-process dev use.
+- Limit: Write-heavy concurrent SSE runs will contend on the single lock and hit SQLite's WAL-mode limits (~100 concurrent writers).
+- Scaling path: Set `DATABASE_URL` to switch to `PostgresCheckpointStore` / `PostgresMemoStore`; already implemented in `app.py:84-85`.
 
-**`active_streams` in-memory dict on FastAPI app state:**
-- Current capacity: All active SSE streams for a single process.
-- Limit: Single process / single worker. Any restart or second worker loses all in-flight streams.
-- Scaling path: Redis pub/sub or a persistent event store; documented as single-worker only.
+**`active_streams` Dict Has No Bounded Size or TTL:**
+- Current capacity: Unbounded in-memory dict in `app.state`.
+- Limit: If clients start runs and disconnect without consuming the full SSE stream, `receive_stream` objects accumulate in memory until the process restarts.
+- Scaling path: Add TTL eviction (e.g., pop streams older than `_SSE_MAX_DEFAULT=300s`) in the producer's `finally` block or a periodic cleanup task. Files: `src/agentic_workflows/api/routes/run.py:175`.
 
-**ContextManager cascade retrieval 2-second timeout per planner step:**
-- Current capacity: Blocks planner for up to 2 seconds per step if Postgres is slow.
-- Limit: Under high Postgres load or network latency, each multi-mission run adds `n_steps × 2s` worst-case latency.
-- Scaling path: Make cascade retrieval fully async (currently runs in `ThreadPoolExecutor`); add read replica support.
+---
 
 ## Dependencies at Risk
 
-**`spacy` + `en_core_web_sm` model — optional but affects mission quality:**
-- Risk: `spacy` is loaded lazily in `mission_parser.py`. If the model (`en_core_web_sm`) is not installed, clause-splitting falls back to regex. The fallback silently reduces mission-parsing quality for multi-clause inputs.
-- Impact: Multi-mission runs may collapse to single-mission plans on environments without spacy.
-- Migration plan: Add `spacy` and `en_core_web_sm` to `[project.optional-dependencies]` with a clear install note; add a startup warning when spacy is absent.
+**`fastembed` Optional Import with Silent Fallback:**
+- Risk: `context/embedding_provider.py:80` uses `from fastembed import TextEmbedding  # type: ignore[import]` inside a try block. If `fastembed` is not installed, the embedding provider silently degrades. Downstream `query_context` tool and cascade queries silently become no-ops.
+- Impact: Phase 7.3+ semantic context features become inactive with no error surfaced to the user.
+- Migration plan: Add a startup warning when `DATABASE_URL` is set but `fastembed` import fails; document `fastembed` as a required extra for the `[postgres]` feature set.
 
-**`langfuse` — optional observability with version-split import:**
-- Risk: The import in `observability.py:24-26` handles a `langfuse 2.x` vs `langfuse 3.x` API split with a try/except. If neither import path works (e.g., future langfuse 4.x changes), observability silently no-ops with no log warning.
-- Impact: Traces and schema compliance scores are silently dropped without any indication.
-- Migration plan: Add a logged warning when langfuse is installed but neither import path succeeds.
+---
 
 ## Test Coverage Gaps
 
-**`run.py` and `user_run.py` excluded from coverage:**
-- What's not tested: The main CLI demo entry point (`run.py`, 1112 lines) and the interactive conversational CLI (`user_run.py`, 377 lines) are both excluded from coverage via `pyproject.toml` omit list with rationale "requires TTY".
+**`run.py` and `user_run.py` (1500 lines combined) Are Coverage-Excluded:**
+- What's not tested: `_build_orchestrator()`, Postgres pool setup, provider fallback chain, dual-logging setup, `P1_APPEND_LASTRUN` flag, reviewer mode selection.
 - Files: `src/agentic_workflows/orchestration/langgraph/run.py`, `src/agentic_workflows/orchestration/langgraph/user_run.py`
-- Risk: Orchestration helpers inside `run.py` (e.g., `_derive_run_result`, `_safe_serialize`, `_build_run_context`) are never unit-tested.
-- Priority: High — these helpers are called on every run; a silent bug here affects all users.
+- Risk: Provider wiring regressions (wrong model selected, env vars ignored) are invisible.
+- Priority: High
 
-**`provider.py` excluded from mypy, sparse unit tests for fallback paths:**
-- What's not tested: The Ollama native-chat fallback path, the LlamaCpp grammar-vs-json_schema selection, and the retry backoff logic have no dedicated unit tests. Integration tests use `ScriptedProvider`.
-- Files: `src/agentic_workflows/orchestration/langgraph/provider.py`
-- Risk: Provider-level retry and fallback logic could break silently for specific model configurations.
-- Priority: Medium — ScriptedProvider integration tests cover the happy path but not fallback combinations.
+**Anthropic ToolNode Path Has No Integration Test:**
+- What's not tested: The `P1_PROVIDER=anthropic` code path in `orchestrator.py:357-392` and `executor_node.py:81-114` has no test that exercises the `use_tool_node=True` branch.
+- Files: `src/agentic_workflows/orchestration/langgraph/orchestrator.py:357-405`, `src/agentic_workflows/orchestration/langgraph/executor_node.py:81-114`
+- Risk: Any change to the ToolNode wiring is completely invisible to CI.
+- Priority: High (once Anthropic provider class is implemented)
 
-**Security guardrails in `_security.py` have minimal edge-case coverage:**
-- What's not tested: Denylist bypass via shell metacharacters (`;`, `$(...)`), symlink attacks on `validate_path_within_sandbox`, and the `check_content_size` with non-UTF-8 content.
-- Files: `src/agentic_workflows/tools/_security.py`, `tests/unit/test_run_bash.py`
-- Risk: A crafted command could bypass the substring denylist check.
-- Priority: High when `P1_BASH_ENABLED=true`; low in default configuration.
+**Security Guardrail Edge Cases Not Covered:**
+- What's not tested: IPv6 SSRF bypass in `http_request.py`; `P1_TOOL_SANDBOX_ROOT` path-traversal with symlinks; `check_bash_command` allowlist interaction with denied patterns.
+- Files: `src/agentic_workflows/tools/http_request.py`, `src/agentic_workflows/tools/_security.py`
+- Risk: Security regressions go unnoticed; a subtle change to `_is_private()` could open SSRF.
+- Priority: High
 
-**No tests for `active_streams` cleanup on producer error:**
-- What's not tested: The `finally: request.app.state.active_streams.pop(run_id, None)` cleanup path in the SSE producer is not covered by any test. If `send_stream.aclose()` raises, the stream dict entry leaks.
-- Files: `src/agentic_workflows/api/routes/run.py:173-175`
-- Risk: Long-lived FastAPI processes accumulate stale stream references, growing `active_streams` indefinitely.
-- Priority: Medium.
+**`context_manager.py` Compaction Under Concurrent Append Not Tested:**
+- What's not tested: Behaviour when `compact()` is called concurrently with `append()` from the executor node thread.
+- Files: `src/agentic_workflows/orchestration/langgraph/context_manager.py:716-730`
+- Risk: Race condition between compaction and message append could drop context silently.
+- Priority: Medium
 
 ---
 

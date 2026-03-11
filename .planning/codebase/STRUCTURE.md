@@ -7,279 +7,269 @@
 ```
 agent_phase0/
 ├── src/
-│   └── agentic_workflows/
+│   └── agentic_workflows/        # Main package (installed as editable)
 │       ├── __init__.py
-│       ├── schemas.py              # ToolAction, FinishAction, ClarifyAction (Pydantic)
-│       ├── errors.py               # Exception hierarchy (AgentError tree)
-│       ├── logger.py               # get_logger() factory
-│       ├── observability.py        # Langfuse @observe, graceful no-op
-│       ├── core/                   # Legacy P0 baseline (superseded, excluded from coverage)
+│       ├── schemas.py            # Pydantic action schemas (ToolAction, FinishAction, ClarifyAction)
+│       ├── errors.py             # Exception hierarchy (AgentError, RetryableAgentError, FatalAgentError)
+│       ├── logger.py             # Structured logging (get_logger, setup_dual_logging)
+│       ├── observability.py      # Langfuse tracing, observe decorator, flush
+│       ├── core/                 # Phase 0 baseline agent (legacy reference)
+│       │   ├── main.py
 │       │   ├── orchestrator.py
 │       │   ├── agent_state.py
-│       │   ├── llm_provider.py
-│       │   └── main.py
-│       ├── agents/                 # Agent variants (legacy)
+│       │   └── llm_provider.py
+│       ├── agents/               # Agent variants
 │       │   └── local_agent.py
-│       ├── context/                # Optional embedding provider
-│       │   └── embedding_provider.py
-│       ├── cli/                    # CLI wrappers
+│       ├── api/                  # FastAPI application
+│       │   ├── app.py            # App factory, lifespan, middleware wiring
+│       │   ├── models.py         # Request/response Pydantic models
+│       │   ├── sse.py            # SSE streaming helpers
+│       │   ├── stream_token.py
+│       │   ├── routes/
+│       │   │   ├── health.py
+│       │   │   ├── run.py        # POST /run (SSE stream)
+│       │   │   ├── runs.py       # GET /runs
+│       │   │   └── tools.py      # GET /tools
+│       │   └── middleware/
+│       │       └── (api_key, request_id middleware)
+│       ├── cli/                  # CLI interfaces
 │       │   └── user_run.py
-│       ├── api/                    # FastAPI service layer
-│       │   ├── models.py           # RunRequest, RunStatusResponse, ErrorResponse
-│       │   ├── sse.py              # SSE event builders
-│       │   ├── stream_token.py     # HMAC reconnect token
-│       │   ├── middleware/
-│       │   │   ├── api_key.py
-│       │   │   └── request_id.py
-│       │   └── routes/
-│       │       ├── run.py          # POST /run (SSE), GET /run/{id}
-│       │       ├── runs.py         # GET /runs (listing)
-│       │       ├── tools.py        # GET /tools
-│       │       └── health.py       # GET /health
-│       ├── directives/             # Agent SOPs (Markdown, read at runtime)
-│       │   ├── supervisor.md
-│       │   ├── executor.md
-│       │   ├── evaluator.md
-│       │   ├── planner.md
-│       │   ├── phase1_langgraph.md
-│       │   └── README.md
-│       ├── storage/                # Persistence protocols + backends
-│       │   ├── protocol.py         # RunStore Protocol
-│       │   ├── checkpoint_protocol.py
-│       │   ├── memo_protocol.py
-│       │   ├── sqlite.py           # SQLite RunStore
-│       │   ├── postgres.py         # Postgres RunStore
-│       │   ├── mission_context_store.py
-│       │   ├── artifact_store.py
-│       │   ├── memory_consolidation.py
-│       │   └── tool_result_cache.py
-│       ├── tools/                  # Deterministic tool implementations
-│       │   ├── base.py             # Tool base class
-│       │   ├── output_schemas.py   # Typed tool output dicts
-│       │   ├── _security.py        # Path/content guardrails
-│       │   └── [35+ tool files]    # One file per tool
-│       └── orchestration/
-│           └── langgraph/          # Primary orchestration engine
-│               ├── graph.py        # Backward-compat re-export shim (do not add logic here)
-│               ├── orchestrator.py # LangGraphOrchestrator class + module constants
-│               ├── state_schema.py # RunState TypedDict, new_run_state, ensure_state_defaults
-│               ├── planner_helpers.py    # PlannerHelpersMixin
-│               ├── planner_node.py       # PlannerNodeMixin (_plan_next_action)
-│               ├── executor_node.py      # ExecutorNodeMixin (_route_to_specialist, _execute_action)
-│               ├── lifecycle_nodes.py    # LifecycleNodesMixin (_finalize, policy, shims)
-│               ├── provider.py           # ChatProvider Protocol + all vendor adapters
-│               ├── tools_registry.py     # build_tool_registry(), MemoizeStoreTool
-│               ├── context_manager.py    # ContextManager (compaction, injection, cascade)
-│               ├── model_router.py       # ModelRouter (strong/fast routing)
-│               ├── mission_parser.py     # parse_missions(), StructuredPlan
-│               ├── mission_auditor.py    # audit_run(), AuditReport, AuditFinding
-│               ├── mission_tracker.py    # Mission progress helpers
-│               ├── action_parser.py      # validate_action(), parse_action_json()
-│               ├── handoff.py            # TaskHandoff, HandoffResult (Pydantic)
-│               ├── specialist_executor.py # build_executor_subgraph()
-│               ├── specialist_evaluator.py # build_evaluator_subgraph()
-│               ├── fallback_planner.py   # deterministic_fallback_action()
-│               ├── policy.py             # MemoizationPolicy
-│               ├── memo_manager.py       # Memo lifecycle helpers
-│               ├── memo_store.py         # SQLiteMemoStore
-│               ├── memo_postgres.py      # PostgresMemoStore
-│               ├── checkpoint_store.py   # SQLiteCheckpointStore
-│               ├── checkpoint_postgres.py # PostgresCheckpointStore
-│               ├── directives.py         # Directive loading helpers
-│               ├── content_validator.py  # Content safety checks
-│               ├── text_extractor.py     # Pattern extraction utilities
-│               ├── reviewer.py           # WeightedReviewer, FailOnlyReviewer
-│               ├── run_ui.py             # Rich UI panel builders
-│               ├── run.py                # CLI demo entrypoint
-│               ├── run_audit.py          # Cross-run audit CLI
-│               ├── user_run.py           # Interactive user CLI
-│               ├── langgraph_orchestrator.py # Thin import shim
-│               └── langgraph_orchestrator.py # Thin import shim
+│       ├── context/              # Context/embedding support
+│       │   └── embedding_provider.py
+│       ├── orchestration/
+│       │   └── langgraph/        # Primary orchestration engine
+│       │       ├── graph.py              # Re-export shim (backward compat); do NOT add logic here
+│       │       ├── orchestrator.py       # LangGraphOrchestrator class + constants (authoritative)
+│       │       ├── state_schema.py       # RunState TypedDict, RunResult, new_run_state, ensure_state_defaults
+│       │       ├── planner_helpers.py    # PlannerHelpersMixin: prompt builders, env helpers, timeout
+│       │       ├── planner_node.py       # PlannerNodeMixin: _plan_next_action()
+│       │       ├── executor_node.py      # ExecutorNodeMixin: _route_to_specialist(), _execute_action()
+│       │       ├── lifecycle_nodes.py    # LifecycleNodesMixin: _finalize(), _enforce_memo_policy()
+│       │       ├── provider.py           # ChatProvider Protocol + all provider implementations
+│       │       ├── context_manager.py    # ContextManager, MissionContext, ArtifactRecord
+│       │       ├── mission_parser.py     # StructuredPlan, parse_missions(), IntentClassification
+│       │       ├── mission_auditor.py    # audit_run(), AuditReport, AuditFinding
+│       │       ├── mission_tracker.py    # MissionReport update helpers
+│       │       ├── model_router.py       # ModelRouter, RoutingSignals
+│       │       ├── action_parser.py      # validate_action(), parse_action_json()
+│       │       ├── handoff.py            # TaskHandoff, HandoffResult, create_handoff()
+│       │       ├── specialist_executor.py # ExecutorState subgraph (build_executor_subgraph)
+│       │       ├── specialist_evaluator.py # Evaluator subgraph (build_evaluator_subgraph)
+│       │       ├── tools_registry.py     # build_tool_registry() -> dict[str, Tool]
+│       │       ├── checkpoint_store.py   # SQLiteCheckpointStore
+│       │       ├── checkpoint_postgres.py # PostgresCheckpointStore
+│       │       ├── memo_store.py         # SQLiteMemoStore
+│       │       ├── memo_postgres.py      # PostgresMemoStore
+│       │       ├── memo_manager.py       # Memo lookup/write helpers
+│       │       ├── policy.py             # MemoizationPolicy
+│       │       ├── fallback_planner.py   # Deterministic fallback actions (timeout mode)
+│       │       ├── content_validator.py  # Pre-execution content validation
+│       │       ├── directives.py         # Directive loading helpers
+│       │       ├── text_extractor.py     # Text extraction utilities
+│       │       ├── reviewer.py           # FailOnlyReviewer, WeightedReviewer
+│       │       ├── run.py                # CLI demo entrypoint
+│       │       ├── run_audit.py          # CLI cross-run audit entrypoint
+│       │       ├── run_ui.py             # Audit panel / rich UI helpers
+│       │       ├── user_run.py           # User-driven run entrypoint
+│       │       └── langgraph_orchestrator.py  # Thin alias re-export for backward compat
+│       ├── storage/              # Persistence backends
+│       │   ├── sqlite.py         # SQLiteRunStore (WAL mode)
+│       │   ├── postgres.py       # PostgresRunStore
+│       │   ├── artifact_store.py # ArtifactStore (run artifact persistence)
+│       │   ├── mission_context_store.py  # Cross-run mission context (Postgres)
+│       │   ├── tool_result_cache.py      # Deterministic tool result cache
+│       │   ├── memory_consolidation.py   # Memory consolidation (Phase 7.9)
+│       │   ├── checkpoint_protocol.py    # CheckpointStore protocol
+│       │   └── memo_protocol.py          # MemoStore protocol
+│       ├── tools/                # 40+ deterministic tool implementations
+│       │   ├── base.py           # Tool base class (execute, args_schema, required_args)
+│       │   ├── _security.py      # Security guardrails for tool execution
+│       │   ├── output_schemas.py # Shared output schema helpers
+│       │   └── (one file per tool: write_file.py, read_file.py, data_analysis.py, etc.)
+│       └── directives/           # Specialist SOPs and instruction templates
+│           ├── supervisor.md
+│           ├── executor.md
+│           ├── evaluator.md
+│           ├── planner.md
+│           └── phase1_langgraph.md
 ├── tests/
-│   ├── conftest.py             # Shared fixtures (ScriptedProvider, etc.)
-│   ├── unit/                   # Unit tests (~90 files)
-│   ├── integration/            # Integration tests (ScriptedProvider, no live API)
-│   ├── eval/                   # Eval harness tests
-│   └── fixtures/               # SSE sequence fixtures
-├── .planning/                  # GSD planning documents
-│   ├── codebase/               # This directory
-│   ├── phases/                 # Phase implementation plans and summaries
-│   ├── research/               # Architecture research notes
-│   ├── debug/                  # Debug session notes
-│   └── todos/                  # Pending work items
-├── docs/
-│   ├── phases/                 # Phase progression documentation
-│   ├── architecture/           # ADRs
-│   └── WALKTHROUGH_PHASE*.md   # Operational phase walkthroughs
+│   ├── conftest.py               # Shared fixtures (ScriptedProvider, orchestrator factories)
+│   ├── unit/                     # Unit tests (no live API)
+│   ├── integration/              # Integration tests (ScriptedProvider scripted responses)
+│   ├── eval/                     # Evaluation tests
+│   └── fixtures/                 # Test data, SSE sequences
+│       └── sse_sequences/
 ├── config/
-│   └── local.env.example       # Ollama local config template
-├── .github/
-│   └── workflows/              # CI/CD pipelines
-├── pyproject.toml              # Project metadata, deps, ruff, mypy, pytest config
-├── Makefile                    # make run / test / lint / format / typecheck
-├── .env.example                # Environment variable template
-├── Shared_plan.md              # Written by _write_shared_plan() after each run
-└── CLAUDE.md                   # Project instructions for Claude
+│   └── local.env.example         # Ollama local config template
+├── db/
+│   └── migrations/               # Database migration scripts
+├── storage/
+│   └── migrations/               # Storage-layer migration scripts
+├── docker/                       # Docker-related configs
+├── docs/
+│   ├── ADR/                      # Architecture decision records
+│   ├── architecture/             # Architectural diagrams and docs
+│   └── phases/                   # Phase progression documentation
+├── scripts/                      # Utility scripts
+├── .planning/                    # GSD planning artifacts (not shipped)
+│   ├── codebase/                 # Codebase map documents (this directory)
+│   ├── phases/                   # Implementation phase plans
+│   └── debug/                    # Debug investigations
+├── Dockerfile
+├── docker-compose.yml
+├── pyproject.toml
+├── Makefile
+├── CLAUDE.md                     # Claude project instructions
+├── AGENTS.md                     # Universal coding conventions
+└── Shared_plan.md                # Auto-written structured plan (last run)
 ```
 
 ## Directory Purposes
 
 **`src/agentic_workflows/orchestration/langgraph/`:**
-- Purpose: The entire operational orchestration engine lives here
-- Contains: 35 Python modules covering graph compilation, planning, execution, state, persistence, providers, context management, auditing, specialist subgraphs, CLI and UI
-- Key files: `orchestrator.py` (class), `state_schema.py` (contracts), `provider.py` (adapters), `tools_registry.py` (wiring)
+- Purpose: The entire LangGraph orchestration engine lives here
+- Contains: Graph compilation, all node mixins, provider adapters, context management, mission parsing/auditing, specialist subgraphs, storage adapters, policy enforcement
+- Key files: `orchestrator.py` (authoritative class), `state_schema.py` (state contract), `provider.py` (all LLM adapters), `context_manager.py` (message lifecycle), `graph.py` (backward-compat re-export shim only)
 
 **`src/agentic_workflows/tools/`:**
-- Purpose: All deterministic tool implementations — one file per tool
-- Contains: 35+ tools; each is a class inheriting `Tool` with `name`, `description`, and `execute(args) -> dict`
-- Key files: `base.py` (base class), `_security.py` (path guardrails), `output_schemas.py` (typed results)
+- Purpose: All tool implementations (deterministic, no LLM calls)
+- Contains: One `.py` file per tool; `base.py` defines the `Tool` base class; `tools_registry.py` assembles the full registry; `_security.py` provides sandboxing for bash/file tools
+- Key files: `base.py`, `write_file.py`, `read_file.py`, `data_analysis.py`, `math_stats.py`, `run_bash.py`, `memoize.py`
 
 **`src/agentic_workflows/storage/`:**
-- Purpose: Storage abstractions and backends
-- Contains: Protocol definitions (runtime_checkable) + SQLite and Postgres implementations; also specialized stores for missions, artifacts, tool result caching, and memory consolidation
-- Key files: `protocol.py`, `checkpoint_protocol.py`, `memo_protocol.py`
+- Purpose: Persistence protocols and implementations
+- Contains: Protocol interfaces (`checkpoint_protocol.py`, `memo_protocol.py`) and SQLite/Postgres implementations; also artifact store, tool result cache, memory consolidation
 
 **`src/agentic_workflows/api/`:**
-- Purpose: FastAPI service with SSE streaming
-- Contains: Route handlers, Pydantic models, SSE event builders, HMAC stream tokens, middleware
-- Key files: `routes/run.py` (primary endpoint), `sse.py`, `models.py`
+- Purpose: HTTP interface via FastAPI
+- Contains: App factory with lifespan, four route modules, middleware, SSE streaming, Pydantic request/response models
 
 **`src/agentic_workflows/directives/`:**
-- Purpose: Agent role SOPs read at runtime during prompt construction
-- Contains: Markdown files for supervisor, executor, evaluator, planner roles
-- Key files: `supervisor.md`, `executor.md`, `evaluator.md`
-- Note: Never overwrite without explicit request
+- Purpose: Markdown instruction files loaded at runtime by `directives.py` into system prompts
+- Contains: `supervisor.md`, `executor.md`, `evaluator.md`, `planner.md`, `phase1_langgraph.md`
+- Note: Never overwrite without explicit user request (per CLAUDE.md)
 
-**`src/agentic_workflows/core/`:**
-- Purpose: Legacy P0 baseline orchestrator (pre-LangGraph)
-- Status: Excluded from test coverage; do not extend; kept for reference only
-
-**`tests/unit/`:**
-- Purpose: Fast, isolated unit tests; no live API calls
-- Key fixtures: `ScriptedChatProvider` from `conftest.py` drives deterministic LLM output
-
-**`tests/integration/`:**
-- Purpose: End-to-end tests using `ScriptedChatProvider` (no live API)
-- Key files: `test_langgraph_flow.py`, `test_multi_mission_subgraph.py`, `test_mission_context_cascade.py`
+**`tests/`:**
+- Purpose: Full test suite (657 passing)
+- Contains: `unit/` (no live API, mock providers), `integration/` (ScriptedProvider with pre-scripted LLM responses), `eval/` (evaluation harness), `fixtures/` (shared test data)
 
 **`.planning/`:**
-- Purpose: GSD planning artifacts — phase plans, summaries, debug notes, codebase analysis
-- Generated: No (human and agent maintained)
-- Committed: Yes
+- Purpose: GSD planning artifacts
+- Generated: No (checked in)
+- Committed: Yes — planning docs committed alongside code
 
 ## Key File Locations
 
 **Entry Points:**
-- `src/agentic_workflows/orchestration/langgraph/run.py`: `python -m agentic_workflows.orchestration.langgraph.run`
-- `src/agentic_workflows/orchestration/langgraph/user_run.py`: Interactive user-facing CLI
-- `src/agentic_workflows/orchestration/langgraph/run_audit.py`: Cross-run audit summary
+- `src/agentic_workflows/orchestration/langgraph/run.py`: CLI demo (`python -m agentic_workflows.orchestration.langgraph.run`)
+- `src/agentic_workflows/orchestration/langgraph/run_audit.py`: CLI audit (`python -m agentic_workflows.orchestration.langgraph.run_audit`)
+- `src/agentic_workflows/api/app.py`: FastAPI application
+- `src/agentic_workflows/core/main.py`: Phase 0 legacy demo (not production)
 
 **Configuration:**
-- `pyproject.toml`: All tool config (ruff, mypy, pytest, coverage)
-- `.env` / `.env.example`: Runtime provider config (`P1_PROVIDER`, API keys, model names)
-- `config/local.env.example`: Ollama/local model template
+- `pyproject.toml`: Package definition, dependencies, tool config (ruff, mypy, pytest)
+- `Makefile`: `run`, `test`, `lint`, `format`, `typecheck` targets
+- `.env` (not committed): Provider keys and runtime config (see `.env.example`)
+- `config/local.env.example`: Ollama/local model config template
 
 **Core Logic:**
-- `src/agentic_workflows/orchestration/langgraph/orchestrator.py`: `LangGraphOrchestrator` class definition
-- `src/agentic_workflows/orchestration/langgraph/state_schema.py`: `RunState`, `new_run_state`, `ensure_state_defaults`
-- `src/agentic_workflows/orchestration/langgraph/provider.py`: `ChatProvider` protocol + all vendor adapters
-- `src/agentic_workflows/orchestration/langgraph/tools_registry.py`: `build_tool_registry()` — the single place that wires all tools
+- `src/agentic_workflows/orchestration/langgraph/orchestrator.py`: LangGraphOrchestrator class (authoritative)
+- `src/agentic_workflows/orchestration/langgraph/state_schema.py`: RunState, RunResult, new_run_state
+- `src/agentic_workflows/orchestration/langgraph/planner_node.py`: `_plan_next_action()` — the planning loop
+- `src/agentic_workflows/orchestration/langgraph/executor_node.py`: `_execute_action()` — tool dispatch
+- `src/agentic_workflows/orchestration/langgraph/provider.py`: All LLM provider implementations
+- `src/agentic_workflows/orchestration/langgraph/context_manager.py`: Message lifecycle management
 
 **Testing:**
-- `tests/conftest.py`: Shared fixtures including `ScriptedChatProvider`
-- `tests/unit/`: ~90 unit test files, one per module area
-- `tests/integration/`: 4 integration test files
-
-**Backward-Compat Shim:**
-- `src/agentic_workflows/orchestration/langgraph/graph.py`: Re-exports from `orchestrator.py` so all existing import paths continue working; do not add logic here
+- `tests/conftest.py`: Shared fixtures including `ScriptedProvider` and orchestrator factories
+- `tests/unit/`: One test file per module (naming: `test_<module_name>.py`)
+- `tests/integration/test_langgraph_flow.py`: End-to-end flow tests
 
 ## Naming Conventions
 
 **Files:**
-- Modules: `snake_case.py` — one concern per file
-- Test files: `test_{module_name}.py` — mirrors the module being tested
-- Mixin modules: `{concern}_node.py` or `{concern}_helpers.py` (e.g., `planner_node.py`, `lifecycle_nodes.py`)
-- CLI scripts: `run.py`, `user_run.py`, `run_audit.py`
-
-**Classes:**
-- Orchestrator: `LangGraphOrchestrator` — full descriptive names
-- Mixins: `{Concern}Mixin` (e.g., `PlannerNodeMixin`, `ExecutorNodeMixin`)
-- Tools: `{CapitalizedName}Tool` (e.g., `WriteFileTool`, `DataAnalysisTool`)
-- Protocols: `{Concern}Store` or `{Concern}Provider` (e.g., `RunStore`, `ChatProvider`)
-- TypedDicts: PascalCase (e.g., `RunState`, `ToolRecord`, `MissionReport`)
-- Pydantic models: PascalCase (e.g., `TaskHandoff`, `HandoffResult`)
-
-**Functions:**
-- Public graph methods: `_plan_next_action`, `_execute_action`, `_finalize` (underscore-prefixed even on public class)
-- Module-level helpers: `snake_case` with underscore prefix for private helpers (e.g., `_build_port_url`, `_sequential_node`)
-- Constants: `_SCREAMING_SNAKE_CASE` with leading underscore (e.g., `_PIPELINE_TRACE_CAP`, `_HANDOFF_QUEUE_CAP`)
+- Snake case: `mission_parser.py`, `context_manager.py`, `state_schema.py`
+- Mixin modules named by role: `planner_node.py`, `executor_node.py`, `lifecycle_nodes.py`, `planner_helpers.py`
+- Provider-specific: `checkpoint_postgres.py`, `memo_postgres.py`
+- Test files: `test_<module>.py` mirroring source module names
 
 **Directories:**
-- `snake_case` throughout
+- Snake case: `agentic_workflows`, `langgraph`, `tools`, `storage`
+- Flat within `tools/` (no subdirectories)
+
+**Classes:**
+- PascalCase: `LangGraphOrchestrator`, `RunState`, `ToolRecord`, `MissionReport`
+- Mixin suffix: `PlannerHelpersMixin`, `ExecutorNodeMixin`, `LifecycleNodesMixin`
+- Tool suffix: `WriteFileTool`, `DataAnalysisTool`, `MathStatsTool`
+- Store suffix: `SQLiteCheckpointStore`, `PostgresMemoStore`, `SQLiteRunStore`
+
+**Functions and methods:**
+- Public: snake_case (`run`, `prepare_state`, `build_tool_registry`)
+- Private/internal: leading underscore (`_plan_next_action`, `_execute_action`, `_finalize`)
+- Module-level private constants: leading underscore + CAPS (`_PIPELINE_TRACE_CAP`, `_ANNOTATED_LIST_FIELDS`)
 
 ## Where to Add New Code
 
 **New Tool:**
-- Implementation: `src/agentic_workflows/tools/{tool_name}.py` — subclass `Tool`, set `name`, `description`, implement `execute(args) -> dict`
-- Registration: Add import + instantiation to `src/agentic_workflows/orchestration/langgraph/tools_registry.py` in `build_tool_registry()`
-- Tests: `tests/unit/test_{tool_name}.py`
-- Output schema (if complex): add to `src/agentic_workflows/tools/output_schemas.py`
+- Implementation: `src/agentic_workflows/tools/<tool_name>.py` — subclass `Tool`, set `name`, `description`, `_args_schema`, implement `execute(args) -> dict`
+- Registration: add import and instantiation to `src/agentic_workflows/orchestration/langgraph/tools_registry.py` in `build_tool_registry()`
+- Tests: `tests/unit/test_<tool_name>.py`
+
+**New Provider:**
+- Implementation: `src/agentic_workflows/orchestration/langgraph/provider.py` — implement the `ChatProvider` Protocol (`generate`, `context_size`)
+- Registration: update `build_provider()` factory in `provider.py`
 
 **New API Route:**
-- Implementation: `src/agentic_workflows/api/routes/{route_name}.py`
-- Register router in the FastAPI app module
-- Models: add request/response types to `src/agentic_workflows/api/models.py`
-- Tests: `tests/unit/test_{route_name}.py` or `tests/integration/test_api_service.py`
+- Implementation: `src/agentic_workflows/api/routes/<route_name>.py`
+- Registration: import and include router in `src/agentic_workflows/api/app.py`
 
 **New Storage Backend:**
-- Protocol: extend or implement `src/agentic_workflows/storage/{concern}_protocol.py`
-- SQLite impl: `src/agentic_workflows/storage/sqlite.py` or new file
-- Postgres impl: `src/agentic_workflows/storage/postgres.py` or new file
-- Tests: `tests/unit/test_{store_name}.py`
+- Protocol: extend `src/agentic_workflows/storage/checkpoint_protocol.py` or `memo_protocol.py`
+- Implementation: `src/agentic_workflows/storage/<backend_name>.py`
 
-**New Orchestrator Behavior:**
-- If it belongs in planning: extend `PlannerNodeMixin` in `src/agentic_workflows/orchestration/langgraph/planner_node.py`
-- If it belongs in execution: extend `ExecutorNodeMixin` in `src/agentic_workflows/orchestration/langgraph/executor_node.py`
-- If it belongs in finalization/policy: extend `LifecycleNodesMixin` in `src/agentic_workflows/orchestration/langgraph/lifecycle_nodes.py`
-- Prompt/helper utilities: extend `PlannerHelpersMixin` in `src/agentic_workflows/orchestration/langgraph/planner_helpers.py`
-- Do NOT add logic to `src/agentic_workflows/orchestration/langgraph/graph.py`
+**New Orchestrator Functionality:**
+- Add to the appropriate mixin: planning logic → `planner_node.py` or `planner_helpers.py`; execution logic → `executor_node.py`; lifecycle/finalize logic → `lifecycle_nodes.py`
+- Do NOT add logic to `graph.py` (shim only)
 
-**New State Field:**
-- Add to `RunState` TypedDict in `src/agentic_workflows/orchestration/langgraph/state_schema.py`
-- Add default in `new_run_state()` function
-- Add `setdefault` guard in `ensure_state_defaults()`
-- If it is an append-only list needing parallel safety, annotate with `Annotated[list[T], operator.add]` — it will be auto-detected by `_derive_annotated_list_fields()`
+**New Directive:**
+- Add markdown file to `src/agentic_workflows/directives/`
+- Load via `directives.py` helpers in orchestration layer
 
-**New Agent Directive:**
-- Add `src/agentic_workflows/directives/{role}.md`
-- Load via `directives.py` helpers or `_read_directive_section()` from `planner_helpers.py`
+**New Tests:**
+- Unit tests: `tests/unit/test_<module>.py`
+- Integration tests: `tests/integration/test_<feature>.py` — use `ScriptedProvider` from `tests/conftest.py` for deterministic LLM scripting
 
 ## Special Directories
 
-**`src/agentic_workflows/directives/`:**
-- Purpose: Runtime-loaded agent role instruction files
-- Generated: No
-- Committed: Yes — never overwrite without explicit user request
+**`src/agentic_workflows.egg-info/`:**
+- Purpose: Editable install metadata
+- Generated: Yes (by `pip install -e`)
+- Committed: No
 
-**`.planning/codebase/`:**
-- Purpose: GSD codebase analysis documents (this directory)
-- Generated: Yes (by `/gsd:map-codebase` command)
-- Committed: Yes
+**`workspace/agent_files/`:**
+- Purpose: Runtime file output directory for `write_file` and `file_manager` tools
+- Generated: Yes (by tool execution)
+- Committed: No (runtime artifacts)
 
-**`docs/`:**
-- Purpose: Phase walkthroughs, ADRs, operational notes
-- Generated: Partially (walkthrough files written during phase execution)
-- Committed: Yes
-
-**`workspace/`:**
-- Purpose: Agent-generated output files from tool executions (write_file, etc.)
+**`user_runs/`:**
+- Purpose: Persisted user run data and events
 - Generated: Yes
-- Committed: No (gitignored)
+- Committed: No (runtime data)
 
-**`.tmp/`:**
-- Purpose: Ephemeral log tails and temp files (e.g., Ollama server log)
+**`test_outputs/`:**
+- Purpose: Test run output files
 - Generated: Yes
 - Committed: No
+
+**`db/migrations/` and `storage/migrations/`:**
+- Purpose: SQL migration scripts for schema evolution
+- Generated: No (hand-authored)
+- Committed: Yes
+
+**`.planning/`:**
+- Purpose: GSD planning artifacts (phase plans, codebase maps, debug notes)
+- Generated: Partially (by GSD commands)
+- Committed: Yes
 
 ---
 

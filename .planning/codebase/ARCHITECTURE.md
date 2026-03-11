@@ -4,204 +4,193 @@
 
 ## Pattern Overview
 
-**Overall:** Plan-and-Execute Graph Orchestration (LangGraph StateGraph)
+**Overall:** Plan-and-Execute Multi-Agent Orchestration with LangGraph StateGraph
 
 **Key Characteristics:**
-- Single `RunState` TypedDict flows through a compiled `StateGraph` (plan → execute → policy → finalize loop)
-- Four mixin classes compose the `LangGraphOrchestrator` via multiple inheritance — each mixin owns one concern
-- All state mutations happen in-place on `RunState`; Annotated list fields use `operator.add` reducers for parallel-safe merge
-- Deterministic tools (no LLM calls) execute inside the `execute` node; all LLM calls happen only in the `plan` node
-- Post-run auditing is deterministic (no LLM) via `mission_auditor.py`
+- LangGraph `StateGraph` compiles a deterministic node graph; all state flows through a typed `RunState` TypedDict
+- Four-mixin composition pattern: `LangGraphOrchestrator` inherits from `PlannerHelpersMixin`, `PlannerNodeMixin`, `ExecutorNodeMixin`, and `LifecycleNodesMixin`
+- Provider-agnostic: a `ChatProvider` Protocol decouples the planning model (OpenAI, Groq, Ollama, LlamaCpp, Anthropic) from the orchestration engine
+- Tools are deterministic (no LLM calls); tool execution is side-effect-only
+- Two execution paths: standard `plan→execute→policy→plan` loop, and an Anthropic-native `plan→tools→plan` ReAct loop via `ToolNode`
+- Post-run auditor validates correctness deterministically, no LLM calls
 
 ## Layers
 
-**Schemas / Contracts:**
-- Purpose: Define all typed data shapes used across the system
-- Location: `src/agentic_workflows/schemas.py`, `src/agentic_workflows/orchestration/langgraph/state_schema.py`, `src/agentic_workflows/orchestration/langgraph/handoff.py`
-- Contains: `ToolAction`, `FinishAction`, `ClarifyAction` (Pydantic, `extra="forbid"`); `RunState` TypedDict; `ToolRecord`, `MissionReport`, `MemoEvent`, `RunResult`; `TaskHandoff`, `HandoffResult` (Pydantic, `extra="forbid"`)
-- Depends on: nothing (leaf layer)
-- Used by: all other layers
+**Schemas and Errors (`src/agentic_workflows/`):**
+- Purpose: Cross-cutting contracts and exception hierarchy
+- Location: `src/agentic_workflows/schemas.py`, `src/agentic_workflows/errors.py`
+- Contains: `ToolAction`, `FinishAction`, `ClarifyAction` (Pydantic BaseModel); `AgentError`, `RetryableAgentError`, `FatalAgentError` hierarchy
+- Depends on: Pydantic only
+- Used by: orchestration layer, action parser, all tool execution paths
 
-**Tools:**
-- Purpose: Deterministic, pure-function tool implementations; no LLM calls
+**Tools Layer (`src/agentic_workflows/tools/`):**
+- Purpose: 40+ deterministic tool implementations; no LLM calls
 - Location: `src/agentic_workflows/tools/`
-- Contains: 35+ `Tool` subclasses (one file per tool), `Tool` base class in `base.py`, output schema helpers in `output_schemas.py`, security guardrails in `_security.py`
-- Depends on: `schemas.py`, `errors.py`
-- Used by: `tools_registry.py`, executor node
+- Contains: Individual tool classes inheriting `Tool` base; `base.py` defines `Tool.execute(args) -> dict`; `tools_registry.py` builds the `dict[str, Tool]` registry at orchestrator init
+- Depends on: Standard library, `base.py`, SQLite memo/checkpoint stores
+- Used by: Executor node (`executor_node.py`), executor subgraph (`specialist_executor.py`)
 
-**Storage:**
-- Purpose: Abstract persistence layer via Protocols
+**Storage Layer (`src/agentic_workflows/storage/`):**
+- Purpose: Persistence backends (SQLite dev, Postgres prod)
 - Location: `src/agentic_workflows/storage/`
-- Contains: `RunStore` protocol (`protocol.py`), `CheckpointStore` protocol (`checkpoint_protocol.py`), `MemoStore` protocol (`memo_protocol.py`), SQLite backends (`sqlite.py`), Postgres backends (`postgres.py`), `MissionContextStore`, `ArtifactStore`, `ToolResultCache`, `MemoryConsolidation`
-- Depends on: `state_schema.py`
-- Used by: orchestrator, API layer
+- Contains: `SQLiteRunStore`, `PostgresRunStore` (run persistence), `artifact_store.py`, `mission_context_store.py`, `tool_result_cache.py`, `memory_consolidation.py`; protocols in `checkpoint_protocol.py`, `memo_protocol.py`
+- Depends on: `sqlite3`, `psycopg` / `psycopg_pool`, `anyio`
+- Used by: Orchestration layer, API layer
 
-**Orchestration — LangGraph:**
-- Purpose: Graph compilation, planning, execution, lifecycle management
+**Orchestration Core (`src/agentic_workflows/orchestration/langgraph/`):**
+- Purpose: LangGraph graph, state management, planning, execution, auditing
 - Location: `src/agentic_workflows/orchestration/langgraph/`
-- Contains: `LangGraphOrchestrator` assembled from four mixins (`orchestrator.py`); planning loop (`planner_node.py`); execution routing (`executor_node.py`); finalization/policy (`lifecycle_nodes.py`); prompt helpers (`planner_helpers.py`); context window management (`context_manager.py`); action parsing (`action_parser.py`); mission parsing (`mission_parser.py`); post-run audit (`mission_auditor.py`); cost-aware model routing (`model_router.py`); specialist subgraphs (`specialist_executor.py`, `specialist_evaluator.py`); tool registry (`tools_registry.py`); provider adapters (`provider.py`); memo/checkpoint stores (`memo_store.py`, `checkpoint_store.py`, `memo_postgres.py`, `checkpoint_postgres.py`)
-- Depends on: schemas, tools, storage, observability
+- Contains: `orchestrator.py` (spine), four mixin modules, `state_schema.py`, `provider.py`, `context_manager.py`, `mission_parser.py`, `mission_auditor.py`, `model_router.py`, `action_parser.py`, `handoff.py`, `checkpoint_store.py`, `memo_store.py`, `policy.py`, `reviewer.py`, and more
+- Depends on: LangGraph, tools layer, storage layer, schemas, providers
 - Used by: API layer, CLI entry points
 
-**API Layer:**
-- Purpose: FastAPI HTTP service with SSE streaming
+**API Layer (`src/agentic_workflows/api/`):**
+- Purpose: FastAPI HTTP interface; compiles graph at startup via `lifespan`
 - Location: `src/agentic_workflows/api/`
-- Contains: route handlers (`routes/run.py`, `routes/runs.py`, `routes/tools.py`, `routes/health.py`), SSE event builders (`sse.py`), stream token HMAC auth (`stream_token.py`), middleware (`middleware/api_key.py`, `middleware/request_id.py`), Pydantic request/response models (`models.py`)
-- Depends on: orchestration layer, storage protocols
-- Used by: external HTTP clients
+- Contains: `app.py` (FastAPI app, lifespan), routes (`health.py`, `run.py`, `runs.py`, `tools.py`), `middleware/` (API key, request ID), `models.py`, `sse.py`, `stream_token.py`
+- Depends on: Orchestration core, storage layer
+- Used by: External HTTP clients
 
-**CLI Entry Points:**
-- Purpose: Interactive and scripted CLI interfaces
-- Location: `src/agentic_workflows/orchestration/langgraph/run.py`, `src/agentic_workflows/orchestration/langgraph/user_run.py`, `src/agentic_workflows/orchestration/langgraph/run_audit.py`, `src/agentic_workflows/cli/user_run.py`
-- Contains: demo runner with audit panel, user-facing interactive run, cross-run audit summary
-- Depends on: orchestration layer
+**CLI Layer (`src/agentic_workflows/cli/`, `run.py`, `run_audit.py`, `user_run.py`):**
+- Purpose: Command-line entrypoints for demos, audits, and user-driven runs
+- Location: `src/agentic_workflows/orchestration/langgraph/run.py`, `run_audit.py`, `user_run.py`; `src/agentic_workflows/cli/user_run.py`
+- Contains: Argument parsing, audit panel rendering, structured output
+- Depends on: Orchestration core, `run_ui.py` for Rich-style panels
 
-**Observability:**
-- Purpose: Langfuse tracing with graceful no-op degradation
-- Location: `src/agentic_workflows/observability.py`
-- Contains: `observe` decorator, `get_langfuse_client`, `get_langfuse_callback_handler`, `report_schema_compliance`
-- Depends on: nothing (self-contained with optional langfuse import)
-- Used by: orchestrator, provider adapters
+**Observability (`src/agentic_workflows/observability.py` or module):**
+- Purpose: Langfuse tracing, span decorators, schema compliance reporting
+- Location: `src/agentic_workflows/` (imported as `agentic_workflows.observability`)
+- Contains: `observe` decorator, `get_langfuse_callback_handler`, `report_schema_compliance`, `flush`
+- Depends on: Langfuse SDK (optional; degrades gracefully)
+- Used by: Planner node, provider adapters, run entrypoints
 
-**Core (Legacy P0 baseline):**
-- Purpose: Original non-LangGraph orchestrator, kept for reference
+**Legacy Core (`src/agentic_workflows/core/`):**
+- Purpose: Phase 0 baseline single-agent orchestrator (reference implementation)
 - Location: `src/agentic_workflows/core/`
-- Contains: `Orchestrator` (simple loop), `AgentState`, `LLMProvider`
-- Status: Excluded from coverage, superseded by the LangGraph orchestrator
+- Contains: `Orchestrator`, `agent_state.py`, `llm_provider.py`, `main.py`
+- Depends on: Minimal (no LangGraph)
+- Used by: Not used in production; preserved for regression reference
 
 ## Data Flow
 
-**Standard Run (non-Anthropic providers):**
+**Standard Execution Loop:**
 
-1. Caller invokes `LangGraphOrchestrator.run(user_input)` or `POST /run`
-2. `prepare_state()` calls `parse_missions()` (regex + optional spaCy) → populates `RunState.missions`, `mission_contracts`, `structured_plan`
-3. LangGraph compiled graph starts at `START → plan`
-4. `_plan_next_action()` (PlannerNodeMixin): compacts context via `ContextManager`, calls `ChatProvider.generate()` with timeout, parses JSON action via `action_parser.validate_action()`
-5. `_route_after_plan()` conditional edge: routes to `execute`, `plan` (retry), `finalize` (finish action), or `clarify`
-6. `_route_to_specialist()` (ExecutorNodeMixin): selects specialist role, optionally delegates to `specialist_executor` or `specialist_evaluator` subgraph, then calls `_execute_action()`
-7. `_execute_action()`: dedup check (`seen_tool_signatures`), tool dispatch from registry, result stored in `tool_history` and `mission_contexts`
-8. `_enforce_memo_policy()` (LifecycleNodesMixin): checks if memoization is required after heavy tool results
-9. Loop returns to `plan`; exits when `pending_action.action == "finish"` or `step > max_steps`
-10. `_finalize()`: calls `audit_run()` (deterministic 9-check auditor), writes `Shared_plan.md`, saves final checkpoint
-11. `run()` returns `RunResult` TypedDict
+1. `run.py` or API `POST /run` calls `LangGraphOrchestrator.run(user_input)`
+2. `prepare_state()` calls `new_run_state()` + `parse_missions()` to parse user input into a `StructuredPlan`; initial checkpoint saved
+3. LangGraph compiled graph enters `plan` node → `_plan_next_action()` called
+4. Planner calls `ChatProvider.generate(messages)` with JSON schema constraint; response parsed by `action_parser.validate_action()`
+5. `_route_after_plan()` conditional edge decides: `execute`, `plan` (retry/queue pop), `finish`, or `clarify`
+6. `execute` node → `_route_to_specialist()` → `_execute_action()` dispatches to `Tool.execute(args)` from registry
+7. `policy` node → `_enforce_memo_policy()` checks if result requires memoization; injects system message if so
+8. Loop back to `plan`; repeat until `pending_action.action == "finish"` or step budget exceeded
+9. `finalize` node → `_finalize()` runs `audit_run()`, saves checkpoint, writes `Shared_plan.md`, closes provider
 
-**Anthropic Provider Path (ReAct via ToolNode):**
+**Anthropic ToolNode Path:**
 
-1. Same `prepare_state()` initialization
-2. `plan` node uses Anthropic's native tool-call format
-3. `tools_condition` routes to `tools` (LangGraph `ToolNode`) or `finalize`
-4. `ToolNode` executes tools; `_dedup_then_tool_node()` wrapper enforces `seen_tool_signatures` before dispatch
-5. Returns to `plan` for next step
+1. Same as above through step 3
+2. `_plan_next_action()` returns Anthropic tool-call messages in LangChain format
+3. `tools_condition` routes to `tools` node (LangChain `ToolNode` with dedup wrapper)
+4. `tools` node executes tool, appends result to messages, returns to `plan`
 
-**Mission Parsing Flow:**
-1. `parse_missions(user_input)` runs with threading timeout
-2. Tries spaCy clause segmentation → regex keyword map fallback
-3. Returns `StructuredPlan` with `flat_missions` list and `parsing_method` field
-4. Timeout increments `structural_health.parser_timeout_count`
+**Mission Tracking:**
+
+- `ContextManager.compact(state)` runs before every planner call; evicts old messages, injects cross-mission summaries for new missions
+- `mission_tracker` module updates `mission_reports` after each tool execution
+- `MissionReport` per mission: tracks `used_tools`, `tool_results`, `status`, `written_files`, `required_tools`
 
 **State Management:**
-- Single `RunState` TypedDict passed through all graph nodes
-- `ensure_state_defaults()` called at the top of every node — hardens missing keys before logic runs
-- `tool_history`, `memo_events`, `mission_reports` are Annotated with `operator.add` (parallel-safe append-only)
-- `_sequential_node()` wrapper zeros out these fields in returned dicts to prevent doubling in sequential runs
-- `ContextManager` compacts `state["messages"]` before each planner call; uses `policy_flags["injected_mission_ids"]` for dedup
+- `RunState` TypedDict flows through every node; fields with `Annotated[list, operator.add]` use LangGraph reducers for parallel Send() compatibility
+- `_sequential_node()` wrapper zeros out those fields in returned dicts to prevent doubling
+- `ensure_state_defaults()` repairs missing keys before every node runs (defensive hardening)
 
 ## Key Abstractions
 
-**`LangGraphOrchestrator`:**
-- Purpose: Central orchestration engine — composes four mixins
-- Location: `src/agentic_workflows/orchestration/langgraph/orchestrator.py`
-- Pattern: Multiple inheritance of `PlannerHelpersMixin`, `PlannerNodeMixin`, `ExecutorNodeMixin`, `LifecycleNodesMixin`; graph compiled via `_compile_graph()` in `__init__`
-
 **`ChatProvider` Protocol:**
-- Purpose: Unified LLM provider interface — all vendors behind one contract
+- Purpose: Vendor-agnostic LLM interface
 - Location: `src/agentic_workflows/orchestration/langgraph/provider.py`
-- Pattern: `Protocol` with `generate(messages, response_schema=None) -> str` and `context_size() -> int`; concrete implementations: `OllamaChatProvider`, `OpenAIChatProvider`, `GroqChatProvider`, `LlamaCppChatProvider`, `ScriptedChatProvider` (tests)
+- Pattern: `generate(messages, response_schema=None) -> str` and `context_size() -> int`; implementations: `OllamaChatProvider`, `OpenAIChatProvider`, `GroqChatProvider`, `LlamaCppChatProvider`, `AnthropicChatProvider`
 
-**`Tool` base class:**
-- Purpose: Base contract for all tool implementations
+**`Tool` Base Class:**
+- Purpose: Uniform tool contract
 - Location: `src/agentic_workflows/tools/base.py`
-- Pattern: `name: str`, `description: str`, `execute(args: dict) -> dict`; `args_schema` property derived from description string via regex fallback
+- Pattern: `execute(args: dict) -> dict`; `args_schema` property; subclasses set `name`, `description`, `_args_schema`
 
 **`RunState` TypedDict:**
-- Purpose: Canonical mutable state bag flowing through every graph node
+- Purpose: Canonical graph state; single source of truth for all in-flight data
 - Location: `src/agentic_workflows/orchestration/langgraph/state_schema.py`
-- Pattern: TypedDict with 25+ fields; initialized via `new_run_state()`, hardened via `ensure_state_defaults()`
-
-**`ModelRouter`:**
-- Purpose: Cost-aware routing between strong and fast LLM providers
-- Location: `src/agentic_workflows/orchestration/langgraph/model_router.py`
-- Pattern: Signal-based routing using `RoutingSignals` TypedDict; thresholds: retry >= 2 or budget < 5000 → strong; `multi_step` mission type → strong
+- Pattern: Fully typed; `new_run_state()` constructs initial state; `ensure_state_defaults()` repairs at every node entry
 
 **`ContextManager`:**
-- Purpose: Context window management for multi-mission runs
+- Purpose: Multi-mission message lifecycle management
 - Location: `src/agentic_workflows/orchestration/langgraph/context_manager.py`
-- Pattern: `compact()` called before each plan step; `proactive_compact()` against provider context size; `build_planner_context_injection()` injects prior mission summaries; dedup via `policy_flags["injected_mission_ids"]`; `large_result_threshold=3000`, `sliding_window_cap=20`
+- Pattern: `compact(state)` evicts old messages; `build_planner_context_injection()` injects completed-mission summaries once per mission (tracked via `policy_flags["injected_mission_ids"]`)
+
+**`LangGraphOrchestrator` (Mixin Composition):**
+- Purpose: Main orchestration engine
+- Location: `src/agentic_workflows/orchestration/langgraph/orchestrator.py`
+- Pattern: Multiple inheritance from four mixins; `__init__` owns all state; `_compile_graph()` returns compiled `StateGraph`; `run()` returns `RunResult`
 
 **Specialist Subgraphs:**
-- Purpose: Isolated StateGraphs for delegated tool execution and evaluation
+- Purpose: Isolated StateGraphs for executor and evaluator roles
 - Location: `src/agentic_workflows/orchestration/langgraph/specialist_executor.py`, `specialist_evaluator.py`
-- Pattern: Separate `ExecutorState`/`EvaluatorState` Typedicts; compiled via `build_executor_subgraph()`, `build_evaluator_subgraph()`; invoked from `ExecutorNodeMixin._route_to_specialist()`
+- Pattern: Own `ExecutorState`/`EvaluatorState` TypedDicts; compiled at orchestrator init; invoked via `_route_to_specialist()` for specialist handoffs
 
-**`MissionAuditor`:**
-- Purpose: Deterministic post-run correctness verification (no LLM)
-- Location: `src/agentic_workflows/orchestration/langgraph/mission_auditor.py`
-- Pattern: 9 keyword-driven checks; returns `AuditReport` with `AuditFinding` entries at pass/warn/fail level; `_approx_equal()` for numeric tolerance
+**`TaskHandoff` / `HandoffResult`:**
+- Purpose: Typed contract for supervisor→specialist delegation
+- Location: `src/agentic_workflows/orchestration/langgraph/handoff.py`
+- Pattern: Pydantic `BaseModel` with `extra="forbid"`; serialized to `dict` for `RunState` storage
+
+**`ModelRouter`:**
+- Purpose: Cost-aware strong-vs-fast provider selection
+- Location: `src/agentic_workflows/orchestration/langgraph/model_router.py`
+- Pattern: `route_by_signals(RoutingSignals)` → `ChatProvider`; signals: retry count, token budget, mission type, intent classification
 
 ## Entry Points
 
-**CLI Demo Runner:**
+**CLI Demo:**
 - Location: `src/agentic_workflows/orchestration/langgraph/run.py`
-- Triggers: `python -m agentic_workflows.orchestration.langgraph.run` or `make run`
-- Responsibilities: Instantiate `LangGraphOrchestrator`, execute hardcoded demo missions, print structured audit panel via `run_ui.py`
+- Triggers: `python -m agentic_workflows.orchestration.langgraph.run`
+- Responsibilities: Parses CLI args, constructs `LangGraphOrchestrator`, calls `run()`, renders audit panel
 
-**Interactive User CLI:**
-- Location: `src/agentic_workflows/orchestration/langgraph/user_run.py`, `src/agentic_workflows/cli/user_run.py`
-- Triggers: Direct execution or CLI command
-- Responsibilities: Accept user-supplied mission text, invoke orchestrator, display results
-
-**FastAPI Service:**
-- Location: `src/agentic_workflows/api/` (app module not shown in glob but referenced)
-- Triggers: `uvicorn` / `make run` with `P1_PROVIDER` set
-- Responsibilities: `POST /run` → SSE stream of node-transition events; `GET /run/{id}` → run status; `GET /run/{id}/stream` → reconnect stream
-
-**Cross-Run Audit:**
+**CLI Audit:**
 - Location: `src/agentic_workflows/orchestration/langgraph/run_audit.py`
 - Triggers: `python -m agentic_workflows.orchestration.langgraph.run_audit`
-- Responsibilities: Aggregate findings across multiple stored runs
+- Responsibilities: Cross-run audit summary from checkpoint store
+
+**FastAPI App:**
+- Location: `src/agentic_workflows/api/app.py`
+- Triggers: `uvicorn agentic_workflows.api.app:app`
+- Responsibilities: HTTP API; compiles graph once at startup; routes: `POST /run` (async SSE stream), `GET /runs`, `GET /health`, `GET /tools`
+
+**Legacy Core Demo:**
+- Location: `src/agentic_workflows/core/main.py`
+- Triggers: `python -m agentic_workflows.core.main`
+- Responsibilities: Phase 0 baseline; not used in production
 
 ## Error Handling
 
-**Strategy:** Layered — retryable errors cause planner retry with incremented `retry_counts`; fatal errors terminate the run with a `finish` action containing the error message
+**Strategy:** Retry-then-fail-closed; structured error hierarchy
 
-**Exception Hierarchy (`src/agentic_workflows/errors.py`):**
-- `AgentError` → `RetryableAgentError`: `InvalidJSONError`, `SchemaValidationError`, `MissingActionError`, `UnknownActionError`, `ToolExecutionError`, `LLMError`
-- `AgentError` → `FatalAgentError`: `UnknownToolError`
-- `ProviderTimeoutError` (in `provider.py`) triggers `planner_timeout_mode` in `policy_flags`
-
-**Retry Counters (`RunState.retry_counts`):**
-- `invalid_json`: incremented on JSON parse failure, up to `max_invalid_plan_retries` (default 8)
-- `provider_timeout`: up to `max_provider_timeout_retries` (default 3); then `planner_timeout_mode=True`
-- `content_validation`: up to `max_content_validation_retries` (default 2)
-- `duplicate_tool`: up to `max_duplicate_tool_retries` (default 6)
-- `finish_rejected`: up to `max_finish_rejections` (default 6)
-
-**Fallback Planner (`src/agentic_workflows/orchestration/langgraph/fallback_planner.py`):**
-- When `planner_timeout_mode=True`, `deterministic_fallback_action()` generates safe tool/finish actions from local state without LLM calls
+**Patterns:**
+- `RetryableAgentError` (e.g., `InvalidJSONError`, `SchemaValidationError`): increment `retry_counts`; planner re-prompts with correction hint
+- `FatalAgentError` (e.g., `UnknownToolError`): immediate stop
+- `ProviderTimeoutError`: increments `retry_counts["provider_timeout"]`; after `max_provider_timeout_retries` enters `planner_timeout_mode` (deterministic fallback actions only)
+- `MemoizationPolicyViolation`: raised when memoization policy retries exhausted
+- JSON parse failures: `action_parser` tries two-stage parse (strict JSON → extract-first-object fallback); sets `structural_health["json_parse_fallback"]` counter
+- Content validation failures: `content_validator` checks before tool execution; increments `retry_counts["content_validation"]`
+- Duplicate tool calls: blocked via `seen_tool_signatures` set; `retry_counts["duplicate_tool"]` tracks occurrences
 
 ## Cross-Cutting Concerns
 
-**Logging:** `src/agentic_workflows/logger.py` — `get_logger(name)` returns a named Python logger; structured logging via `structlog` in API layer; dual logging to file via `setup_dual_logging()` in run.py
+**Logging:** Structured logging via `src/agentic_workflows/logger.py`; `get_logger(name)` returns named logger; `setup_dual_logging()` configures file + console output; log dir configurable via `GSD_LOG_DIR`
 
-**Validation:** All LLM outputs parsed through `action_parser.validate_action()` → Pydantic `ToolAction`/`FinishAction` with `extra="forbid"`; handoff messages validated through `TaskHandoff`/`HandoffResult` Pydantic models; `content_validator.py` provides secondary content checks
+**Validation:** Pydantic `extra="forbid"` at handoff boundaries (`TaskHandoff`, `HandoffResult`); `ToolAction`/`FinishAction` validated by `action_parser.validate_action()` at every planner step; `ensure_state_defaults()` defensive key repair at every node entry
 
-**Authentication:** API key middleware at `src/agentic_workflows/api/middleware/api_key.py`; HMAC stream tokens via `src/agentic_workflows/api/stream_token.py` for SSE reconnect
+**Authentication:** API key middleware in `src/agentic_workflows/api/middleware/` checks `X-API-Key` header; configurable via env
 
-**Observability:** `@observe(name)` decorator wraps key methods; Langfuse callback handler injected into LangGraph config per-run via `ContextVar` for thread isolation; degrades gracefully to no-op when not configured
+**Token Budget:** `token_budget_remaining` decremented via `len(text) // 4` estimation; at 0, triggers `planner_timeout_mode` in `policy_flags`; role-specific budgets in `_ROLE_TOKEN_BUDGETS` (classifier: 300, planner: 2500, executor: 300)
 
-**Duplicate Prevention:** `seen_tool_signatures` set in `RunState` blocks exact duplicate tool calls; signatures computed as SHA-256 hash of `(tool_name, args)`
-
-**Token Budget:** `token_budget_remaining` (default 100,000) decremented via `len(text) // 4` estimation; reaches 0 → triggers `planner_timeout_mode`
+**Observability:** Langfuse spans via `@observe` decorator on planner and provider calls; `report_schema_compliance()` logs structural health metrics; all controlled by `agentic_workflows.observability` module (degrades gracefully without Langfuse credentials)
 
 ---
 

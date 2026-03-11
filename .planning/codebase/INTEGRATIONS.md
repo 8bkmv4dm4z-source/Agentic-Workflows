@@ -2,178 +2,160 @@
 
 **Analysis Date:** 2026-03-12
 
-## APIs & External Services
+## LLM Providers
 
-**LLM Providers (runtime-selectable via `P1_PROVIDER` env var):**
+**OpenAI:**
+- Purpose: Primary cloud LLM for plan and execute nodes
+- SDK: `openai>=2.0` via `OpenAIChatProvider` in `src/agentic_workflows/orchestration/langgraph/provider.py`
+- Auth: `OPENAI_API_KEY` env var
+- Model: `OPENAI_MODEL` (default: `gpt-4.1-mini`)
+- Response format: JSON schema-guided (`json_schema` mode, falls back to `json_object`)
 
-- OpenAI API — Chat completions for planner/executor roles
-  - SDK/Client: `openai>=2.0` (`OpenAI` client)
-  - Auth: `OPENAI_API_KEY`
-  - Model: `OPENAI_MODEL` (default: `gpt-4.1-mini`)
-  - Implementation: `src/agentic_workflows/orchestration/langgraph/provider.py`
+**Groq:**
+- Purpose: Fast cloud inference (open-weight models)
+- SDK: `groq>=1.0` via `GroqChatProvider` in `src/agentic_workflows/orchestration/langgraph/provider.py`
+- Auth: `GROQ_API_KEY` env var
+- Model: `GROQ_MODEL` (default: `llama-3.3-70b-versatile`)
 
-- Groq API — Fast inference via Groq cloud
-  - SDK/Client: `groq>=1.0` (`Groq` client)
-  - Auth: `GROQ_API_KEY`
-  - Model: `GROQ_MODEL` (default: `llama-3.3-70b-versatile`)
-  - Implementation: `src/agentic_workflows/orchestration/langgraph/provider.py`
+**Ollama:**
+- Purpose: Local LLM inference (self-hosted)
+- SDK: `openai` SDK pointed at OpenAI-compatible Ollama endpoint OR native Ollama chat API
+- Auth: `OLLAMA_API_KEY` (optional), `OLLAMA_BASE_URL` (default: `http://localhost:11434/v1`)
+- Model: `OLLAMA_MODEL` (default: `qwen2.5:14b`)
+- Implementation: `OllamaChatProvider` in `src/agentic_workflows/orchestration/langgraph/provider.py`
+- Notes: Native chat API mode toggleable via `OLLAMA_USE_NATIVE_CHAT_API=true`
 
-- Anthropic Claude — Via LangChain binding (used in LangGraph Anthropic provider path)
-  - SDK/Client: `langchain-anthropic>=0.3.0`
-  - Auth: `ANTHROPIC_API_KEY` (standard LangChain env var)
-  - Implementation: `src/agentic_workflows/orchestration/langgraph/provider.py`
+**llama-cpp (llama-server):**
+- Purpose: Local GGUF model inference via SYCL/CPU; supports multi-server planner/executor split
+- SDK: `openai` SDK pointed at llama-server OpenAI-compatible endpoint
+- Auth: None (hardcoded key `"llama-cpp"`)
+- Config: `LLAMA_CPP_BASE_URL` (default: `http://127.0.0.1:8080/v1`), `LLAMA_CPP_MODEL`
+- Implementation: `LlamaCppChatProvider` in `src/agentic_workflows/orchestration/langgraph/provider.py`
+- Notes: Supports GBNF grammar enforcement for JSON; multi-port routing via `LLAMA_CPP_PLANNER_PORT` / `LLAMA_CPP_EXECUTOR_PORT`
 
-- Ollama — Local OpenAI-compatible endpoint
-  - SDK/Client: `openai>=2.0` (OpenAI-compatible wire format)
-  - Auth: `OLLAMA_API_KEY` (optional, defaults to `"ollama"`)
-  - Base URL: `OLLAMA_BASE_URL` (default: `http://localhost:11434/v1`)
-  - Model: `OLLAMA_MODEL` (default: `qwen2.5:14b`)
-  - Implementation: `src/agentic_workflows/orchestration/langgraph/provider.py`
+**Anthropic (LangChain path):**
+- Purpose: Anthropic Claude models via LangChain tool-call graph path
+- SDK: `langchain-anthropic>=0.3.0`, `langchain-core` `StructuredTool`
+- Auth: Anthropic API key (via langchain-anthropic standard env var)
+- Usage: Conditional graph path in `src/agentic_workflows/orchestration/langgraph/graph.py` (Anthropic provider path uses `add_conditional_edges("plan", tools_condition, ...)`)
 
-- llama-cpp (llama-server) — Self-hosted OpenAI-compatible server, SYCL/CPU
-  - SDK/Client: `openai>=2.0` (OpenAI-compatible wire format)
-  - Auth: Not required
-  - Base URL: `LLAMA_CPP_BASE_URL` (default: `http://127.0.0.1:8080/v1`)
-  - Model: `LLAMA_CPP_MODEL` (or `"auto"` to detect via `GET /v1/models`)
-  - SYCL multi-server: `LLAMA_CPP_PLANNER_PORT` / `LLAMA_CPP_EXECUTOR_PORT` for split routing
-  - Implementation: `src/agentic_workflows/orchestration/langgraph/provider.py`
-
-**Provider Chain Fallback:**
-- `P1_PROVIDER_CHAIN=groq,ollama` — tries providers left-to-right on failure
-- Timeout tuning: `P1_PROVIDER_TIMEOUT_SECONDS` (30s), `P1_PLAN_CALL_TIMEOUT_SECONDS` (45s)
-- Retry config: `P1_PROVIDER_MAX_RETRIES` (2), `P1_PROVIDER_RETRY_BACKOFF_SECONDS` (1.0s)
+**Provider Chain / Fallback:**
+- Configured via `P1_PROVIDER_CHAIN=groq,ollama` for left-to-right fallback on failure
+- Factory: `get_provider()` in `src/agentic_workflows/orchestration/langgraph/provider.py`
 
 ## Data Storage
 
 **Databases:**
+- **SQLite** (dev/test default)
+  - Location: `.tmp/run_store.db` (configurable via `RUN_STORE_DB`)
+  - Client: Python stdlib `sqlite3`, WAL mode, offloaded via `anyio`
+  - Implementation: `src/agentic_workflows/storage/sqlite.py` (`SQLiteRunStore`)
+  - Auto-created on first run; no migrations needed
 
-- PostgreSQL 16 (production)
-  - Image: `pgvector/pgvector:pg16` (includes pgvector extension)
-  - Connection: `DATABASE_URL` env var (e.g., `postgresql://agentic:agentic@localhost:5433/agentic_workflows`)
-  - Client: `psycopg[binary]>=3.2` + `psycopg_pool>=3.2`
-  - Connection pool: `min_size=2, max_size=10`
-  - Docker port: `5433:5432` (avoids conflict with local installs)
-  - Stores: runs (`PostgresRunStore`), checkpoints (`PostgresCheckpointStore`), memos (`PostgresMemoStore`)
-  - Implementations: `src/agentic_workflows/storage/postgres.py`, `src/agentic_workflows/orchestration/langgraph/checkpoint_postgres.py`, `src/agentic_workflows/orchestration/langgraph/memo_postgres.py`
+- **PostgreSQL 16 with pgvector** (production)
+  - Connection: `DATABASE_URL` env var (e.g. `postgresql://agentic:agentic@localhost:5433/agentic_workflows`)
+  - Client: `psycopg[binary]>=3.2` with `psycopg_pool` connection pool
+  - Docker image: `pgvector/pgvector:pg16` (maps to host port 5433)
+  - Run store: `src/agentic_workflows/storage/postgres.py` (`PostgresRunStore`)
+  - Checkpoint store: `src/agentic_workflows/orchestration/langgraph/checkpoint_postgres.py` (`PostgresCheckpointStore`)
+  - Memo store: `src/agentic_workflows/orchestration/langgraph/memo_postgres.py` (`PostgresMemoStore`)
+  - Migrations: SQL files in `db/migrations/` (001–006), auto-run by Docker entrypoint on first start
+  - Key migration files: `001_init.sql`, `002_foundation.sql`, `003_mission_contexts.sql`, `004_mission_artifacts.sql`, `005_sub_task_cursors.sql`, `006_tool_result_cache.sql`
 
-- SQLite (development / testing default)
-  - Activated when `DATABASE_URL` is absent
-  - Files written to `.tmp/` directory (e.g., `RUN_STORE_DB=.tmp/run_store.db`)
-  - WAL journal mode enabled; thread-safe via `threading.Lock`
-  - Stores: runs (`SQLiteRunStore`), checkpoints (`SQLiteCheckpointStore`), memos (`SQLiteMemoStore`)
-  - Implementations: `src/agentic_workflows/storage/sqlite.py`, `src/agentic_workflows/orchestration/langgraph/checkpoint_store.py`, `src/agentic_workflows/orchestration/langgraph/memo_store.py`
-
-**Database Migrations:**
-- Location: `db/migrations/` (run automatically by Docker Compose Postgres entrypoint)
-  - `001_init.sql` — Base runs table
-  - `002_foundation.sql` — pgvector extension + `file_chunks` and `solved_tasks` tables (384-dim embeddings)
-  - `003_mission_contexts.sql` — Mission context store with tsvector (BM25) + pgvector (HNSW cosine) indexes
-  - `004_mission_artifacts.sql` — Mission artifact storage
-  - `005_sub_task_cursors.sql` — Sub-task cursor persistence
-  - `006_tool_result_cache.sql` — Tool result caching table
+**SQLite Checkpoint/Memo Stores (dev):**
+- Checkpoint: `src/agentic_workflows/orchestration/langgraph/checkpoint_store.py` — file-based SQLite checkpoints
+- Memo: `src/agentic_workflows/orchestration/langgraph/memo_store.py` — file-based SQLite memos
+- Default path: `.tmp/` directory (created on demand)
 
 **File Storage:**
-- Local filesystem only (no cloud file storage)
-- Agent writes controlled by `AGENT_WORKDIR` env var (default: `./workspace/`)
-- Readable root set by `AGENT_ROOT` env var
-- Write size cap: `P1_WRITE_FILE_MAX_BYTES` (default: 10 MB)
-- Sandboxing: `P1_TOOL_SANDBOX_ROOT` restricts file tools to a directory
+- Local filesystem only; agent writes go to `workspace/` directory (configurable via `AGENT_WORKDIR`)
+- `P1_TOOL_SANDBOX_ROOT` restricts file tool access to a specified directory
+- Write/read size capped via `P1_WRITE_FILE_MAX_BYTES` / `P1_READ_FILE_MAX_BYTES` (default 10 MB)
 
 **Caching:**
-- In-process tool result cache: `src/agentic_workflows/storage/tool_result_cache.py`
-- Memoization policy enforced via `memoize` tool (`src/agentic_workflows/tools/memoize.py`)
-- No external cache service (Redis, Memcached, etc.)
+- Tool result cache: `src/agentic_workflows/storage/tool_result_cache.py` (in-process / Postgres-backed)
 
-## Authentication & Identity
+## Semantic Embeddings / RAG
 
-**API Key Auth (FastAPI):**
-- Middleware: `src/agentic_workflows/api/middleware/api_key.py`
-- Auth: `API_KEY` env var; if unset → dev passthrough (no auth enforced)
-- Request ID: `src/agentic_workflows/api/middleware/request_id.py`
+**Provider:**
+- Default (CI-safe): `MockEmbeddingProvider` — deterministic 384-dim SHA-256-seeded vectors, no download
+- Production optional: `FastEmbedProvider` using BAAI/bge-small-en-v1.5 model (~24MB download on first use)
+- Controlled by: `EMBEDDING_PROVIDER=mock` (default) or `EMBEDDING_PROVIDER=fastembed`
+- Requires: `pip install ".[context]"` for fastembed
+- Source: `src/agentic_workflows/context/embedding_provider.py`
+- Used by: `MissionContextStore` and `ArtifactStore` for semantic context retrieval
 
-**SSE Stream Tokens:**
-- Stateless HMAC tokens for SSE reconnect authorization
-- Implementation: `src/agentic_workflows/api/stream_token.py`
+## Observability
 
-**LLM Provider Auth:**
-- All provider keys are env vars (see LLM Providers section above)
-- No user identity system — single-tenant design
+**LLM Tracing — Langfuse (optional):**
+- Purpose: LLM call tracing, schema compliance scoring, session tracking
+- SDK: `langfuse>=3.0` (optional extra: `pip install ".[observability]"`)
+- Auth: `LANGFUSE_SECRET_KEY`, `LANGFUSE_PUBLIC_KEY` env vars
+- Host: `LANGFUSE_HOST` (default: `https://cloud.langfuse.com`)
+- Integration: `src/agentic_workflows/observability.py` — gracefully no-ops when package absent or env vars unset
+- Features wired: `@observe()` decorator, `get_langfuse_callback_handler()` for LangChain, `report_schema_compliance()` numeric scores
 
-## Monitoring & Observability
+**Structured Logs:**
+- Tool: `structlog` throughout, with dual logging (console + file) via `setup_dual_logging()` in `src/agentic_workflows/logger.py`
+- Log files: `.tmp/` directory (configurable via `GSD_LOG_DIR`)
 
-**LLM Tracing (optional):**
-- Langfuse — cloud LLM observability platform
-  - Package: `langfuse>=3.0` (optional extra `[observability]`)
-  - Auth: `LANGFUSE_SECRET_KEY`, `LANGFUSE_PUBLIC_KEY`
-  - Host: `LANGFUSE_HOST` (default: `https://cloud.langfuse.com`)
-  - Graceful degradation: all decorators become no-ops if not installed/configured
-  - Reports: schema compliance scores, trace spans
-  - Implementation: `src/agentic_workflows/observability.py`
+## Authentication
 
-**Structured Logging:**
-- structlog 25.5.0 — JSON-structured log output
-- Dual logging (console + file) via `setup_dual_logging()` in `src/agentic_workflows/logger.py`
-- Log dir controlled by `GSD_LOG_DIR` env var (default: `.tmp`)
+**API Key (FastAPI REST API):**
+- Middleware: `APIKeyMiddleware` in `src/agentic_workflows/api/middleware/api_key.py`
+- Header: `X-API-Key`
+- Config: `API_KEY` env var; unset = dev passthrough (all requests pass)
+- Health endpoint (`/health`) always public
+- No external auth provider; custom middleware only
 
-**Error Tracking:**
-- No dedicated error tracking service (Sentry, etc.) detected
+## API Server
 
-## Vector Search / Embeddings (Phase 7.3)
-
-**Embedding Provider:**
-- Mock (default, CI-safe): `MockEmbeddingProvider` — deterministic 384-dim, SHA-256 seeded
-- FastEmbed (optional): `FastEmbedProvider` — BAAI/bge-small-en-v1.5, ONNX-based, ~24MB download
-  - Package: `fastembed>=0.3` (optional extra `[context]`)
-  - Controlled by: `EMBEDDING_PROVIDER` env var (`mock` | `fastembed`)
-  - Implementation: `src/agentic_workflows/context/embedding_provider.py`
-
-**Vector Database:**
-- pgvector extension on PostgreSQL (active when `DATABASE_URL` set)
-- 384-dimensional float32 vectors, HNSW cosine similarity index
-- Used for mission context semantic search (`src/agentic_workflows/storage/mission_context_store.py`) and artifact retrieval (`src/agentic_workflows/storage/artifact_store.py`)
+**FastAPI REST + SSE:**
+- App: `src/agentic_workflows/api/app.py`
+- Routes:
+  - `POST /runs` — submit a new run, returns SSE stream of events (`src/agentic_workflows/api/routes/run.py`)
+  - `GET /runs/{run_id}` — fetch completed run result
+  - `GET /runs/{run_id}/stream` — replay run events as SSE
+  - `GET /health` — health check
+  - `GET /tools` — list registered tools (`src/agentic_workflows/api/routes/tools.py`)
+- Streaming: Server-Sent Events via `sse-starlette`; `SSE_MAX_DURATION_SECONDS` configurable (default 1800s)
+- CORS: `CORSMiddleware`; domains configurable via `CORS_ORIGINS` env var
+- Middleware: `RequestIDMiddleware`, `APIKeyMiddleware`
 
 ## CI/CD & Deployment
 
 **Hosting:**
-- Docker Compose (`docker-compose.yml`) for self-hosted deployment
-- No cloud hosting config detected (no Heroku, Railway, Fly.io, etc.)
+- Docker container (single-stage `python:3.12-slim`) exposing port 8000
+- `docker-compose.yml` orchestrates Postgres + API service
+- Docker commands via `docker.exe` (WSL2 Docker Desktop integration)
 
 **CI Pipeline:**
-- No CI config detected (no `.github/workflows/`, `.circleci/`, etc.)
-
-**Pre-commit Hooks:**
-- ruff lint + ruff format via `.pre-commit-config.yaml`
-
-## HTTP Tool (Agent-callable)
-
-**Outbound HTTP from agent:**
-- `HttpRequestTool` (`src/agentic_workflows/tools/http_request.py`) — agent can call arbitrary URLs
-- Uses stdlib `urllib.request` (not httpx/requests)
-- Private IP ranges blocked by default (SSRF protection in `src/agentic_workflows/tools/_security.py`)
-- Domain allowlist: `P1_HTTP_ALLOWED_DOMAINS` env var
-- Response cap: `P1_HTTP_MAX_RESPONSE_BYTES` (default: 10 MB)
-- Timeout cap: 30 seconds
+- Not detected (no GitHub Actions, CircleCI, or similar config found)
 
 ## Webhooks & Callbacks
 
 **Incoming:**
-- None detected — no webhook receiver endpoints in `src/agentic_workflows/api/routes/`
+- None — no webhook endpoints defined in API routes
 
 **Outgoing:**
-- Agent can make outbound HTTP via `HttpRequestTool` (see above); not a structured webhook system
+- None — agent tools include `http_request` (`src/agentic_workflows/tools/http_request.py`) for arbitrary HTTP calls, controlled by `P1_HTTP_ALLOWED_DOMAINS` allowlist and `P1_HTTP_MAX_RESPONSE_BYTES` cap; but no system-level outgoing webhook calls
 
-## API Surface
+## Environment Configuration
 
-**REST Endpoints (FastAPI):**
-- `POST /run` — Submit task; streams SSE events (`EventSourceResponse` via `sse-starlette`)
-- `GET /run/{id}` — Retrieve completed run result
-- `GET /run/{id}/stream` — Re-stream SSE for a completed run
-- `GET /runs` — List runs
-- `GET /tools` — List available agent tools
-- `GET /health` — Health check
+**Required env vars (production):**
+- `P1_PROVIDER` — LLM provider selection
+- Provider-specific key: `OPENAI_API_KEY` or `GROQ_API_KEY` or `OLLAMA_BASE_URL`
+- `DATABASE_URL` — Postgres connection string (absent = SQLite)
 
-**CORS:**
-- Configured via `CORS_ORIGINS` env var (comma-separated); permissive in dev
+**Optional env vars:**
+- `LANGFUSE_SECRET_KEY` + `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_HOST` — observability
+- `EMBEDDING_PROVIDER=fastembed` — semantic context (requires `.[context]` install)
+- `API_KEY` — REST API authentication key
+- `CORS_ORIGINS` — allowed CORS origins
+- `AGENT_WORKDIR`, `AGENT_ROOT` — agent filesystem sandbox paths
+
+**Secrets location:**
+- `.env` file at project root (not committed; `.env.example` is the template)
 
 ---
 

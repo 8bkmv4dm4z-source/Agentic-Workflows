@@ -5,77 +5,65 @@
 ## Test Framework
 
 **Runner:**
-- pytest 8.x
-- Config: `pyproject.toml` under `[tool.pytest.ini_options]`
-- `testpaths = ["tests"]`, `pythonpath = ["src"]`
-
-**Async mode:**
-- `asyncio_mode = "auto"` — all `async def test_` functions run automatically without `@pytest.mark.asyncio`
-- `pytest-asyncio >= 0.24` required
+- pytest 8.0+
+- Config: `pyproject.toml` `[tool.pytest.ini_options]`
+- `asyncio_mode = "auto"` — all async tests run automatically without `@pytest.mark.asyncio`
 
 **Assertion Library:**
-- pytest native `assert` for most tests
-- `unittest.TestCase` with `self.assertEqual`, `self.assertTrue`, `self.assertFalse` in older test files
+- `unittest.TestCase` assertions (`assertEqual`, `assertIn`, `assertIsInstance`) for `unittest.TestCase` subclasses
+- pytest `assert` statements for standalone pytest-style functions and classes
 
-**Coverage:**
-- `pytest-cov >= 6.0`
-- Coverage omits legacy P0 baseline, interactive CLI scripts (see `[tool.coverage.run]` in `pyproject.toml`)
+**Additional plugins:**
+- `pytest-asyncio` 0.24+ — async test support
+- `pytest-cov` 6.0+ — coverage reporting
 
 **Run Commands:**
 ```bash
-make test                     # pytest with coverage (all tests)
-pytest tests/ -q              # all tests, quiet
-pytest tests/unit/ -q         # unit only
-pytest tests/integration/ -q  # integration only
-pytest -m "not postgres"      # skip Postgres-gated tests
+pytest tests/ -q                   # Run all tests
+pytest tests/unit/ -q              # Unit tests only
+pytest tests/integration/ -q       # Integration tests only
+make test                          # All tests (via Makefile)
+make test-unit                     # Unit tests only
+make test-integration              # Integration tests only
 ```
 
 ## Test File Organization
 
 **Location:**
-- Separate `tests/` directory at repo root (not co-located with source)
-- `tests/unit/` — pure unit tests (no live providers, no live DBs)
-- `tests/integration/` — orchestration end-to-end with ScriptedProvider, API contract tests
-- `tests/eval/` — SSE/API eval harness with AsyncClient + ASGITransport
-- `tests/fixtures/` — SSE sequence fixtures (static data for fixture injection)
+- All tests in `tests/` directory at project root
+- Unit tests in `tests/unit/`
+- Integration tests in `tests/integration/`
+- Eval harness in `tests/eval/`
+- Shared fixtures in `tests/fixtures/`
 
 **Naming:**
-- `test_{module_or_feature}.py` — mirrors source module name: `test_action_parser.py`, `test_mission_auditor.py`
-- Feature-scoped: `test_context_manager_7_3.py`, `test_phase08_6_regressions.py`
-- Contract tests: `test_tool_contracts.py`, `test_schema_compliance.py`
+- All test files: `test_{module_or_feature}.py`
+- One test file per source module in most cases
+- Feature-specific test files: `test_phase08_6_regressions.py`, `test_context_manager_7_3.py`
 
 **Structure:**
 ```
 tests/
-├── conftest.py                    # Shared fixtures: ScriptedProvider, memo_store, checkpoint_store, pg_pool
-├── unit/                          # ~100 test files; pure pytest + some unittest.TestCase
-├── integration/                   # ~10 test files; ScriptedProvider + httpx AsyncClient
-├── eval/                          # eval harness (async, SSE-oriented)
-│   └── conftest.py
-└── fixtures/
-    └── sse_sequences/             # Static SSE event sequences for fixture use
+├── conftest.py                      # Shared fixtures: ScriptedProvider, memo_store, checkpoint_store, pg_pool, clean_pg
+├── fixtures/
+│   ├── __init__.py
+│   └── sse_sequences/               # SSE event sequence fixtures
+├── unit/
+│   ├── __init__.py
+│   └── test_*.py                    # ~95 unit test files
+├── integration/
+│   ├── __init__.py
+│   └── test_*.py                    # ~10 integration test files
+└── eval/
+    ├── conftest.py
+    └── test_eval_harness.py
 ```
 
 ## Test Structure
 
-**Pure pytest style (preferred for new tests):**
-```python
-"""Unit tests for mission_auditor.py — each check type covered."""
-from __future__ import annotations
+**Two coexisting test styles:**
 
-import pytest
-from agentic_workflows.orchestration.langgraph.mission_auditor import _check_tool_presence
-
-def test_no_warning_when_tool_used() -> None:
-    findings = _check_tool_presence(1, "Sort the array", ["sort_array"])
-    assert not any(f.level == "warn" for f in findings)
-
-def test_warn_when_tool_missing() -> None:
-    findings = _check_tool_presence(1, "Sort the array", [])
-    assert any(f.check == "tool_presence" and f.level == "warn" for f in findings)
-```
-
-**unittest.TestCase style (in older files):**
+1. `unittest.TestCase` subclasses (16 test files, primarily older modules):
 ```python
 class TestActionParser(unittest.TestCase):
     def test_parse_action_json_recovers_first_object(self) -> None:
@@ -84,82 +72,93 @@ class TestActionParser(unittest.TestCase):
         self.assertEqual(parsed["action"], "finish")
 ```
 
-**Class grouping without unittest.TestCase (common in newer tests):**
+2. Pytest-style plain functions and classes (preferred for newer tests):
 ```python
 class TestTaskHandoff:
     def test_create_handoff_defaults(self) -> None:
         h = create_handoff(task_id="t1", specialist="executor", mission_id=1)
         assert h.task_id == "t1"
+        assert h.tool_scope == []
 
-class TestHandoffResult:
-    def test_create_result_defaults(self) -> None:
-        r = create_handoff_result(task_id="t1", specialist="executor")
-        assert r.status == "success"
+def test_tool_history_has_annotated_reducer():
+    """RunState.tool_history must be Annotated[list[ToolRecord], operator.add]."""
+    hints = typing.get_type_hints(RunState, include_extras=True)
+    hint = hints["tool_history"]
+    assert hasattr(hint, "__metadata__"), "tool_history must be Annotated with reducer"
 ```
 
-**Section separators:** Used consistently within large test files:
-```python
-# ---------------------------------------------------------------------------
-# _check_tool_presence
-# ---------------------------------------------------------------------------
-```
+**Patterns:**
+- Return type annotations on all test methods: `def test_foo(self) -> None:`
+- Single-line docstrings in pytest-style tests describe the invariant being tested
+- Comments in `unittest.TestCase` tests replace docstrings: `# Test 1: _deterministic_classify returns "simple" for 1-2 step plans`
+- Guard for optional dependency (langgraph): `@unittest.skipUnless(LANGGRAPH_AVAILABLE, "langgraph not installed")`
 
 ## Mocking
 
-**Frameworks:**
-- `unittest.mock.MagicMock` and `patch` for interface mocking
-- `pytest.monkeypatch` (preferred for env vars, cwd, module attributes)
-- `ScriptedProvider` (custom — in `tests/conftest.py`) for LLM provider mocking
+**Framework:** Mix of `unittest.mock` and custom mock classes
 
-**ScriptedProvider pattern** — the primary integration mocking strategy:
+**Custom ScriptedProvider (primary mock for LLM provider):**
 ```python
+# Defined in tests/conftest.py — also locally redefined in integration tests
 class ScriptedProvider:
     """Test provider that returns pre-scripted JSON responses."""
-
     def __init__(self, responses: list[dict]) -> None:
         self._responses = [json.dumps(item) for item in responses]
         self._index = 0
-
-    def context_size(self) -> int:
-        return 32768
 
     def generate(self, messages, response_schema=None):
         if self._index < len(self._responses):
             value = self._responses[self._index]
             self._index += 1
             return value
-        return self._responses[-1]  # replay last response indefinitely
+        return self._responses[-1]  # replay last response on exhaustion
 ```
 
-**MagicMock for dependency injection:**
+**Custom inline mock classes for focused tests:**
 ```python
+class _MockProvider:
+    """Minimal ChatProvider mock for intent classification tests."""
+    def __init__(self, response: str | None = None, delay: float = 0.0):
+        self._response = response
+        self._delay = delay
+
+    def generate(self, messages, system=None, response_schema=None) -> str:
+        if self._delay > 0:
+            time.sleep(self._delay)
+        if self._response is None:
+            raise RuntimeError("provider error")
+        return self._response
+```
+
+**`unittest.mock.MagicMock` and `patch`** for FastAPI app tests:
+```python
+from unittest.mock import MagicMock, patch
 mock_orch = MagicMock()
 mock_orch.tools = {str(i): MagicMock() for i in range(5)}
-mock_run_store = MagicMock()
-mock_run_store.close = MagicMock()
+with patch.object(app.router, "lifespan_context", patched_lifespan):
+    ...
 ```
 
-**monkeypatch for env var control:**
+**`monkeypatch` fixture** for environment variable manipulation:
 ```python
-def test_inactive_when_env_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("P1_TOOL_SANDBOX_ROOT", raising=False)
-    assert validate_path_within_sandbox("/any/path") is None
+def test_tool_node_constructed_for_anthropic_path(monkeypatch) -> None:
+    monkeypatch.setenv("P1_PROVIDER", "anthropic")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 ```
 
 **What to Mock:**
-- LLM provider calls — always via `ScriptedProvider`
-- Environment variables — always via `monkeypatch.setenv/delenv`
-- FastAPI orchestrator state — via `MagicMock()` injected into `app.state`
-- External databases — via SQLite in-memory (`:memory:`) or `tmp_path`
+- LLM provider calls — always use `ScriptedProvider` for deterministic responses
+- Environment variables — use `monkeypatch.setenv`/`monkeypatch.delenv`
+- FastAPI lifespan context — patch `app.router.lifespan_context`
 
 **What NOT to Mock:**
-- Tool `execute()` methods — tested with real implementations
-- SQLite storage — use in-memory or `tmp_path` instead of mocking
-- Pydantic schema validation — always tested against real models
+- Tool `execute()` methods — tools are deterministic, test them directly
+- SQLite stores — use `:memory:` or `tmp_path` instead of mocking
+- The graph state machine itself — use `ScriptedProvider` to drive it
 
 ## Fixtures and Factories
 
-**Shared fixtures** in `tests/conftest.py`:
+**Shared fixtures (`tests/conftest.py`):**
 ```python
 @pytest.fixture
 def tmp_dir(tmp_path: Path) -> Path:
@@ -172,96 +171,77 @@ def memo_store(tmp_path: Path) -> SQLiteMemoStore:
 @pytest.fixture
 def checkpoint_store(tmp_path: Path) -> SQLiteCheckpointStore:
     return SQLiteCheckpointStore(db_path=str(tmp_path / "checkpoints.db"))
-```
 
-**Postgres fixtures** in `tests/conftest.py` — guarded by `DATABASE_URL`:
-```python
 @pytest.fixture(scope="session")
 def pg_pool():
-    db_url = os.environ.get("DATABASE_URL")
-    if not db_url:
-        pytest.skip("DATABASE_URL not set")
-    # ... opens psycopg ConnectionPool, runs migrations, yields pool
+    """Session-scoped Postgres pool. Skipped when DATABASE_URL not set."""
+    ...
+
+@pytest.fixture
+def clean_pg(pg_pool):
+    """Truncate all Postgres tables between tests."""
+    ...
 ```
 
-**State factory for orchestration tests:**
+**Local helper factories (module-scoped, prefixed `_make_` or `_build_`):**
 ```python
-def _make_state(self) -> dict:
-    from agentic_workflows.orchestration.langgraph.state_schema import new_run_state
-    state = new_run_state("system", "test input")
-    state["missions"] = ["test mission"]
-    # ... populate required mission_reports fields
-    return state
-```
+def _make_state(run_id: str, mission_id: int = 1, goal: str = "test goal") -> dict:
+    ...
 
-**Orchestrator builder pattern (integration tests):**
-```python
-def _make_orch(responses, checkpoint_store=None, memo_store=None) -> LangGraphOrchestrator:
-    provider = ScriptedProvider(responses=responses)
-    return LangGraphOrchestrator(provider=provider, max_steps=20, ...)
-```
-
-**FastAPI app builder pattern:**
-```python
 def _build_test_app(responses=None, tmp_dir=None) -> FastAPI:
-    # Bypass lifespan — set app.state directly
-    test_app.state.orchestrator = orchestrator
-    test_app.state.run_store = run_store
-    test_app.state.active_streams = {}
-    return test_app
+    ...
+
+def _make_orchestrator(provider, *, fast_provider=None, max_steps=10) -> LangGraphOrchestrator:
+    ...
 ```
 
-**Location:** All shared fixtures in `tests/conftest.py`. Eval-specific fixtures in `tests/eval/conftest.py`.
+**Instance method helpers in `unittest.TestCase` subclasses:**
+```python
+class IntentClassificationTests(unittest.TestCase):
+    def _make_simple_plan(self) -> StructuredPlan:
+        steps = [MissionStep(id="1", description="sort the numbers", suggested_tools=["sort_array"])]
+        return StructuredPlan(steps=steps, flat_missions=["Task 1: sort the numbers"], parsing_method="structured")
+```
+
+**Fixtures location:**
+- `tests/fixtures/sse_sequences/` — SSE event sequence data for API tests: `happy_path.py`, `error_event.py`, `reconnect.py`
 
 ## Coverage
 
-**Requirements:** No enforced minimum threshold in config.
+**Configuration (`pyproject.toml`):**
+```toml
+[tool.coverage.run]
+omit = [
+    "src/agentic_workflows/core/main.py",       # Legacy P0 baseline
+    "src/agentic_workflows/core/orchestrator.py",
+    "src/agentic_workflows/agents/local_agent.py",
+    "src/agentic_workflows/orchestration/langgraph/user_run.py",  # Interactive TTY
+    "src/agentic_workflows/orchestration/langgraph/run.py",
+    "src/agentic_workflows/cli/user_run.py",
+]
+```
 
-**Excluded from coverage** (`[tool.coverage.run]` omit list):
-- `src/agentic_workflows/core/main.py` — legacy P0 baseline
-- `src/agentic_workflows/core/orchestrator.py` — legacy P0 baseline
-- `src/agentic_workflows/agents/local_agent.py` — legacy P0 baseline
-- `src/agentic_workflows/orchestration/langgraph/user_run.py` — interactive CLI
-- `src/agentic_workflows/orchestration/langgraph/run.py` — interactive CLI
-- `src/agentic_workflows/cli/user_run.py` — interactive CLI
+**Requirements:** No numeric coverage threshold enforced. 657 tests passing (all unit + integration).
 
 **View Coverage:**
 ```bash
-pytest tests/ --cov=src/agentic_workflows --cov-report=html
+pytest tests/ --cov=src/ --cov-report=term-missing
 ```
 
 ## Test Types
 
-**Unit Tests** (`tests/unit/`):
-- ~1,200+ test functions across ~100 files
-- Test individual functions/classes in isolation
-- No live LLM calls; no live network; SQLite in-memory or `tmp_path`
-- Cover tools, parsers, state schema, storage, auditor, provider, API app structure
+**Unit Tests (`tests/unit/`):**
+- Test individual functions, classes, and modules in isolation
+- Use `:memory:` SQLite or `tmp_path` for storage
+- No live LLM calls — use `ScriptedProvider` or `_MockProvider`
+- Parametrized contract tests for all registered tools via `pytest.mark.parametrize`
 
-**Integration Tests** (`tests/integration/`):
-- Use `ScriptedProvider` for full orchestrator runs without live LLM
-- Use `httpx.AsyncClient` with `ASGITransport` for FastAPI HTTP contract tests
-- PostgreSQL tests gated by `@pytest.mark.postgres` and `requires_postgres` (skipif `DATABASE_URL` unset)
-- Test multi-mission flows, checkpoint replay, SSE streaming, concurrent writes
+**Integration Tests (`tests/integration/`):**
+- Test full graph execution flows with `LangGraphOrchestrator` + `ScriptedProvider`
+- Test HTTP contracts via `httpx.AsyncClient` with `ASGITransport` against real FastAPI app
+- Postgres tests gated by `requires_postgres` marker (skip when `DATABASE_URL` not set)
 
-**Eval Tests** (`tests/eval/`):
-- Async FastAPI end-to-end via SSE event parsing
-- Uses `ScriptedProvider` for deterministic agent behavior
-- Verify SSE event types (`run_complete`), run status via `GET /run/{id}`
-
-**Parametrized Contract Tests** (`tests/unit/test_tool_contracts.py`):
-```python
-_ALL_TOOLS = list(_build_all_tools().items())
-
-@pytest.mark.parametrize("tool_name,tool", _ALL_TOOLS, ids=[t[0] for t in _ALL_TOOLS])
-def test_tool_has_name(tool_name, tool):
-    assert isinstance(tool.name, str) and len(tool.name) > 0
-```
-- Every registered tool tested against `name`, `description`, `execute()`, `args_schema` contracts
-
-## Postgres-Gated Tests
-
-**Pattern for optional infrastructure tests:**
+**Postgres guard pattern:**
 ```python
 requires_postgres = pytest.mark.skipif(
     not os.environ.get("DATABASE_URL"),
@@ -269,24 +249,19 @@ requires_postgres = pytest.mark.skipif(
 )
 
 @requires_postgres
-@pytest.mark.postgres
-def test_concurrent_save_run(self, pg_pool, clean_pg):
+class TestConcurrentPostgres(unittest.IsolatedAsyncioTestCase):
     ...
 ```
 
-**`clean_pg` fixture** truncates all tables between tests for isolation:
-```python
-@pytest.fixture
-def clean_pg(pg_pool):
-    with pg_pool.connection() as conn:
-        conn.execute("TRUNCATE graph_checkpoints, runs, memo_entries")
-    yield
-```
+**Eval Tests (`tests/eval/`):**
+- Separate eval harness with its own `conftest.py`
+- Not part of the standard `make test` run
 
 ## Common Patterns
 
-**Async Testing (API):**
+**Async Testing:**
 ```python
+# asyncio_mode = "auto" means no decorator needed
 async def test_health() -> None:
     app = _build_test_app()
     async with httpx.AsyncClient(
@@ -296,14 +271,24 @@ async def test_health() -> None:
     assert resp.status_code == 200
 ```
 
-**Error Testing (Pydantic):**
+**Error/Exception Testing:**
 ```python
+# Pydantic validation
 def test_handoff_extra_field_raises(self) -> None:
     with pytest.raises(ValidationError):
         TaskHandoff(..., unexpected_extra="x")
+
+# Value error with match
+with pytest.raises(ValueError, match="schema mismatch"):
+    ...
+
+# unittest style
+def test_something(self) -> None:
+    with self.assertRaises(SomeError):
+        ...
 ```
 
-**Log Capture:**
+**Log assertion testing:**
 ```python
 def test_fallback_emits_warning(self, caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.WARNING, logger="langgraph.action_parser"):
@@ -311,21 +296,32 @@ def test_fallback_emits_warning(self, caplog: pytest.LogCaptureFixture) -> None:
     assert any("PARSER FALLBACK" in r.message for r in caplog.records)
 ```
 
-**Return-tuple Testing:**
+**Parametrized tests:**
 ```python
-def test_fallback_returns_true_flag(self) -> None:
-    raw = 'noise {"action":"finish","answer":"done"}'
-    _, used_fallback = action_parser.parse_action_json(raw, step=0)
-    assert used_fallback is True
+_ALL_TOOLS = list(_build_all_tools().items())
+
+@pytest.mark.parametrize("tool_name,tool", _ALL_TOOLS, ids=[t[0] for t in _ALL_TOOLS])
+def test_tool_has_name(tool_name, tool):
+    assert isinstance(tool.name, str) and len(tool.name) > 0
 ```
 
-**Tool Result Dict Testing:**
+**State dict construction for graph tests:**
 ```python
-def test_write_file_sh_no_shebang(tool):
-    result = tool.execute({"path": "script.sh", "content": "echo hello\n"})
-    assert "error" in result
-    assert "write_file_guardrail" in result["error"]
-    assert "hint" in result
+state = {"messages": msgs, "policy_flags": {}, "step": 0}
+cm.compact(state)
+assert len(state["messages"]) <= 40
+```
+
+**ScriptedProvider-driven orchestrator tests:**
+```python
+responses = [
+    {"action": "tool", "tool_name": "sort_array", "args": {"items": [3, 1, 2]}},
+    {"action": "finish", "answer": "Sorted."},
+]
+provider = ScriptedProvider(responses=responses)
+orch = LangGraphOrchestrator(provider=provider, max_steps=10)
+result = orch.run(user_input="Sort [3,1,2]")
+assert result["answer"] == "Sorted."
 ```
 
 ---
