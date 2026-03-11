@@ -1,252 +1,286 @@
 # Codebase Structure
 
-**Analysis Date:** 2026-03-05
+**Analysis Date:** 2026-03-12
 
 ## Directory Layout
 
-```text
+```
 agent_phase0/
-├── .github/                 # CI workflow definitions
-├── .planning/               # Project planning state, roadmap, and codebase maps
-├── .tmp/                    # Runtime SQLite DBs, logs, and transient artifacts
-├── docs/                    # ADRs, architecture notes, and phase walkthroughs
-├── src/                     # Python package source and packaging metadata
-├── tests/                   # Unit, integration, and eval test suites
-├── user_runs/               # Local CLI session context and run artifacts
-├── test_outputs/            # Ephemeral test output directory
-├── AGENTS.md                # Repo-specific agent instructions
-├── Makefile                 # Developer shortcuts
-├── README.md                # Project overview
-└── pyproject.toml           # Build metadata, dependencies, and tool config
+├── src/
+│   └── agentic_workflows/
+│       ├── __init__.py
+│       ├── schemas.py              # ToolAction, FinishAction, ClarifyAction (Pydantic)
+│       ├── errors.py               # Exception hierarchy (AgentError tree)
+│       ├── logger.py               # get_logger() factory
+│       ├── observability.py        # Langfuse @observe, graceful no-op
+│       ├── core/                   # Legacy P0 baseline (superseded, excluded from coverage)
+│       │   ├── orchestrator.py
+│       │   ├── agent_state.py
+│       │   ├── llm_provider.py
+│       │   └── main.py
+│       ├── agents/                 # Agent variants (legacy)
+│       │   └── local_agent.py
+│       ├── context/                # Optional embedding provider
+│       │   └── embedding_provider.py
+│       ├── cli/                    # CLI wrappers
+│       │   └── user_run.py
+│       ├── api/                    # FastAPI service layer
+│       │   ├── models.py           # RunRequest, RunStatusResponse, ErrorResponse
+│       │   ├── sse.py              # SSE event builders
+│       │   ├── stream_token.py     # HMAC reconnect token
+│       │   ├── middleware/
+│       │   │   ├── api_key.py
+│       │   │   └── request_id.py
+│       │   └── routes/
+│       │       ├── run.py          # POST /run (SSE), GET /run/{id}
+│       │       ├── runs.py         # GET /runs (listing)
+│       │       ├── tools.py        # GET /tools
+│       │       └── health.py       # GET /health
+│       ├── directives/             # Agent SOPs (Markdown, read at runtime)
+│       │   ├── supervisor.md
+│       │   ├── executor.md
+│       │   ├── evaluator.md
+│       │   ├── planner.md
+│       │   ├── phase1_langgraph.md
+│       │   └── README.md
+│       ├── storage/                # Persistence protocols + backends
+│       │   ├── protocol.py         # RunStore Protocol
+│       │   ├── checkpoint_protocol.py
+│       │   ├── memo_protocol.py
+│       │   ├── sqlite.py           # SQLite RunStore
+│       │   ├── postgres.py         # Postgres RunStore
+│       │   ├── mission_context_store.py
+│       │   ├── artifact_store.py
+│       │   ├── memory_consolidation.py
+│       │   └── tool_result_cache.py
+│       ├── tools/                  # Deterministic tool implementations
+│       │   ├── base.py             # Tool base class
+│       │   ├── output_schemas.py   # Typed tool output dicts
+│       │   ├── _security.py        # Path/content guardrails
+│       │   └── [35+ tool files]    # One file per tool
+│       └── orchestration/
+│           └── langgraph/          # Primary orchestration engine
+│               ├── graph.py        # Backward-compat re-export shim (do not add logic here)
+│               ├── orchestrator.py # LangGraphOrchestrator class + module constants
+│               ├── state_schema.py # RunState TypedDict, new_run_state, ensure_state_defaults
+│               ├── planner_helpers.py    # PlannerHelpersMixin
+│               ├── planner_node.py       # PlannerNodeMixin (_plan_next_action)
+│               ├── executor_node.py      # ExecutorNodeMixin (_route_to_specialist, _execute_action)
+│               ├── lifecycle_nodes.py    # LifecycleNodesMixin (_finalize, policy, shims)
+│               ├── provider.py           # ChatProvider Protocol + all vendor adapters
+│               ├── tools_registry.py     # build_tool_registry(), MemoizeStoreTool
+│               ├── context_manager.py    # ContextManager (compaction, injection, cascade)
+│               ├── model_router.py       # ModelRouter (strong/fast routing)
+│               ├── mission_parser.py     # parse_missions(), StructuredPlan
+│               ├── mission_auditor.py    # audit_run(), AuditReport, AuditFinding
+│               ├── mission_tracker.py    # Mission progress helpers
+│               ├── action_parser.py      # validate_action(), parse_action_json()
+│               ├── handoff.py            # TaskHandoff, HandoffResult (Pydantic)
+│               ├── specialist_executor.py # build_executor_subgraph()
+│               ├── specialist_evaluator.py # build_evaluator_subgraph()
+│               ├── fallback_planner.py   # deterministic_fallback_action()
+│               ├── policy.py             # MemoizationPolicy
+│               ├── memo_manager.py       # Memo lifecycle helpers
+│               ├── memo_store.py         # SQLiteMemoStore
+│               ├── memo_postgres.py      # PostgresMemoStore
+│               ├── checkpoint_store.py   # SQLiteCheckpointStore
+│               ├── checkpoint_postgres.py # PostgresCheckpointStore
+│               ├── directives.py         # Directive loading helpers
+│               ├── content_validator.py  # Content safety checks
+│               ├── text_extractor.py     # Pattern extraction utilities
+│               ├── reviewer.py           # WeightedReviewer, FailOnlyReviewer
+│               ├── run_ui.py             # Rich UI panel builders
+│               ├── run.py                # CLI demo entrypoint
+│               ├── run_audit.py          # Cross-run audit CLI
+│               ├── user_run.py           # Interactive user CLI
+│               ├── langgraph_orchestrator.py # Thin import shim
+│               └── langgraph_orchestrator.py # Thin import shim
+├── tests/
+│   ├── conftest.py             # Shared fixtures (ScriptedProvider, etc.)
+│   ├── unit/                   # Unit tests (~90 files)
+│   ├── integration/            # Integration tests (ScriptedProvider, no live API)
+│   ├── eval/                   # Eval harness tests
+│   └── fixtures/               # SSE sequence fixtures
+├── .planning/                  # GSD planning documents
+│   ├── codebase/               # This directory
+│   ├── phases/                 # Phase implementation plans and summaries
+│   ├── research/               # Architecture research notes
+│   ├── debug/                  # Debug session notes
+│   └── todos/                  # Pending work items
+├── docs/
+│   ├── phases/                 # Phase progression documentation
+│   ├── architecture/           # ADRs
+│   └── WALKTHROUGH_PHASE*.md   # Operational phase walkthroughs
+├── config/
+│   └── local.env.example       # Ollama local config template
+├── .github/
+│   └── workflows/              # CI/CD pipelines
+├── pyproject.toml              # Project metadata, deps, ruff, mypy, pytest config
+├── Makefile                    # make run / test / lint / format / typecheck
+├── .env.example                # Environment variable template
+├── Shared_plan.md              # Written by _write_shared_plan() after each run
+└── CLAUDE.md                   # Project instructions for Claude
 ```
 
 ## Directory Purposes
 
-**.planning/:**
-- Purpose: Working project-management area used by the GSD workflow.
-- Contains: `PROJECT.md`, `ROADMAP.md`, `STATE.md`, phase plans, research docs,
-  and generated codebase map files.
-- Key files: `.planning/STATE.md`, `.planning/PROJECT.md`,
-  `.planning/ROADMAP.md`.
-- Subdirectories: `.planning/codebase/`, `.planning/phases/`,
-  `.planning/research/`, `.planning/debug/`, `.planning/quick/`.
+**`src/agentic_workflows/orchestration/langgraph/`:**
+- Purpose: The entire operational orchestration engine lives here
+- Contains: 35 Python modules covering graph compilation, planning, execution, state, persistence, providers, context management, auditing, specialist subgraphs, CLI and UI
+- Key files: `orchestrator.py` (class), `state_schema.py` (contracts), `provider.py` (adapters), `tools_registry.py` (wiring)
 
-**src/agentic_workflows/:**
-- Purpose: Main Python package.
-- Contains: Runtime modules, API code, orchestration code, tools, storage, and
-  package-level docs.
-- Key files: `src/agentic_workflows/README.md`, `src/agentic_workflows/logger.py`,
-  `src/agentic_workflows/observability.py`, `src/agentic_workflows/schemas.py`.
-- Subdirectories: `api/`, `cli/`, `core/`, `directives/`,
-  `orchestration/`, `storage/`, `tools/`.
+**`src/agentic_workflows/tools/`:**
+- Purpose: All deterministic tool implementations — one file per tool
+- Contains: 35+ tools; each is a class inheriting `Tool` with `name`, `description`, and `execute(args) -> dict`
+- Key files: `base.py` (base class), `_security.py` (path guardrails), `output_schemas.py` (typed results)
 
-**src/agentic_workflows/api/:**
-- Purpose: FastAPI service surface for production-style execution.
-- Contains: `app.py`, `models.py`, SSE helpers, stream-token helpers, routes,
-  and middleware.
-- Key files: `src/agentic_workflows/api/app.py`,
-  `src/agentic_workflows/api/models.py`,
-  `src/agentic_workflows/api/routes/run.py`.
-- Subdirectories: `middleware/`, `routes/`.
+**`src/agentic_workflows/storage/`:**
+- Purpose: Storage abstractions and backends
+- Contains: Protocol definitions (runtime_checkable) + SQLite and Postgres implementations; also specialized stores for missions, artifacts, tool result caching, and memory consolidation
+- Key files: `protocol.py`, `checkpoint_protocol.py`, `memo_protocol.py`
 
-**src/agentic_workflows/orchestration/langgraph/:**
-- Purpose: Current orchestration runtime and its support modules.
-- Contains: Graph wiring, state schema, provider adapters, policy logic, mission
-  parsing/audit, reviewer helpers, and direct CLI runners.
-- Key files: `src/agentic_workflows/orchestration/langgraph/graph.py`,
-  `src/agentic_workflows/orchestration/langgraph/state_schema.py`,
-  `src/agentic_workflows/orchestration/langgraph/provider.py`,
-  `src/agentic_workflows/orchestration/langgraph/run.py`.
-- Subdirectories: Not applicable.
+**`src/agentic_workflows/api/`:**
+- Purpose: FastAPI service with SSE streaming
+- Contains: Route handlers, Pydantic models, SSE event builders, HMAC stream tokens, middleware
+- Key files: `routes/run.py` (primary endpoint), `sse.py`, `models.py`
 
-**src/agentic_workflows/tools/:**
-- Purpose: Deterministic execution modules used by the orchestrator.
-- Contains: Tool classes such as file operations, shell execution, search,
-  parsing, text analysis, and memo helpers.
-- Key files: `src/agentic_workflows/tools/base.py`,
-  `src/agentic_workflows/tools/read_file.py`,
-  `src/agentic_workflows/tools/write_file.py`,
-  `src/agentic_workflows/tools/run_bash.py`.
-- Subdirectories: Not detected.
+**`src/agentic_workflows/directives/`:**
+- Purpose: Agent role SOPs read at runtime during prompt construction
+- Contains: Markdown files for supervisor, executor, evaluator, planner roles
+- Key files: `supervisor.md`, `executor.md`, `evaluator.md`
+- Note: Never overwrite without explicit request
 
-**src/agentic_workflows/storage/:**
-- Purpose: Run persistence abstractions for the service layer.
-- Contains: `Protocol` definitions and SQLite implementation.
-- Key files: `src/agentic_workflows/storage/protocol.py`,
-  `src/agentic_workflows/storage/sqlite.py`.
-- Subdirectories: Not detected.
+**`src/agentic_workflows/core/`:**
+- Purpose: Legacy P0 baseline orchestrator (pre-LangGraph)
+- Status: Excluded from test coverage; do not extend; kept for reference only
 
-**src/agentic_workflows/directives/:**
-- Purpose: Markdown SOP contracts for supervisor/executor/evaluator behavior.
-- Contains: `*.md` directive files and a README.
-- Key files: `src/agentic_workflows/directives/README.md`,
-  `src/agentic_workflows/directives/supervisor.md`,
-  `src/agentic_workflows/directives/executor.md`.
-- Subdirectories: Not detected.
+**`tests/unit/`:**
+- Purpose: Fast, isolated unit tests; no live API calls
+- Key fixtures: `ScriptedChatProvider` from `conftest.py` drives deterministic LLM output
 
-**src/agentic_workflows/core/:**
-- Purpose: Legacy Phase 0 baseline orchestrator kept for comparison.
-- Contains: Older orchestrator/runtime modules.
-- Key files: `src/agentic_workflows/core/orchestrator.py`,
-  `src/agentic_workflows/core/llm_provider.py`,
-  `src/agentic_workflows/core/main.py`.
-- Subdirectories: Not detected.
+**`tests/integration/`:**
+- Purpose: End-to-end tests using `ScriptedChatProvider` (no live API)
+- Key files: `test_langgraph_flow.py`, `test_multi_mission_subgraph.py`, `test_mission_context_cascade.py`
 
-**tests/:**
-- Purpose: Regression coverage for the package.
-- Contains: Pytest suites, shared fixtures, and eval scenarios.
-- Key files: `tests/conftest.py`, `tests/integration/test_api_service.py`,
-  `tests/unit/test_run_store.py`, `tests/eval/test_eval_harness.py`.
-- Subdirectories: `tests/unit/`, `tests/integration/`, `tests/eval/`.
-
-**docs/:**
-- Purpose: Human-facing design and phase documentation.
-- Contains: ADRs, architecture notes, and phase walkthroughs.
-- Key files: `docs/ADR/ADR-001-langgraph-version-upgrade.md`,
-  `docs/architecture/PHASE_PROGRESSION.md`,
-  `docs/phases/PHASE_4_PRODUCTION.md`.
-- Subdirectories: `docs/ADR/`, `docs/architecture/`, `docs/phases/`.
-
-**user_runs/:**
-- Purpose: Local artifacts from interactive API-backed sessions.
-- Contains: Conversation context, reports, reviews, and streaming-event output.
-- Key files: `user_runs/context.json`, `user_runs/report.txt`,
-  `user_runs/user_run_review.md`.
-- Subdirectories: `user_runs/events/`.
+**`.planning/`:**
+- Purpose: GSD planning artifacts — phase plans, summaries, debug notes, codebase analysis
+- Generated: No (human and agent maintained)
+- Committed: Yes
 
 ## Key File Locations
 
 **Entry Points:**
-- `src/agentic_workflows/api/app.py`: FastAPI app startup and route registration.
-- `src/agentic_workflows/cli/user_run.py`: Interactive CLI that talks to the API.
-- `src/agentic_workflows/orchestration/langgraph/run.py`: Direct graph demo CLI.
-- `src/agentic_workflows/orchestration/langgraph/run_audit.py`: Historical run
-  audit/export CLI.
-- `src/agentic_workflows/core/main.py`: Legacy Phase 0 demo entry.
+- `src/agentic_workflows/orchestration/langgraph/run.py`: `python -m agentic_workflows.orchestration.langgraph.run`
+- `src/agentic_workflows/orchestration/langgraph/user_run.py`: Interactive user-facing CLI
+- `src/agentic_workflows/orchestration/langgraph/run_audit.py`: Cross-run audit summary
 
 **Configuration:**
-- `pyproject.toml`: Package metadata, dependencies, Ruff, pytest, and mypy config.
-- `Makefile`: Common local commands.
-- `.gitignore`: Ignored runtime artifacts, caches, databases, and local env files.
-- `.env`: Local environment configuration for providers and API keys; present,
-  contents not inspected.
+- `pyproject.toml`: All tool config (ruff, mypy, pytest, coverage)
+- `.env` / `.env.example`: Runtime provider config (`P1_PROVIDER`, API keys, model names)
+- `config/local.env.example`: Ollama/local model template
 
 **Core Logic:**
-- `src/agentic_workflows/orchestration/langgraph/graph.py`: Main orchestration
-  runtime.
-- `src/agentic_workflows/orchestration/langgraph/tools_registry.py`: Tool map
-  construction.
-- `src/agentic_workflows/orchestration/langgraph/state_schema.py`: Canonical
-  run-state shape.
-- `src/agentic_workflows/api/routes/`: HTTP/SSE routes for service execution.
-- `src/agentic_workflows/tools/`: Deterministic tool implementations.
-- `src/agentic_workflows/storage/sqlite.py`: Service run persistence backend.
+- `src/agentic_workflows/orchestration/langgraph/orchestrator.py`: `LangGraphOrchestrator` class definition
+- `src/agentic_workflows/orchestration/langgraph/state_schema.py`: `RunState`, `new_run_state`, `ensure_state_defaults`
+- `src/agentic_workflows/orchestration/langgraph/provider.py`: `ChatProvider` protocol + all vendor adapters
+- `src/agentic_workflows/orchestration/langgraph/tools_registry.py`: `build_tool_registry()` — the single place that wires all tools
 
 **Testing:**
-- `tests/unit/`: Unit-level behavior checks for tools, orchestration helpers, and
-  storage modules.
-- `tests/integration/`: Graph and API integration scenarios.
-- `tests/eval/`: Eval-harness tests for higher-level behavior.
-- `tests/conftest.py`: Shared fixtures including `ScriptedProvider`,
-  temp stores, and temp directories.
+- `tests/conftest.py`: Shared fixtures including `ScriptedChatProvider`
+- `tests/unit/`: ~90 unit test files, one per module area
+- `tests/integration/`: 4 integration test files
 
-**Documentation:**
-- `README.md`: Project overview and quick start.
-- `src/agentic_workflows/README.md`: Package/runtime architecture notes.
-- `src/agentic_workflows/directives/README.md`: Directive usage guide.
-- `docs/ADR/`: Architectural decision records.
-- `.planning/`: Live planning and implementation state for the project.
+**Backward-Compat Shim:**
+- `src/agentic_workflows/orchestration/langgraph/graph.py`: Re-exports from `orchestrator.py` so all existing import paths continue working; do not add logic here
 
 ## Naming Conventions
 
 **Files:**
-- `snake_case.py`: Standard Python module naming, for example
-  `src/agentic_workflows/api/stream_token.py`.
-- `test_*.py`: Pytest modules, for example `tests/unit/test_tool_security.py`.
-- `UPPERCASE.md`: High-signal repo or planning docs such as `AGENTS.md`,
-  `README.md`, and `.planning/STATE.md`.
-- `ADR-###-*.md`: Architecture decision records in `docs/ADR/`.
+- Modules: `snake_case.py` — one concern per file
+- Test files: `test_{module_name}.py` — mirrors the module being tested
+- Mixin modules: `{concern}_node.py` or `{concern}_helpers.py` (e.g., `planner_node.py`, `lifecycle_nodes.py`)
+- CLI scripts: `run.py`, `user_run.py`, `run_audit.py`
+
+**Classes:**
+- Orchestrator: `LangGraphOrchestrator` — full descriptive names
+- Mixins: `{Concern}Mixin` (e.g., `PlannerNodeMixin`, `ExecutorNodeMixin`)
+- Tools: `{CapitalizedName}Tool` (e.g., `WriteFileTool`, `DataAnalysisTool`)
+- Protocols: `{Concern}Store` or `{Concern}Provider` (e.g., `RunStore`, `ChatProvider`)
+- TypedDicts: PascalCase (e.g., `RunState`, `ToolRecord`, `MissionReport`)
+- Pydantic models: PascalCase (e.g., `TaskHandoff`, `HandoffResult`)
+
+**Functions:**
+- Public graph methods: `_plan_next_action`, `_execute_action`, `_finalize` (underscore-prefixed even on public class)
+- Module-level helpers: `snake_case` with underscore prefix for private helpers (e.g., `_build_port_url`, `_sequential_node`)
+- Constants: `_SCREAMING_SNAKE_CASE` with leading underscore (e.g., `_PIPELINE_TRACE_CAP`, `_HANDOFF_QUEUE_CAP`)
 
 **Directories:**
-- `snake_case` or simple lowercase package names under `src/agentic_workflows/`,
-  such as `storage/`, `tools/`, and `directives/`.
-- Plural collection directories where content is grouped, such as `tests/`,
-  `docs/`, `routes/`, and `phases/`.
-- Dot-prefixed workspace directories for local state, such as `.planning/` and
-  `.tmp/`.
-
-**Special Patterns:**
-- `__init__.py`: Package boundaries and limited re-export surfaces.
-- `README.md` inside subdirectories: Localized package guidance, for example
-  `src/agentic_workflows/README.md`.
-- `run*.py`: CLI or operational runner modules in
-  `src/agentic_workflows/orchestration/langgraph/`.
+- `snake_case` throughout
 
 ## Where to Add New Code
 
 **New Tool:**
-- Primary code: `src/agentic_workflows/tools/`.
-- Registration: `src/agentic_workflows/orchestration/langgraph/tools_registry.py`.
-- Tests: `tests/unit/test_<tool_name>.py`.
+- Implementation: `src/agentic_workflows/tools/{tool_name}.py` — subclass `Tool`, set `name`, `description`, implement `execute(args) -> dict`
+- Registration: Add import + instantiation to `src/agentic_workflows/orchestration/langgraph/tools_registry.py` in `build_tool_registry()`
+- Tests: `tests/unit/test_{tool_name}.py`
+- Output schema (if complex): add to `src/agentic_workflows/tools/output_schemas.py`
 
-**New Orchestration Behavior:**
-- Primary code: `src/agentic_workflows/orchestration/langgraph/`.
-- Contract updates: `src/agentic_workflows/directives/`.
-- Tests: `tests/unit/` for helpers plus `tests/integration/` for graph behavior.
+**New API Route:**
+- Implementation: `src/agentic_workflows/api/routes/{route_name}.py`
+- Register router in the FastAPI app module
+- Models: add request/response types to `src/agentic_workflows/api/models.py`
+- Tests: `tests/unit/test_{route_name}.py` or `tests/integration/test_api_service.py`
 
-**New API Route or Service Endpoint:**
-- Definition: `src/agentic_workflows/api/routes/`.
-- Models/middleware: `src/agentic_workflows/api/models.py` and
-  `src/agentic_workflows/api/middleware/`.
-- Tests: `tests/integration/`, usually alongside
-  `tests/integration/test_api_service.py`.
+**New Storage Backend:**
+- Protocol: extend or implement `src/agentic_workflows/storage/{concern}_protocol.py`
+- SQLite impl: `src/agentic_workflows/storage/sqlite.py` or new file
+- Postgres impl: `src/agentic_workflows/storage/postgres.py` or new file
+- Tests: `tests/unit/test_{store_name}.py`
 
-**New Storage Backend or Persistence Change:**
-- Implementation: `src/agentic_workflows/storage/`.
-- Orchestrator touchpoints: `src/agentic_workflows/api/app.py` and
-  `src/agentic_workflows/api/routes/`.
-- Tests: `tests/unit/test_run_store.py` plus integration coverage where needed.
+**New Orchestrator Behavior:**
+- If it belongs in planning: extend `PlannerNodeMixin` in `src/agentic_workflows/orchestration/langgraph/planner_node.py`
+- If it belongs in execution: extend `ExecutorNodeMixin` in `src/agentic_workflows/orchestration/langgraph/executor_node.py`
+- If it belongs in finalization/policy: extend `LifecycleNodesMixin` in `src/agentic_workflows/orchestration/langgraph/lifecycle_nodes.py`
+- Prompt/helper utilities: extend `PlannerHelpersMixin` in `src/agentic_workflows/orchestration/langgraph/planner_helpers.py`
+- Do NOT add logic to `src/agentic_workflows/orchestration/langgraph/graph.py`
 
-**Shared Utilities or Package-Level Helpers:**
-- Shared helpers: `src/agentic_workflows/`.
-- Typed runtime contracts: `src/agentic_workflows/orchestration/langgraph/state_schema.py`,
-  `src/agentic_workflows/storage/protocol.py`, or `src/agentic_workflows/schemas.py`.
-- Tests: `tests/unit/`.
+**New State Field:**
+- Add to `RunState` TypedDict in `src/agentic_workflows/orchestration/langgraph/state_schema.py`
+- Add default in `new_run_state()` function
+- Add `setdefault` guard in `ensure_state_defaults()`
+- If it is an append-only list needing parallel safety, annotate with `Annotated[list[T], operator.add]` — it will be auto-detected by `_derive_annotated_list_fields()`
+
+**New Agent Directive:**
+- Add `src/agentic_workflows/directives/{role}.md`
+- Load via `directives.py` helpers or `_read_directive_section()` from `planner_helpers.py`
 
 ## Special Directories
 
-**.planning/:**
-- Purpose: Human and agent planning workspace.
-- Source: Maintained directly in-repo by the GSD workflow.
-- Committed: Yes.
+**`src/agentic_workflows/directives/`:**
+- Purpose: Runtime-loaded agent role instruction files
+- Generated: No
+- Committed: Yes — never overwrite without explicit user request
 
-**.tmp/:**
-- Purpose: Runtime DBs, logs, and temporary exports such as
-  `.tmp/run_store.db`, `.tmp/memo_store.db`, and `.tmp/langgraph_checkpoints.db`.
-- Source: Generated by the application and CLI tooling.
-- Committed: No (`.gitignore`).
+**`.planning/codebase/`:**
+- Purpose: GSD codebase analysis documents (this directory)
+- Generated: Yes (by `/gsd:map-codebase` command)
+- Committed: Yes
 
-**user_runs/events/:**
-- Purpose: Streaming/session event output for local runs.
-- Source: Generated during interactive usage.
-- Committed: No (`.gitignore`).
+**`docs/`:**
+- Purpose: Phase walkthroughs, ADRs, operational notes
+- Generated: Partially (walkthrough files written during phase execution)
+- Committed: Yes
 
-**test_outputs/:**
-- Purpose: Ad hoc or temporary test artifacts.
-- Source: Generated by local test workflows.
-- Committed: No (`.gitignore`).
+**`workspace/`:**
+- Purpose: Agent-generated output files from tool executions (write_file, etc.)
+- Generated: Yes
+- Committed: No (gitignored)
 
-**src/agentic_workflows.egg-info/:**
-- Purpose: Packaging metadata from editable installs/builds.
-- Source: Generated by Python packaging tools.
-- Committed: No (`*.egg-info/` in `.gitignore`).
-
-**node_modules/:**
-- Purpose: Local JavaScript dependency tree for workspace tooling.
-- Source: Installed locally; `package.json`: Not detected.
-- Committed: No (`node_modules/` in `.gitignore`).
+**`.tmp/`:**
+- Purpose: Ephemeral log tails and temp files (e.g., Ollama server log)
+- Generated: Yes
+- Committed: No
 
 ---
 
-*Structure analysis: 2026-03-05*
-*Update when directory structure changes*
+*Structure analysis: 2026-03-12*

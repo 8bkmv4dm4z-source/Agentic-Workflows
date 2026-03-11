@@ -1,88 +1,116 @@
 # Technology Stack
 
-**Analysis Date:** 2026-03-05
+**Analysis Date:** 2026-03-12
 
 ## Languages
 
 **Primary:**
-- Python 3.12+ - All application/runtime code lives under `src/agentic_workflows/`, with tests in `tests/` and the package contract in `pyproject.toml`.
+- Python 3.12 - All source code: `src/agentic_workflows/`, `tests/`
 
 **Secondary:**
-- YAML (not versioned) - CI and automation config live in `.github/workflows/ci.yml`, `.github/workflows/claude.yml`, and `.pre-commit-config.yaml`.
-- Markdown (not versioned) - Operator docs and directives live in `README.md`, `src/agentic_workflows/README.md`, and `src/agentic_workflows/directives/*.md`.
+- SQL - Database migrations in `db/migrations/` (PostgreSQL dialect, pgvector extension)
 
 ## Runtime
 
 **Environment:**
-- CPython 3.12+ - Declared by `requires-python = ">=3.12"` in `pyproject.toml`.
-- ASGI + CLI runtime - `src/agentic_workflows/api/app.py` serves the HTTP API via `uvicorn`, while `src/agentic_workflows/orchestration/langgraph/run.py` and `src/agentic_workflows/cli/user_run.py` provide CLI entrypoints.
-- Optional local model runtime - `src/agentic_workflows/orchestration/langgraph/provider.py` supports local Ollama through `OLLAMA_BASE_URL` / `OLLAMA_HOST`, with `.env.example` defaulting to `http://localhost:11434/v1`.
+- CPython 3.12.3 (installed: 3.12.3)
+- Minimum required: `>=3.12` (enforced in `pyproject.toml`)
 
 **Package Manager:**
-- `pip` with `setuptools.build_meta` - Install flow is `pip install -e ".[dev]"` in `AGENTS.md`, and the build backend is declared in `pyproject.toml`.
-- Lockfile: Not detected (`uv.lock`, `poetry.lock`, `requirements*.txt`, and `package-lock.json` are absent).
+- pip with editable install (`pip install -e ".[dev]"`)
+- Lockfile: Not present — dependency ranges specified in `pyproject.toml`
+
+**Containerization:**
+- Docker via `Dockerfile` (python:3.12-slim base)
+- Docker Compose via `docker-compose.yml` (Postgres + API services)
 
 ## Frameworks
 
-**Core:**
-- LangGraph 1.x - State-machine orchestration in `src/agentic_workflows/orchestration/langgraph/graph.py`, `src/agentic_workflows/orchestration/langgraph/specialist_executor.py`, and `src/agentic_workflows/orchestration/langgraph/specialist_evaluator.py`.
-- FastAPI 0.115+ - HTTP service layer in `src/agentic_workflows/api/app.py` and `src/agentic_workflows/api/routes/`.
-- Pydantic 2.12+ - Typed schemas and validation in `src/agentic_workflows/schemas.py` and `src/agentic_workflows/api/models.py`.
+**Core Orchestration:**
+- LangGraph 1.0.10 (`langgraph>=1.0.6,<2.0`) - State graph for multi-agent orchestration; compiled once at startup
+- LangGraph Prebuilt 1.0.x (`langgraph-prebuilt>=1.0.6,<1.1.0`) - Prebuilt node utilities
+
+**LLM Provider Bindings:**
+- langchain-anthropic 1.3.4 (`langchain-anthropic>=0.3.0`) - Anthropic Claude provider path
+- openai 2.24.0 (`openai>=2.0`) - OpenAI and Ollama/llama-cpp (OpenAI-compatible) provider path
+- groq 1.0.0 (`groq>=1.0`) - Groq provider path
+
+**Web Framework:**
+- FastAPI 0.135.1 (`fastapi>=0.115`) - REST + SSE streaming API; entry point `src/agentic_workflows/api/app.py`
+- Uvicorn 0.41.0 (`uvicorn>=0.34`) - ASGI server; exposed on port 8000
+- sse-starlette (`sse-starlette>=3.3`) - Server-Sent Events for streaming run results
+
+**Data Validation:**
+- Pydantic 2.12.5 (`pydantic>=2.12,<3.0`) - All schemas, state types, handoff models
 
 **Testing:**
-- pytest 8+ - Main test runner configured in `pyproject.toml` and used across `tests/unit/`, `tests/integration/`, and `tests/eval/`.
-- pytest-asyncio 0.24+ - Async test support enabled by `asyncio_mode = "auto"` in `pyproject.toml`.
-- httpx ASGI transport - Integration/eval API tests exercise the FastAPI app in `tests/integration/test_api_service.py` and `tests/eval/conftest.py`.
-
-**Build/Dev:**
-- setuptools 75+ - Packaging backend declared in `pyproject.toml`.
-- Ruff 0.11+ - Lint/format tooling configured in `pyproject.toml`, `.pre-commit-config.yaml`, and `.github/workflows/ci.yml`.
-- mypy 1.10+ - Static type checking configured in `pyproject.toml` and run in `.github/workflows/ci.yml`.
-- Uvicorn 0.34+ - ASGI server dependency used by `src/agentic_workflows/api/app.py`.
+- pytest 9.0.2 (`pytest>=8.0`) - Test runner
+- pytest-asyncio 1.3.0 (`pytest-asyncio>=0.24`) - Async test support; `asyncio_mode = "auto"`
+- pytest-cov 7.0.0 (`pytest-cov>=6.0`) - Coverage reporting
 
 ## Key Dependencies
 
 **Critical:**
-- `langgraph>=1.0.6,<2.0` - Core orchestration engine for the `plan -> execute -> policy -> finalize` graph in `src/agentic_workflows/orchestration/langgraph/graph.py`.
-- `langgraph-prebuilt>=1.0.6,<1.1.0` - Supplies `ToolNode` / `tools_condition` for the guarded Anthropic branch in `src/agentic_workflows/orchestration/langgraph/graph.py`.
-- `pydantic>=2.12,<3.0` - Schema validation for actions, API models, and typed state contracts in `src/agentic_workflows/schemas.py` and `src/agentic_workflows/api/models.py`.
-- `fastapi>=0.115` - HTTP API framework for `src/agentic_workflows/api/app.py`.
-- `openai>=2.0` - OpenAI provider client and Ollama OpenAI-compatible client in `src/agentic_workflows/orchestration/langgraph/provider.py`.
-- `groq>=1.0` - Groq provider client in `src/agentic_workflows/orchestration/langgraph/provider.py`.
-- `sse-starlette>=3.3` - Server-sent events for `/run` and `/run/{run_id}/stream` in `src/agentic_workflows/api/routes/run.py`.
-- `anyio>=4.0` - Thread offloading and in-memory stream bridging in `src/agentic_workflows/api/routes/run.py` and `src/agentic_workflows/storage/sqlite.py`.
+- `langgraph>=1.0.6,<2.0` — Core graph engine; breaking changes expected across major versions
+- `pydantic>=2.12,<3.0` — Used for all typed schemas; v2 API (`model_validate`, `model_dump`)
+- `langchain-anthropic>=0.3.0` — Required for Anthropic/Claude provider path in graph
+- `openai>=2.0` — Required for OpenAI, Ollama, and llama-cpp provider paths (OpenAI-compatible wire format)
 
 **Infrastructure:**
-- `httpx>=0.28` - API client in `src/agentic_workflows/cli/user_run.py` and transport for API tests in `tests/integration/test_api_service.py`.
-- `structlog>=25.0` - Structured API logging in `src/agentic_workflows/api/app.py`.
-- `python-dotenv>=1.0` - Loads repo-root `.env` in `src/agentic_workflows/orchestration/langgraph/provider.py`.
-- `langfuse>=3.0` (optional extra) - Observability/tracing integration in `src/agentic_workflows/observability.py`.
+- `psycopg[binary]>=3.2` (3.3.3) — PostgreSQL async driver; bundled libpq (no system deps)
+- `psycopg_pool>=3.2` (3.3.0) — Connection pool; `min_size=2, max_size=10` in production
+- `httpx>=0.28` (0.28.1) — HTTP client used inside provider adapters for timeout control
+- `structlog>=25.0` (25.5.0) — Structured logging throughout
+- `rich>=14.0` (14.3.3) — Terminal UI for run display (`run_ui.py`, `run.py`)
+- `anyio>=4.0` (4.12.1) — Async primitives; used in SQLite run store for thread offloading
+- `requests>=2.32` — Used by tool implementations requiring simple HTTP
+
+**Optional Extras:**
+- `langfuse>=3.0` (optional `[observability]`) — LLM tracing; graceful no-op if absent; see `src/agentic_workflows/observability.py`
+- `fastembed>=0.3` (optional `[context]`) — ONNX embeddings (BAAI/bge-small-en-v1.5, 384-dim); see `src/agentic_workflows/context/embedding_provider.py`
+
+## Build / Dev Tools
+
+**Linting & Formatting:**
+- ruff 0.15.4 (`ruff>=0.11`) — Both lint (`ruff check`) and format (`ruff format`); line-length 100, target py312
+- Rules: `E, F, I, UP, B, SIM`; `E402` and `E501` ignored
+
+**Type Checking:**
+- mypy 1.10+ (`mypy>=1.10`) — Strict return-any and unused-config warnings; `ignore_missing_imports = true`
+- Several modules explicitly excluded via `[[tool.mypy.overrides]]` in `pyproject.toml`
+
+**Pre-commit:**
+- pre-commit 4.0+ with ruff hooks (`ruff` + `ruff-format`) configured in `.pre-commit-config.yaml`
+
+**Build Backend:**
+- setuptools>=75.0 with `find` packages discovery from `src/`
 
 ## Configuration
 
 **Environment:**
-- Repo-root `.env` is loaded by `load_dotenv()` in `src/agentic_workflows/orchestration/langgraph/provider.py`; the sample file is `.env.example`, and `.env` is gitignored in `.gitignore`.
-- Key runtime variables come from `.env.example` and code paths in `src/agentic_workflows/api/app.py`, `src/agentic_workflows/api/middleware/api_key.py`, and `src/agentic_workflows/tools/_security.py`: `P1_PROVIDER`, `P1_PROVIDER_CHAIN`, `OPENAI_API_KEY`, `GROQ_API_KEY`, `OLLAMA_BASE_URL`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_PUBLIC_KEY`, `API_HOST`, `API_PORT`, `RUN_STORE_DB`, `API_KEY`, `CORS_ORIGINS`, `P1_TOOL_SANDBOX_ROOT`, `P1_HTTP_ALLOWED_DOMAINS`, and `SSE_MAX_DURATION_SECONDS`.
+- All runtime config via `.env` file at repo root (loaded via `python-dotenv`)
+- `.env.example` documents all variables
+- Key variable: `P1_PROVIDER` selects LLM backend (`openai` | `groq` | `ollama` | `llama-cpp`)
+- `DATABASE_URL` selects storage backend: absent → SQLite (`.tmp/`), present → PostgreSQL
 
 **Build:**
-- `pyproject.toml` - Package metadata, dependencies, Ruff, pytest, and mypy config.
-- `.pre-commit-config.yaml` - Local Ruff hooks.
-- `.github/workflows/ci.yml` - CI install/lint/typecheck/test pipeline.
-- `.github/workflows/claude.yml` - Comment-triggered Claude Code automation.
+- `pyproject.toml` — single source of truth for deps, tool config, test paths
+- `Makefile` — convenience commands for all common workflows
 
 ## Platform Requirements
 
 **Development:**
-- Any platform with Python 3.12+ and stdlib SQLite support; CI runs on `ubuntu-latest` in `.github/workflows/ci.yml`.
-- Optional local Ollama server at `http://localhost:11434/v1` when using `P1_PROVIDER=ollama` or `P1_PROVIDER=ollama_thinking`.
-- Container tooling: Not detected.
+- Python 3.12+
+- `.env` configured with at least one provider key
+- SQLite used by default (no external services needed)
+- Optional: Docker Desktop for Postgres + full API stack (`make user-run`)
 
 **Production:**
-- ASGI deployment via `uvicorn` serving `src/agentic_workflows/api/app.py`.
-- Default persistence is local SQLite files: `RUN_STORE_DB` (`.tmp/run_store.db`), `src/agentic_workflows/orchestration/langgraph/checkpoint_store.py` (`.tmp/langgraph_checkpoints.db`), and `src/agentic_workflows/orchestration/langgraph/memo_store.py` (`.tmp/memo_store.db`).
-- Managed hosting target, container image, or IaC stack: Not detected.
+- Docker + Docker Compose (`docker-compose.yml`)
+- PostgreSQL 16 with pgvector extension (`pgvector/pgvector:pg16` image)
+- `DATABASE_URL` environment variable required for Postgres backend
+- Uvicorn serving FastAPI on port 8000
 
 ---
 
-*Stack analysis: 2026-03-05*
-*Update after major dependency changes*
+*Stack analysis: 2026-03-12*

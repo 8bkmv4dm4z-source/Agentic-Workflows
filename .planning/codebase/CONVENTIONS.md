@@ -1,132 +1,172 @@
 # Coding Conventions
 
-**Analysis Date:** 2026-03-05
+**Analysis Date:** 2026-03-12
 
 ## Naming Patterns
 
 **Files:**
-- Python modules use `snake_case.py` across `src/agentic_workflows/`, for example `src/agentic_workflows/orchestration/langgraph/state_schema.py` and `src/agentic_workflows/tools/search_files.py`.
-- Test files use `test_<subject>.py` under `tests/unit/`, `tests/integration/`, and `tests/eval/`, for example `tests/unit/test_run_store.py` and `tests/integration/test_api_service.py`.
-- Package markers use `__init__.py`; documentation files are mixed `README.md` plus topic-specific markdown such as `src/agentic_workflows/directives/phase1_langgraph.md`.
+- `snake_case.py` universally: `action_parser.py`, `mission_auditor.py`, `state_schema.py`
+- Test files prefixed `test_`: `test_action_parser.py`, `test_mission_auditor.py`
+- Private helpers prefixed with underscore: `_security.py`, `_TOOL_KEYWORD_MAP`, `_approx_equal`
+- Module-level logger: `_LOG = get_logger("langgraph.action_parser")` or `LOGGER = get_logger(...)`
+
+**Classes:**
+- `PascalCase` throughout: `LangGraphOrchestrator`, `TaskHandoff`, `HandoffResult`, `MemoStoreTests`
+- `TypedDict` subclasses named as domain concepts: `RunState`, `AgentMessage`, `ToolRecord`, `MissionReport`, `RunResult`
+- `dataclass` for lightweight data containers: `AuditFinding`, `AuditReport`
+- Pydantic `BaseModel` for schema-enforced contracts: `ToolAction`, `FinishAction`, `TaskHandoff`, `HandoffResult`
+- Tool classes named `{Verb}{Noun}Tool`: `MathStatsTool`, `WriteFileTool`
 
 **Functions:**
-- Functions and methods use `snake_case`, including async functions such as `lifespan()` in `src/agentic_workflows/api/app.py` and `validation_error_handler()` in `src/agentic_workflows/api/app.py`.
-- Async functions do not use a special prefix; `async def` is the only async marker.
-- Internal helpers commonly use a leading underscore, for example `_resolve_ollama_base_url()` in `src/agentic_workflows/orchestration/langgraph/provider.py`, `_build_eval_app()` in `tests/eval/conftest.py`, and `_search_glob()` in `src/agentic_workflows/tools/search_files.py`.
+- `snake_case` universally
+- Private module-level helpers: `_strip_thinking`, `_approx_equal`, `_check_tool_presence`
+- Factory functions use `create_` prefix: `create_handoff()`, `create_handoff_result()`
+- Builders use `build_` prefix: `build_tool_registry()`, `build_verify_gate_outcome()`
+- State factory: `new_run_state()`, `ensure_state_defaults()`
+
+**Constants:**
+- `UPPER_SNAKE_CASE`: `SUPPORTED_OPS`, `LOGGER`
+- Regex patterns prefixed `_` and suffixed `_RE`: `_THINKING_RE`
+- Sentinel/admin prefixes as tuples: `_ADMIN_PREFIXES`
 
 **Variables:**
-- Variables and attributes use `snake_case`, for example `retry_backoff_seconds` in `src/agentic_workflows/orchestration/langgraph/provider.py`.
-- Constants use `UPPER_SNAKE_CASE`, for example `DEFAULT_PROVIDER_TIMEOUT_SECONDS` in `src/agentic_workflows/orchestration/langgraph/provider.py`.
-- Module-private globals often combine leading underscore plus constant casing or snake case, for example `_ADMIN_PREFIXES` and `_setup_done` in `src/agentic_workflows/logger.py`.
-
-**Types:**
-- Classes, `BaseModel`s, `TypedDict`s, `Protocol`s, and exception types use `PascalCase`, for example `RunRequest` in `src/agentic_workflows/api/models.py`, `RunState` in `src/agentic_workflows/orchestration/langgraph/state_schema.py`, `RunStore` in `src/agentic_workflows/storage/protocol.py`, and `ProviderTimeoutError` in `src/agentic_workflows/orchestration/langgraph/provider.py`.
-- No `I` prefix pattern was detected for interfaces/protocols.
-- Literal enum-like values are lowercase strings such as `"pending"`, `"completed"`, `"tool"`, and `"finish"` in `src/agentic_workflows/api/models.py` and `src/agentic_workflows/schemas.py`.
+- `snake_case` universally
+- Private module-level state: `_setup_done: bool`, `_strict_mode`
 
 ## Code Style
 
-**Formatting:**
-- `ruff format` is the formatter, configured in `pyproject.toml`.
-- Line length is `100` via `[tool.ruff]` in `pyproject.toml`.
-- Quote style is mixed in current code, but formatter-driven files trend toward Ruff defaults; do not hand-enforce a custom quote style beyond `ruff format`.
-- Semicolons are not applicable in Python code.
-- Indentation is 4 spaces throughout sampled files such as `src/agentic_workflows/api/app.py` and `src/agentic_workflows/tools/write_file.py`.
-- Python 3.12 syntax is standard: built-in generics (`list[str]`), union operators (`str | None`), and `from __future__ import annotations` are common in newer modules such as `src/agentic_workflows/api/models.py`.
+**Formatter:** ruff format (enforced via `make format`)
 
-**Linting:**
-- `ruff check src/ tests/` is the primary lint command from `AGENTS.md`.
-- Active Ruff rule groups in `pyproject.toml` are `E`, `F`, `I`, `UP`, `B`, and `SIM`.
-- `E402` and `E501` are ignored in `pyproject.toml` to accommodate legacy import/docstring placement and long strings.
-- `mypy src/` is also part of the standard quality pass in `AGENTS.md`.
+**Linter:** ruff with rules `E, F, I, UP, B, SIM`
+- Line length: 100 characters
+- Target Python version: 3.12
+- Ignored: `E402` (module docstrings), `E501` (long strings exempted)
+- Common suppressions: `# noqa: BLE001` (broad exceptions), `# noqa: PLW0603` (global statements), `# noqa: C901` (complexity on intentionally large methods), `# noqa: ANN001` (missing type annotations on test helpers)
+
+**Type checker:** mypy with `warn_return_any=true`, `ignore_missing_imports=true`
+- Several modules in `[[tool.mypy.overrides]]` with `ignore_errors=true` (graph.py, provider.py, context_manager.py, etc.)
 
 ## Import Organization
 
-**Order:**
-1. `from __future__ import annotations` when used, often before the module docstring in newer files such as `src/agentic_workflows/api/app.py`.
-2. Standard library imports.
-3. Third-party imports.
-4. Local imports, usually absolute package imports such as `from agentic_workflows.api.models import ErrorResponse`.
-5. Sibling relative imports are used inside packages when convenient, for example `from .base import Tool` in `src/agentic_workflows/tools/search_files.py`.
+**Order (enforced by ruff `I` rules):**
+1. `from __future__ import annotations` — on every source file (86/86 detected)
+2. Standard library imports
+3. Third-party imports
+4. Project-internal imports (`from agentic_workflows...`)
 
-**Grouping:**
-- Blank lines separate import groups in sampled files such as `src/agentic_workflows/orchestration/langgraph/provider.py` and `tests/eval/conftest.py`.
-- Import sorting is consistent with Ruff/isort behavior.
-- Dedicated type-only import groups were not detected; typing symbols are usually imported inline with other imports.
+**Module docstrings:**
+- Placed after `from __future__ import annotations` on most files
+- Format: `"""Short summary.\n\nExpanded explanation if needed."""`
 
-**Path Aliases:**
-- Not applicable. No Python import alias system comparable to TS path aliases was detected.
+**No barrel files / `__init__.py` re-exports:** Imports go directly to the defining module (e.g., `from agentic_workflows.orchestration.langgraph.handoff import TaskHandoff`)
+
+## Pydantic Schema Contracts
+
+**Strict schemas use `extra="forbid"`:**
+```python
+class TaskHandoff(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+```
+- `ToolAction`, `FinishAction`, `TaskHandoff`, `HandoffResult` all use `extra="forbid"`
+- `ClarifyAction` uses `extra="allow"` for backward compat with optional sub-task fields
+
+**Return types are typed dicts, not bare dicts:**
+- `RunResult`, `RunState`, `ToolRecord`, `MissionReport`, `AgentMessage` all use `TypedDict`
+- `RunState` list fields use `Annotated[list[T], operator.add]` for LangGraph reducer wiring
 
 ## Error Handling
 
-**Patterns:**
-- Tool implementations usually return structured error dictionaries for expected input, path, or guardrail failures, for example `{"error": "path is required"}` in `src/agentic_workflows/tools/write_file.py` and `src/agentic_workflows/tools/search_files.py`.
-- API boundaries convert exceptions into structured `ErrorResponse` payloads, for example the `422` and `500` handlers in `src/agentic_workflows/api/app.py`.
-- Custom exception hierarchies are used for orchestration/provider failures, centered on `AgentError` in `src/agentic_workflows/errors.py` and `ProviderTimeoutError` in `src/agentic_workflows/orchestration/langgraph/provider.py`.
-- Bare `except` was not detected. Some integration boundaries intentionally use `except Exception as exc  # noqa: BLE001` for graceful degradation, for example in `src/agentic_workflows/orchestration/langgraph/provider.py`, `src/agentic_workflows/observability.py`, and `src/agentic_workflows/orchestration/langgraph/graph.py`.
+**Error hierarchy** in `src/agentic_workflows/errors.py`:
+```
+AgentError
+  RetryableAgentError
+    InvalidJSONError
+    SchemaValidationError
+    MissingActionError
+    UnknownActionError
+    ToolExecutionError
+    LLMError
+  FatalAgentError
+    UnknownToolError
+```
 
-**Error Types:**
-- Invalid request shapes are enforced with Pydantic `ValidationError` via models in `src/agentic_workflows/api/models.py`.
-- Provider/runtime failures are raised as exceptions and usually logged near the boundary.
-- Expected recoverable failures in tool code return data instead of raising, which keeps the planner/tool contract deterministic.
+**Tool error pattern:** Return `{"error": "..."}` dict rather than raising; caller inspects result:
+```python
+if operation not in SUPPORTED_OPS:
+    return {"error": f"unknown operation '{operation}'", "supported_operations": sorted(SUPPORTED_OPS)}
+```
+
+**Broad except with `# noqa: BLE001`:** Used in resilience-critical paths (provider retries, lifecycle hooks) where any exception must be caught to maintain graph execution. Not used in business logic.
+
+**`contextlib.suppress(Exception)`:** Used for optional/best-effort operations (e.g., truncating optional Postgres tables).
 
 ## Logging
 
-**Framework:**
-- Two logging styles are active.
-- Standard library logging is wrapped by `get_logger()` and `setup_dual_logging()` in `src/agentic_workflows/logger.py`.
-- `structlog` is used in the API layer, for example `src/agentic_workflows/api/app.py`, `src/agentic_workflows/api/routes/run.py`, and `src/agentic_workflows/api/routes/runs.py`.
-- Active levels include `debug`, `info`, `warning`, and `error`.
+**Framework:** stdlib `logging` (no structlog used in practice despite dependency declared)
 
-**Patterns:**
-- API logs use structured event names plus keyword context, for example `log.info("api.startup", status="graph_compiled", tools=tool_count)` in `src/agentic_workflows/api/app.py`.
-- Orchestration logs use high-signal text prefixes such as `RUN START`, `TOOL EXEC`, and `MISSION STATUS`, filtered by `AdminFilter` in `src/agentic_workflows/logger.py`.
-- Logging is concentrated at service boundaries, graph transitions, tool execution, and failure handling rather than in pure helper logic.
-- CLI and interactive flows use terminal output directly with `print()` or `console.print()` in `src/agentic_workflows/core/main.py`, `src/agentic_workflows/cli/user_run.py`, and `src/agentic_workflows/orchestration/langgraph/run.py`.
+**Logger creation:** `get_logger(name)` from `src/agentic_workflows/logger.py`:
+```python
+_LOG = get_logger("langgraph.action_parser")
+LOGGER = get_logger("langgraph.mission_auditor")
+```
+
+**Log format:** `"%(asctime)s | %(levelname)s | %(name)s | %(message)s"`
+
+**Dual-logging setup** via `setup_dual_logging()` — writes 4 log files:
+- `.tmp/log.txt` — verbose DEBUG+
+- `.tmp/admin_log.txt` — filtered operational events by prefix (e.g., `"TOOL EXEC"`, `"MISSION REPORT"`)
+- `.tmp/server_logs.txt` — INFO+
+- `.tmp/provider_logs.txt` — DEBUG+ from provider/graph/tool loggers
+
+**Log message style:** Prefix-driven uppercase markers for operational events:
+```python
+logger.info("TOOL EXEC %s args=%s", tool_name, args)
+logger.info("MISSION REPORT mission_id=%d result=%s", mission_id, result)
+```
 
 ## Comments
 
 **When to Comment:**
-- Module docstrings are common for purpose and context, for example `src/agentic_workflows/api/app.py`, `src/agentic_workflows/observability.py`, and `tests/integration/test_api_service.py`.
-- Inline comments explain why a guardrail or architectural choice exists, for example shell-script guardrails in `src/agentic_workflows/tools/write_file.py` and middleware ordering in `src/agentic_workflows/api/app.py`.
-- Section-divider comments such as `# ----- Routes -----` and `# ---------------------------------------------------------------------------` are common in both source and tests.
-- Obvious line-by-line comments are uncommon outside legacy or instructional test files.
+- Module-level docstrings: always present on most modules
+- Section separators with `# ---` dashes and a label (e.g., `# --- Two-number arithmetic ---`)
+- Inline `# noqa:` suppressions with the rule code always included
+- Bug fix context: `# Bug D: ...`, `# Phase 7.1 stabilization`
 
-**JSDoc/TSDoc:**
-- Not applicable.
-- Python docstrings are the documentation pattern for modules, classes, and many public functions.
-
-**TODO Comments:**
-- `TODO` and `FIXME` comments were not detected in `src/` or `tests/` via repository search on 2026-03-05.
+**No JSDoc-style argument docs:** Type annotations carry all type information; function docstrings describe behavior only.
 
 ## Function Design
 
-**Size:**
-- Small focused helpers are common in the tool layer, for example `_stat_entry()` in `src/agentic_workflows/tools/search_files.py`.
-- Large orchestration methods also exist where state-machine coordination is intentionally centralized, especially in `src/agentic_workflows/orchestration/langgraph/graph.py`.
-- Guard clauses and early returns are common in tool `execute()` methods and API handlers.
+**Keyword-only arguments** for factory functions with many optional params:
+```python
+def create_handoff(*, task_id: str, specialist: Literal[...], mission_id: int, tool_scope=None, ...):
+```
 
-**Parameters:**
-- Public APIs are usually typed.
-- Tool interfaces standardize on `execute(self, args: dict[str, Any])`.
-- Keyword-only arguments are used selectively for clarity, for example `save_run(self, run_id: str, *, status: str, **fields: Any)` in `src/agentic_workflows/storage/protocol.py`.
+**Return tuples for multi-value returns:**
+```python
+def parse_action_json(raw: str, step: int = 0) -> tuple[dict[str, Any], bool]:
+    # Returns (parsed_dict, used_fallback)
+```
 
-**Return Values:**
-- Explicit returns are standard.
-- Tools return structured dictionaries for both success and failure.
-- Cross-module contracts use `BaseModel`, `TypedDict`, or `Protocol` rather than untyped tuples, for example `RunRequest` in `src/agentic_workflows/api/models.py` and `RunResult` in `src/agentic_workflows/orchestration/langgraph/state_schema.py`.
+**Tool `execute()` always returns `dict[str, Any]`** — never raises on bad input; uses `{"error": "..."}` pattern.
+
+**Large orchestration methods** marked with `# noqa: C901` — `_plan_next_action` (~860 lines total in `planner_node.py`) and `_execute_action` in `executor_node.py` are intentionally monolithic.
 
 ## Module Design
 
-**Exports:**
-- Named exports are the norm for Python modules.
-- Compatibility or façade modules sometimes use explicit `__all__`, for example `src/agentic_workflows/orchestration/langgraph/langgraph_orchestrator.py` and `src/agentic_workflows/api/middleware/__init__.py`.
-- Default exports are not applicable in Python.
+**Single-responsibility modules:** Each module in `orchestration/langgraph/` has one clear role:
+- `action_parser.py` — JSON parsing only
+- `mission_auditor.py` — post-run audit only
+- `handoff.py` — handoff schema only
+- `state_schema.py` — state TypedDict + factory only
 
-**Barrel Files:**
-- Minimal `__init__.py` files are used; many are empty markers such as `src/agentic_workflows/api/routes/__init__.py` and `src/agentic_workflows/cli/__init__.py`.
-- Selective re-export barrels exist, but broad barrel-file usage is limited.
-- Cross-layer import boundaries are documented in `AGENTS.md` and generally reflected in package layout: `src/agentic_workflows/directives/`, `src/agentic_workflows/orchestration/`, and `src/agentic_workflows/tools/`.
+**Tool class pattern** (in `src/agentic_workflows/tools/`):
+- Subclass `Tool` from `tools/base.py`
+- Set `name: str` and `description: str` as class variables
+- Set `_args_schema: dict[str, dict[str, str]]` as class variable for typed schema
+- Implement `execute(self, args: dict[str, Any]) -> dict[str, Any]`
 
-*Convention analysis: 2026-03-05*
-*Update when patterns change*
+**Imports inside functions** with `# noqa: PLC0415` used sparingly for circular-import avoidance in large orchestration modules.
+
+---
+
+*Convention analysis: 2026-03-12*
