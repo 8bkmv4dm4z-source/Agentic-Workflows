@@ -100,7 +100,7 @@ def clean_pg(pg_pool):
     with pg_pool.connection() as conn:
         conn.execute("TRUNCATE graph_checkpoints, runs, memo_entries")
         # Phase 7.3 tables — graceful if migrations not yet applied
-        for table in ("mission_contexts", "mission_artifacts"):
+        for table in ("mission_contexts", "mission_artifacts", "tool_result_cache"):
             with contextlib.suppress(Exception):
                 conn.execute(f"TRUNCATE {table}")  # noqa: S608
     yield
