@@ -112,12 +112,21 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         embedding_provider=type(embedding_provider).__name__,
     )
 
+    fallback_provider = None
+    if os.environ.get("GROQ_API_KEY"):
+        try:
+            from agentic_workflows.orchestration.langgraph.provider import GroqChatProvider
+            fallback_provider = GroqChatProvider()
+        except Exception as _exc:  # noqa: BLE001
+            log.warning("api.startup", fallback_provider="groq_init_failed", error=str(_exc))
+
     orchestrator = LangGraphOrchestrator(
         memo_store=memo_store,
         checkpoint_store=checkpoint_store,
         embedding_provider=embedding_provider,
         mission_context_store=mission_context_store,
         artifact_store=artifact_store,  # NEW — was created above, now forwarded
+        fallback_provider=fallback_provider,
     )
     application.state.orchestrator = orchestrator
     application.state.run_store = run_store
