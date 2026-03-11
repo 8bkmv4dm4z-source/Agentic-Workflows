@@ -59,6 +59,7 @@ from agentic_workflows.orchestration.langgraph.provider import (
     ChatProvider,
     LlamaCppChatProvider,
     ProviderTimeoutError,
+    _detect_llama_cpp_model,
     build_provider,
 )
 from agentic_workflows.orchestration.langgraph.specialist_evaluator import build_evaluator_subgraph
@@ -95,6 +96,14 @@ except ImportError:  # pragma: no cover
 
 
 _api_logger = get_logger("api_debug")
+
+
+def _build_port_url(base_url: str, port: int) -> str:
+    """Return *base_url* with its port component replaced by *port*."""
+    from urllib.parse import urlparse, urlunparse
+
+    parsed = urlparse(base_url)
+    return urlunparse(parsed._replace(netloc=f"{parsed.hostname}:{port}"))
 
 
 class MemoizationPolicyViolation(RuntimeError):
@@ -255,6 +264,32 @@ class LangGraphOrchestrator:
                 strong_provider=self.provider,
                 fast_provider=fast_provider,
             )
+        # Role-specific port routing (SYCL multi-server support)
+        self._planner_provider: ChatProvider = self.provider
+        self._executor_provider: ChatProvider = self.provider
+        if isinstance(self.provider, LlamaCppChatProvider):
+            _planner_port = os.getenv("LLAMA_CPP_PLANNER_PORT")
+            _executor_port = os.getenv("LLAMA_CPP_EXECUTOR_PORT")
+            if _planner_port:
+                _p_url = _build_port_url(str(self.provider.client.base_url), int(_planner_port))
+                if _detect_llama_cpp_model(_p_url) is not None:
+                    self._planner_provider = self.provider.with_port(int(_planner_port))
+                else:
+                    _LOG_ORCH = get_logger("langgraph.orchestrator")
+                    _LOG_ORCH.warning(
+                        "LLAMA_CPP_PLANNER_PORT=%s server unreachable — using default server for planner",
+                        _planner_port,
+                    )
+            if _executor_port:
+                _e_url = _build_port_url(str(self.provider.client.base_url), int(_executor_port))
+                if _detect_llama_cpp_model(_e_url) is not None:
+                    self._executor_provider = self.provider.with_port(int(_executor_port))
+                else:
+                    _LOG_ORCH = get_logger("langgraph.orchestrator")
+                    _LOG_ORCH.warning(
+                        "LLAMA_CPP_EXECUTOR_PORT=%s server unreachable — using default server for executor",
+                        _executor_port,
+                    )
         self.memo_store = memo_store or SQLiteMemoStore()
         self.checkpoint_store = checkpoint_store or SQLiteCheckpointStore()
         self.policy = policy or MemoizationPolicy()
@@ -1134,6 +1169,7 @@ class LangGraphOrchestrator:
             model_output = self._generate_with_hard_timeout(
                 state["messages"],
                 signals=_signals,
+                provider=self._planner_provider,
             ).strip()
             self.logger.info("MODEL OUTPUT step=%s output=%s", state["step"], model_output[:500])
             _api_logger.info(
@@ -1934,18 +1970,19 @@ class LangGraphOrchestrator:
         self,
         messages: list[dict[str, str]],
         signals: RoutingSignals,
+        provider: ChatProvider | None = None,
     ) -> str:
         """Protect planner generate() call with a hard wall-clock timeout."""
         timeout_seconds = self.plan_call_timeout_seconds
-        provider = self._router.route_by_signals(signals)
+        _active_provider = provider if provider is not None else self._router.route_by_signals(signals)
         if timeout_seconds <= 0:
-            return provider.generate(messages, response_schema=self._action_json_schema)
+            return _active_provider.generate(messages, response_schema=self._action_json_schema)
 
         outbox: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
 
         def _run() -> None:
             try:
-                outbox.put(("ok", provider.generate(messages, response_schema=self._action_json_schema)))
+                outbox.put(("ok", _active_provider.generate(messages, response_schema=self._action_json_schema)))
             except Exception as exc:  # noqa: BLE001
                 outbox.put(("err", exc))
 

@@ -1,6 +1,7 @@
 """Unit tests for SYCL-01: with_port() factory and orchestrator port env var wiring."""
 from __future__ import annotations
 
+import os
 from unittest.mock import patch
 
 import pytest
@@ -13,17 +14,14 @@ except ImportError:
 
 def _make_provider() -> "LlamaCppChatProvider":
     """Create a LlamaCppChatProvider with no live server (LLAMA_CPP_MODEL=test)."""
-    import os
-    from unittest.mock import patch as _patch
-
     env = {
         "LLAMA_CPP_BASE_URL": "http://127.0.0.1:8080/v1",
         "LLAMA_CPP_MODEL": "test-model",
-        "P1_PROVIDER": "llamacpp",
+        "P1_PROVIDER": "llama-cpp",
     }
-    with _patch.dict(os.environ, env):
+    with patch.dict(os.environ, env):
         # Patch _detect_llama_cpp_model so no HTTP call is made at __init__
-        with _patch(
+        with patch(
             "agentic_workflows.orchestration.langgraph.provider._detect_llama_cpp_model",
             return_value="test-model",
         ):
@@ -68,25 +66,21 @@ class TestWithPortFactory:
 class TestOrchestratorPortEnvVarWiring:
     def test_orchestrator_reads_planner_port_env(self) -> None:
         """When LLAMA_CPP_PLANNER_PORT=9090 set, orchestrator._planner_provider URL has port 9090."""
-        import os
-        from unittest.mock import patch as _patch
-
         from agentic_workflows.orchestration.langgraph.graph import LangGraphOrchestrator
-        from agentic_workflows.orchestration.langgraph.provider import ScriptedChatProvider
 
         env = {
             "LLAMA_CPP_BASE_URL": "http://127.0.0.1:8080/v1",
             "LLAMA_CPP_MODEL": "test-model",
-            "P1_PROVIDER": "llamacpp",
+            "P1_PROVIDER": "llama-cpp",
             "LLAMA_CPP_PLANNER_PORT": "9090",
         }
-        with _patch.dict(os.environ, env, clear=False):
-            with _patch(
+        with patch.dict(os.environ, env, clear=False):
+            with patch(
                 "agentic_workflows.orchestration.langgraph.provider._detect_llama_cpp_model",
                 return_value="test-model",
             ):
-                # _detect_llama_cpp_model called in graph.py init to check port reachability
-                with _patch(
+                # _detect_llama_cpp_model imported into graph.py — patch there too
+                with patch(
                     "agentic_workflows.orchestration.langgraph.graph._detect_llama_cpp_model",
                     return_value="test-model",
                 ):
@@ -96,23 +90,20 @@ class TestOrchestratorPortEnvVarWiring:
 
     def test_orchestrator_reads_executor_port_env(self) -> None:
         """When LLAMA_CPP_EXECUTOR_PORT=9091 set, orchestrator._executor_provider URL has port 9091."""
-        import os
-        from unittest.mock import patch as _patch
-
         from agentic_workflows.orchestration.langgraph.graph import LangGraphOrchestrator
 
         env = {
             "LLAMA_CPP_BASE_URL": "http://127.0.0.1:8080/v1",
             "LLAMA_CPP_MODEL": "test-model",
-            "P1_PROVIDER": "llamacpp",
+            "P1_PROVIDER": "llama-cpp",
             "LLAMA_CPP_EXECUTOR_PORT": "9091",
         }
-        with _patch.dict(os.environ, env, clear=False):
-            with _patch(
+        with patch.dict(os.environ, env, clear=False):
+            with patch(
                 "agentic_workflows.orchestration.langgraph.provider._detect_llama_cpp_model",
                 return_value="test-model",
             ):
-                with _patch(
+                with patch(
                     "agentic_workflows.orchestration.langgraph.graph._detect_llama_cpp_model",
                     return_value="test-model",
                 ):
@@ -122,17 +113,17 @@ class TestOrchestratorPortEnvVarWiring:
 
     def test_orchestrator_fallback_when_no_port_envs(self) -> None:
         """Without port env vars, _planner_provider and _executor_provider are the same object as provider."""
-        import os
-        from unittest.mock import patch as _patch
+        from tests.conftest import ScriptedProvider
 
         from agentic_workflows.orchestration.langgraph.graph import LangGraphOrchestrator
-        from agentic_workflows.orchestration.langgraph.provider import ScriptedChatProvider
 
-        # Use scripted provider to avoid any HTTP calls
-        scripted = ScriptedChatProvider(responses=["{}"])
-        env_clean = {k: v for k, v in os.environ.items()
-                     if k not in ("LLAMA_CPP_PLANNER_PORT", "LLAMA_CPP_EXECUTOR_PORT")}
-        with _patch.dict(os.environ, {}, clear=True):
+        scripted = ScriptedProvider(responses=["{}"])
+        # Clear port env vars so no routing happens
+        env_overrides = {"LLAMA_CPP_PLANNER_PORT": "", "LLAMA_CPP_EXECUTOR_PORT": ""}
+        with patch.dict(os.environ, env_overrides, clear=False):
+            # Remove the keys if they exist
+            for key in ("LLAMA_CPP_PLANNER_PORT", "LLAMA_CPP_EXECUTOR_PORT"):
+                os.environ.pop(key, None)
             orch = LangGraphOrchestrator(provider=scripted)
 
         assert orch._planner_provider is orch.provider
@@ -141,28 +132,26 @@ class TestOrchestratorPortEnvVarWiring:
     def test_orchestrator_warn_on_unreachable_port(self) -> None:
         """When configured port server is unreachable, logs warning and falls back (no hard fail)."""
         import logging
-        import os
-        from unittest.mock import patch as _patch
 
         from agentic_workflows.orchestration.langgraph.graph import LangGraphOrchestrator
 
         env = {
             "LLAMA_CPP_BASE_URL": "http://127.0.0.1:8080/v1",
             "LLAMA_CPP_MODEL": "test-model",
-            "P1_PROVIDER": "llamacpp",
+            "P1_PROVIDER": "llama-cpp",
             "LLAMA_CPP_PLANNER_PORT": "9099",  # unreachable port
         }
-        with _patch.dict(os.environ, env, clear=False):
-            with _patch(
+        with patch.dict(os.environ, env, clear=False):
+            with patch(
                 "agentic_workflows.orchestration.langgraph.provider._detect_llama_cpp_model",
                 return_value="test-model",
             ):
                 # _detect_llama_cpp_model in graph.py returns None → unreachable
-                with _patch(
+                with patch(
                     "agentic_workflows.orchestration.langgraph.graph._detect_llama_cpp_model",
                     return_value=None,
                 ):
-                    with pytest.warns(None):
-                        orch = LangGraphOrchestrator()  # must not raise
+                    # Must not raise — soft fallback
+                    orch = LangGraphOrchestrator()
         # Falls back to default provider
         assert orch._planner_provider is orch.provider
