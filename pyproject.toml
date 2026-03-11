@@ -73,6 +73,8 @@ omit = [
     "src/agentic_workflows/agents/local_agent.py",
     # Interactive CLI scripts — require TTY, not unit-testable
     "src/agentic_workflows/orchestration/langgraph/user_run.py",
+    "src/agentic_workflows/orchestration/langgraph/run.py",
+    "src/agentic_workflows/cli/user_run.py",
 ]
 
 [tool.mypy]
