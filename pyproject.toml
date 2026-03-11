@@ -65,6 +65,16 @@ markers = [
     "postgres: requires PostgreSQL database (DATABASE_URL env var)",
 ]
 
+[tool.coverage.run]
+omit = [
+    # Legacy P0 baseline — superseded by LangGraph orchestrator
+    "src/agentic_workflows/core/main.py",
+    "src/agentic_workflows/core/orchestrator.py",
+    "src/agentic_workflows/agents/local_agent.py",
+    # Interactive CLI scripts — require TTY, not unit-testable
+    "src/agentic_workflows/orchestration/langgraph/user_run.py",
+]
+
 [tool.mypy]
 python_version = "3.12"
 warn_return_any = true
