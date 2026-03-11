@@ -84,3 +84,32 @@ class ToolResultCache:
                 )
             return None
         return full_result
+
+    def get_by_key(self, *, args_hash: str) -> str | None:
+        """Retrieve cached full result by args_hash alone (tool_name not required).
+
+        Returns None on miss, expired entry, or pool=None.
+        Logs WARNING and evicts row when result is expired.
+        """
+        if self._pool is None:
+            return None
+        with self._pool.connection() as conn:
+            row = conn.execute(
+                "SELECT full_result, expires_at FROM tool_result_cache WHERE args_hash = %s",
+                (args_hash,),
+            ).fetchone()
+        if row is None:
+            return None
+        full_result, expires_at = row
+        if expires_at < datetime.now(tz=UTC):
+            import logging as _logging  # noqa: PLC0415
+
+            _logging.getLogger(__name__).warning(
+                "retrieve_tool_result: key %s expired at %s — evicting", args_hash[:8], expires_at
+            )
+            with self._pool.connection() as conn:
+                conn.execute(
+                    "DELETE FROM tool_result_cache WHERE args_hash = %s", (args_hash,)
+                )
+            return None
+        return full_result
