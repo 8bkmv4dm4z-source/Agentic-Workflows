@@ -1,7 +1,8 @@
-"""Unit tests for LlamaCppChatProvider.with_alias() factory method."""
+"""Unit tests for LlamaCppChatProvider: with_alias() and grammar auto-detection."""
 
 from __future__ import annotations
 
+import os
 from unittest.mock import MagicMock, patch
 
 
@@ -85,3 +86,64 @@ class TestLlamaCppWithAlias:
         assert alias_a.model == "planner"
         assert alias_b.model == "executor"
         assert alias_a.client is alias_b.client  # both share source client
+
+
+@patch("agentic_workflows.orchestration.langgraph.provider.OpenAI")
+@patch(
+    "agentic_workflows.orchestration.langgraph.provider._detect_llama_cpp_model",
+    return_value="Qwen3-8B-Q4_K_M.gguf",
+)
+class TestLlamaCppGrammarAutoDetect:
+    """Tests for Qwen3 grammar auto-detection in LlamaCppChatProvider."""
+
+    def test_qwen3_auto_disables_grammar(
+        self, mock_detect: MagicMock, mock_openai: MagicMock
+    ) -> None:
+        """Grammar is auto-disabled for Qwen3 models when env var is unset."""
+        from agentic_workflows.orchestration.langgraph.provider import LlamaCppChatProvider
+
+        with patch.dict(os.environ, {}, clear=False):
+            # Ensure LLAMA_CPP_GRAMMAR is not set
+            os.environ.pop("LLAMA_CPP_GRAMMAR", None)
+            provider = LlamaCppChatProvider()
+        assert provider._grammar_enabled is False
+
+    def test_qwen3_explicit_grammar_true_overrides_auto(
+        self, mock_detect: MagicMock, mock_openai: MagicMock
+    ) -> None:
+        """Explicit LLAMA_CPP_GRAMMAR=true overrides Qwen3 auto-detection."""
+        from agentic_workflows.orchestration.langgraph.provider import LlamaCppChatProvider
+
+        with patch.dict(os.environ, {"LLAMA_CPP_GRAMMAR": "true"}, clear=False):
+            provider = LlamaCppChatProvider()
+        assert provider._grammar_enabled is True
+
+    def test_qwen3_explicit_grammar_false_respected(
+        self, mock_detect: MagicMock, mock_openai: MagicMock
+    ) -> None:
+        """Explicit LLAMA_CPP_GRAMMAR=false is respected for Qwen3."""
+        from agentic_workflows.orchestration.langgraph.provider import LlamaCppChatProvider
+
+        with patch.dict(os.environ, {"LLAMA_CPP_GRAMMAR": "false"}, clear=False):
+            provider = LlamaCppChatProvider()
+        assert provider._grammar_enabled is False
+
+
+@patch("agentic_workflows.orchestration.langgraph.provider.OpenAI")
+@patch(
+    "agentic_workflows.orchestration.langgraph.provider._detect_llama_cpp_model",
+    return_value="Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+)
+class TestLlamaCppGrammarNonQwen3:
+    """Grammar stays enabled for non-Qwen3 models."""
+
+    def test_non_qwen3_grammar_enabled_by_default(
+        self, mock_detect: MagicMock, mock_openai: MagicMock
+    ) -> None:
+        """Non-Qwen3 models have grammar enabled by default."""
+        from agentic_workflows.orchestration.langgraph.provider import LlamaCppChatProvider
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("LLAMA_CPP_GRAMMAR", None)
+            provider = LlamaCppChatProvider()
+        assert provider._grammar_enabled is True

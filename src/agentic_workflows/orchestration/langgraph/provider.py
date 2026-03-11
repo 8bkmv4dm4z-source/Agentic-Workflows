@@ -542,10 +542,25 @@ class LlamaCppChatProvider(_RetryingProviderBase):
             base_url=resolved_base_url,
             timeout=self.timeout_seconds,
         )
-        # Grammar enforcement: disabled per-request when LLAMA_CPP_GRAMMAR=false
-        self._grammar_enabled = os.getenv("LLAMA_CPP_GRAMMAR", "true").strip().lower() not in (
-            "0", "false", "no"
-        )
+        # Grammar enforcement: disabled per-request when LLAMA_CPP_GRAMMAR=false.
+        # Auto-disabled for Qwen3 models: GBNF grammar blocks <think> tokens even
+        # when /no_think is appended, causing empty output (deadlock).  Qwen3 works
+        # correctly with json_schema response_format instead.
+        env_grammar = os.getenv("LLAMA_CPP_GRAMMAR", "").strip().lower()
+        if env_grammar in ("0", "false", "no"):
+            self._grammar_enabled = False
+        elif env_grammar in ("1", "true", "yes"):
+            self._grammar_enabled = True
+        else:
+            # Auto-detect: disable grammar for Qwen3 models
+            _is_qwen3 = "qwen3" in self.model.lower()
+            self._grammar_enabled = not _is_qwen3
+            if _is_qwen3:
+                _LOG.info(
+                    "LLAMA-CPP grammar auto-disabled for Qwen3 model=%s "
+                    "(GBNF conflicts with thinking tokens; using json_schema instead)",
+                    self.model,
+                )
 
     def context_size(self) -> int:
         return int(os.getenv("LLAMA_CPP_N_CTX", "8192"))
@@ -612,11 +627,15 @@ class LlamaCppChatProvider(_RetryingProviderBase):
             return self.client.chat.completions.create(**kwargs)
 
         def _request_plain_mode() -> object:
+            # Strip grammar from extra_body so the model is truly unconstrained.
+            # Keeping enable_thinking but dropping grammar allows Qwen3 /no_think
+            # to work without GBNF blocking its internal token generation.
+            plain_extra = {k: v for k, v in extra.items() if k != "grammar"} if extra else None
             return self.client.chat.completions.create(
                 model=self.model,
                 messages=prepared,
                 timeout=self.timeout_seconds,
-                extra_body=extra if extra else None,
+                extra_body=plain_extra if plain_extra else None,
             )
 
         try:
@@ -627,6 +646,10 @@ class LlamaCppChatProvider(_RetryingProviderBase):
         if content is None:
             raise ValueError("Model returned empty content.")
         if not content:
+            _LOG.warning(
+                "LLAMA-CPP empty content from json_mode (grammar=%s) — retrying plain mode for model=%s",
+                self._grammar_enabled, self.model,
+            )
             try:
                 response = self._request_with_retries(_request_plain_mode)
                 content = response.choices[0].message.content or ""
