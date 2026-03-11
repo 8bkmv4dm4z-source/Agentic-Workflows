@@ -171,6 +171,5 @@ def build_tool_registry(
         registry["retrieve_run_context"] = RetrieveRunContextTool(checkpoint_store)
     if mission_context_store is not None:
         registry["query_context"] = QueryContextTool(mission_context_store, embedding_provider)
-    if tool_result_cache is not None:
-        registry["retrieve_tool_result"] = RetrieveToolResultTool(tool_result_cache)
+    registry["retrieve_tool_result"] = RetrieveToolResultTool(tool_result_cache)
     return registry

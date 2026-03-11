@@ -66,6 +66,8 @@ EXECUTOR_TOOLS = frozenset(
         "encode_decode",
         "validate_data",
         "retrieve_run_context",
+        # Phase 8 additions
+        "retrieve_tool_result",
     }
 )
 

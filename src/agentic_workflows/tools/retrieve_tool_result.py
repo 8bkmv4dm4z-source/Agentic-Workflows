@@ -40,6 +40,9 @@ class RetrieveToolResultTool(Tool):
         except (ValueError, TypeError):
             return {"error": "offset and limit must be integers"}
 
+        if self._cache is None:
+            return {"error": "cache miss — result expired or not found"}
+
         full_result = self._cache.get_by_key(args_hash=key)
 
         if full_result is None:
