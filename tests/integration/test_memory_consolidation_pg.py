@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 psycopg_pool = pytest.importorskip("psycopg_pool")
 
-from conftest import requires_postgres
+requires_postgres = pytest.mark.skipif(
+    not os.environ.get("DATABASE_URL"),
+    reason="DATABASE_URL not set -- skipping Postgres tests",
+)
 
 from agentic_workflows.storage.memory_consolidation import consolidate_memories
 
