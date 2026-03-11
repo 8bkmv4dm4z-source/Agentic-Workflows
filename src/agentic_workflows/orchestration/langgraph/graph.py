@@ -275,6 +275,8 @@ class LangGraphOrchestrator:
         self._mission_context_store = mission_context_store
         self._artifact_store = artifact_store
         self.context_manager = ContextManager(
+            large_result_threshold=800,
+            sliding_window_cap=20,
             mission_context_store=mission_context_store,
             embedding_provider=embedding_provider,
             artifact_store=artifact_store,
@@ -2450,11 +2452,26 @@ class LangGraphOrchestrator:
                 "Previous tool output failed deterministic content validation. "
                 f"Fix and rerun this task. {validation_error}"
             )
+        # Gate: truncate large tool results BEFORE they enter state["messages"].
+        # This prevents context overflow on the next planner call.
+        # on_tool_result() below still receives the full result for artifact extraction.
+        _tool_result_json = json.dumps(tool_result)
+        _threshold = getattr(self.context_manager, "large_result_threshold", 800)
+        if len(_tool_result_json) > _threshold:
+            _tool_result_for_msg = (
+                f"[tool_result: {tool_name}, {len(_tool_result_json)} chars, stored in context]"
+            )
+            self.logger.info(
+                "TOOL RESULT TRUNCATED step=%s tool=%s original_len=%d threshold=%d",
+                state["step"], tool_name, len(_tool_result_json), _threshold,
+            )
+        else:
+            _tool_result_for_msg = _tool_result_json
         state["messages"].append(
             {
                 "role": "system",
                 "content": (
-                    f"TOOL_RESULT #{call_number} ({tool_name}): {json.dumps(tool_result)}\n"
+                    f"TOOL_RESULT #{call_number} ({tool_name}): {_tool_result_for_msg}\n"
                     f"{progress_hint}"
                 ),
             }

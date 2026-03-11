@@ -622,18 +622,20 @@ class ContextManager:
         replaced = False
 
         if result_len > self.large_result_threshold:
-            # Find the most recent tool result message for this tool
+            # Fallback retroactive replacement for any tool result messages that were
+            # appended before this method was called (e.g. retrieve_memo, write_file paths).
+            # The primary gating path in graph.py _execute_action truncates BEFORE append,
+            # so this branch fires only for code paths that bypass that gate.
+            # Message format is: "TOOL_RESULT #N (tool_name): ..." (underscore, step number).
             messages: list[dict[str, Any]] = state.get("messages", [])
             for i in range(len(messages) - 1, -1, -1):
                 msg = messages[i]
                 content = msg.get("content", "")
-                if f"TOOL RESULT ({tool_name})" in content or (
-                    msg.get("role") == "user" and tool_name in content and "TOOL RESULT" in content
-                ):
+                if f"TOOL_RESULT" in content and f"({tool_name})" in content:
                     messages[i] = {
-                        "role": "user",
+                        "role": msg.get("role", "system"),
                         "content": (
-                            f"[Orchestrator] [tool_result: {tool_name}, "
+                            f"[tool_result: {tool_name}, "
                             f"{result_len} chars, stored in context]"
                         ),
                     }

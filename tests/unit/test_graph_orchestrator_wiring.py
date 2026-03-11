@@ -5,9 +5,22 @@ are forwarded from LangGraphOrchestrator.__init__ to ContextManager.
 
 SC-2 (Phase 07.5 Plan 02): artifact_store constructor wiring tests.
 """
-from unittest.mock import MagicMock
+import pytest
+from unittest.mock import MagicMock, patch
 
 from agentic_workflows.orchestration.langgraph.graph import LangGraphOrchestrator
+
+
+@pytest.fixture(autouse=True)
+def _mock_build_provider():
+    """Prevent build_provider() from reading P1_PROVIDER env in CI (e.g. 'scripted')."""
+    mock_provider = MagicMock()
+    mock_provider.context_size.return_value = 8192
+    with patch(
+        "agentic_workflows.orchestration.langgraph.graph.build_provider",
+        return_value=mock_provider,
+    ):
+        yield
 
 
 class TestLangGraphOrchestratorWiring:

@@ -31,24 +31,32 @@ def test_compact_sliding_window_enforced():
 
 
 def test_on_tool_result_replaces_large_result():
-    """on_tool_result() replaces messages with content > threshold with placeholders."""
+    """on_tool_result() replaces messages with content > threshold with placeholders.
+
+    Message format is 'TOOL_RESULT #N (tool_name):' (underscore, step number) — this is
+    the format produced by graph.py _execute_action and the retroactive replacement in
+    on_tool_result must match it correctly.
+    """
     cm = ContextManager(large_result_threshold=50)
-    large_content = "TOOL RESULT (read_file):\n" + "x" * 200
+    large_result = {"data": "x" * 200}
+    import json
+    large_json = json.dumps(large_result)
+    # Use the real message format produced by graph.py
+    large_content = f"TOOL_RESULT #1 (read_file): {large_json}\nContinue."
     messages = [
         {"role": "system", "content": "sys"},
-        {"role": "user", "content": large_content},
+        {"role": "system", "content": large_content},
     ]
     state = _state_with_messages(messages)
     cm.on_tool_result(
         state,
         tool_name="read_file",
-        result={"data": "x" * 200},
+        result=large_result,
         args={},
         mission_id=0,
     )
     replaced = state["messages"][1]
-    assert replaced["role"] == "user"
-    assert "[Orchestrator]" in replaced["content"]
+    assert replaced["role"] == "system"
     assert "[tool_result: read_file" in replaced["content"]
     assert "chars" in replaced["content"]
 
@@ -68,22 +76,26 @@ def test_system_prompt_never_evicted():
 
 
 def test_placeholder_format():
-    """Evicted message placeholder follows the [Orchestrator] [tool_result: ...] format."""
+    """Evicted message placeholder follows the [tool_result: tool_name, N chars, stored in context] format."""
+    import json
     cm = ContextManager(large_result_threshold=50)
+    result = {"data": "x" * 300}
+    result_json = json.dumps(result)
+    # Use the real message format produced by graph.py _execute_action
     messages = [
         {"role": "system", "content": "sys"},
-        {"role": "user", "content": "TOOL RESULT (my_tool):\n" + "x" * 300},
+        {"role": "system", "content": f"TOOL_RESULT #1 (my_tool): {result_json}\nContinue."},
     ]
     state = _state_with_messages(messages)
     cm.on_tool_result(
         state,
         tool_name="my_tool",
-        result={"data": "x" * 300},
+        result=result,
         args={},
         mission_id=0,
     )
     placeholder = state["messages"][1]["content"]
-    assert placeholder.startswith("[Orchestrator] [tool_result: my_tool,")
+    assert "[tool_result: my_tool," in placeholder
     assert "chars, stored in context]" in placeholder
 
 

@@ -387,12 +387,18 @@ class TestLargeResultEviction:
     """on_tool_result() replaces large results with compact placeholders."""
 
     def test_large_result_eviction(self):
+        """on_tool_result retroactive replacement uses the real message format:
+        'TOOL_RESULT #N (tool_name):' (underscore + step number, as produced by graph.py).
+        """
+        import json
         cm = ContextManager(large_result_threshold=100)
         large_result = {"data": "x" * 200}
+        large_json = json.dumps(large_result)
         messages = [
             {"role": "system", "content": "sys"},
             {"role": "user", "content": "do something"},
-            {"role": "user", "content": f"TOOL RESULT (big_tool):\n{{'data': '{'x' * 200}'}}"},
+            # Use the real format from graph.py _execute_action
+            {"role": "system", "content": f"TOOL_RESULT #1 (big_tool): {large_json}\nContinue."},
         ]
         ctx = MissionContext(mission_id=1, goal="test", step_range=(1, 3))
         state = _make_state(
@@ -403,8 +409,7 @@ class TestLargeResultEviction:
 
         # The large tool result message should be replaced with a placeholder
         replaced = state["messages"][2]
-        assert replaced["role"] == "user"
-        assert "[Orchestrator]" in replaced["content"]
+        assert replaced["role"] == "system"
         assert "[tool_result: big_tool" in replaced["content"]
         assert "chars" in replaced["content"]
 
