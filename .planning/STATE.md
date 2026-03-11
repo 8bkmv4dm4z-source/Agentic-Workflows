@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
 status: completed
-last_updated: "2026-03-11T14:04:57.657Z"
+last_updated: "2026-03-11T14:09:34.337Z"
 last_activity: "2026-03-10 — Quick-6: spaCy clause splitting, partial mission persistence, provider fix"
 progress:
   total_phases: 17
   completed_phases: 15
   total_plans: 72
-  completed_plans: 69
+  completed_plans: 70
   percent: 100
 ---
 
@@ -98,6 +98,7 @@ Progress: [██████████] 100% (69/69 plans complete, Phase 7.9
 | Phase 07.9 P02 | 4min | 2 tasks | 4 files |
 | Phase 07.9 P04 | 4min | 2 tasks | 3 files |
 | Phase 08 P01 | 8 | 2 tasks | 3 files |
+| Phase 08 P04 | 144s | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -234,6 +235,9 @@ Recent decisions affecting current work:
 - [Quick-6]: persist_partial_missions() called in _finalize() after audit for cross-run continuity of timed-out missions
 - [Phase 08]: Wave 0 stubs use NotImplementedError (not pytest.skip) to guarantee RED state — skip counts as not-FAILED per 07.6-00 decision
 - [Phase 08]: Integration stubs use pytest.importorskip('psycopg_pool') + requires_postgres marker — project-standard pattern from Phase 7
+- [Phase 08]: pool=None no-op on both store() and get() — ToolResultCache safe in SQLite/CI deployments without live DB
+- [Phase 08]: Lazy TTL eviction on get() — inline DELETE when expires_at < now, no background sweep needed
+- [Phase 08]: make_args_hash() uses sort_keys=True JSON serialization — dict key ordering never breaks cache
 
 ### Roadmap Evolution
 

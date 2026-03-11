@@ -346,7 +346,7 @@ Plans:
   3. `run.py` and `user_run.py` instantiate `ArtifactStore(pool=pg_pool)` when `DATABASE_URL` is set and pass it to the orchestrator
   4. All existing 1198+ tests pass unchanged
 
-**Plans:** 1/5 plans executed
+**Plans:** 2/5 plans executed
 Plans:
 - [ ] 07.5-01-PLAN.md — Add `artifact_store` param to `ContextManager.__init__`; wire `_persist_mission_context()` to call `artifact_store.upsert()` for each artifact
 - [ ] 07.5-02-PLAN.md — Add `artifact_store` param to `LangGraphOrchestrator.__init__`; forward to `ContextManager`
@@ -377,4 +377,4 @@ Phases execute in numeric order: 2 → 3 → 4 → 5 → 6 → 7 → 7.1 → 7.2
 | 7.7. Hybrid Intent Classifier + Few-Shot Prompts (INSERTED) | 4/4 | Complete   | 2026-03-10 |
 | 7.8. Multi-Model Routing + Cloud Fallback (INSERTED) | 3/4 | In Progress|  |
 | 7.9. Dynamic Context + Compliance Observability (INSERTED) | 4/4 | Complete   | 2026-03-10 |
-| 8. Multi-Model SYCL Routing and Planner Bottleneck Resolution | 1/5 | In Progress|  |
+| 8. Multi-Model SYCL Routing and Planner Bottleneck Resolution | 2/5 | In Progress|  |
