@@ -631,7 +631,7 @@ class ContextManager:
             for i in range(len(messages) - 1, -1, -1):
                 msg = messages[i]
                 content = msg.get("content", "")
-                if f"TOOL_RESULT" in content and f"({tool_name})" in content:
+                if "TOOL_RESULT" in content and f"({tool_name})" in content:
                     messages[i] = {
                         "role": msg.get("role", "system"),
                         "content": (

@@ -11,10 +11,7 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from agentic_workflows.orchestration.langgraph.context_manager import ContextManager
-
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -72,19 +69,14 @@ class TestOnToolResultStringMatch:
         """The broken old search string 'TOOL RESULT (name)' must NOT match the real format."""
         # This test documents the bug: the old code used 'TOOL RESULT' (space) but messages
         # use 'TOOL_RESULT' (underscore). Verify the new code uses the correct format.
-        cm = ContextManager(large_result_threshold=100)
         large_result = _make_large_result(500)
         large_json = json.dumps(large_result)
 
         # Message uses the real format (underscore + number)
         real_format_content = f"TOOL_RESULT #1 (search_files): {large_json}\nContinue."
-        state = _make_state([
-            {"role": "system", "content": "system prompt"},
-            {"role": "system", "content": real_format_content},
-        ])
 
         # Simulate the OLD buggy behaviour: search for wrong string
-        broken_search = f"TOOL RESULT (search_files)"
+        broken_search = "TOOL RESULT (search_files)"
         assert broken_search not in real_format_content  # confirms the bug
 
         # Confirm the NEW correct search string IS present
@@ -119,7 +111,6 @@ class TestGraphExecuteActionGating:
 
     def _build_minimal_orchestrator(self):
         """Build a LangGraphOrchestrator with all external dependencies mocked."""
-        from unittest.mock import MagicMock, patch
 
         with patch.dict(
             "os.environ",
