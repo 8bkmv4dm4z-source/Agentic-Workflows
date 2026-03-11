@@ -19,7 +19,6 @@ Import from state_schema, provider, etc. directly.
 
 import os
 import queue
-import re
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -146,52 +145,136 @@ class PlannerHelpersMixin:
         }
 
     def _build_system_prompt(self) -> str:  # type: ignore[return]
-        """Construct strict planner prompt and tool/memo policy contract."""
-        from agentic_workflows.orchestration.langgraph import directives  # noqa: PLC0415
+        """Construct strict planner prompt and tool/memo policy contract.
 
-        cwd = os.getcwd()
-        codebase_context = self._build_codebase_context(cwd)
+        Two tiers:
+        - compact: for providers with context_size <= 10000 (e.g. phi4/llama-cpp 8192).
+          Contains COMPACT directive from supervisor.md, tool names only (no arg signatures),
+          and env block. Avoids context overflow on small-window models.
+        - full: existing behavior with detailed tool arg signatures + env block prepended.
+        """
+        # AGENT_ROOT = readable project root (source/docs); AGENT_WORKDIR = writable output dir
+        readable_root = os.environ.get("AGENT_ROOT") or os.environ.get("AGENT_WORKDIR") or os.getcwd()
+        writable_root = os.environ.get("AGENT_WORKDIR") or os.getcwd()
 
-        # Select prompt tier based on provider context window size
-        prompt_tier: Literal["compact", "full"] = getattr(self, "_prompt_tier", "full")
+        env_block = (
+            "<env>\n"
+            "python3 is available (not python)\n"
+            f"Working dir: {writable_root}\n"
+            "</env>\n"
+        )
+
+        prompt_tier: Literal["compact", "full"] = getattr(self, "_prompt_tier", "full")  # type: ignore[attr-defined]
 
         if prompt_tier == "compact":
-            # Compact tier: read ## COMPACT section from supervisor.md
-            compact_content = _read_directive_section("supervisor", "COMPACT")
-            if compact_content:
-                return compact_content
+            # Read only the ## COMPACT section from supervisor.md
+            compact_directive = _read_directive_section("supervisor", "COMPACT")
+            if not compact_directive:
+                compact_directive = "You emit exactly one JSON action per response. Pure JSON only."
 
-        # Full tier (default)
-        agent_root = os.getenv("AGENT_ROOT", cwd)
-        agent_workdir = os.getenv("AGENT_WORKDIR", os.getenv("P1_RUN_ARTIFACT_DIR", cwd))
+            def _tool_sig(name: str, tool: object) -> str:
+                schema = tool.args_schema if hasattr(tool, "args_schema") else {}  # type: ignore[union-attr]
+                arg_names = list(schema.keys())
+                return f"{name}({', '.join(arg_names)})" if arg_names else name
 
-        env_block_parts = [f"CWD: {agent_root}"]
-        if agent_workdir != agent_root:
-            env_block_parts.append(f"WRITE_DIR: {agent_workdir}")
-        env_block_parts.append(f"RUN_ID: {{run_id_placeholder}}")
-        env_block = "\n".join(env_block_parts)
+            tool_names_line = ", ".join(_tool_sig(n, t) for n, t in self.tools.items())  # type: ignore[attr-defined]
+            return (
+                env_block
+                + compact_directive + "\n"
+                + f"Available tools: {tool_names_line}\n"
+            )
 
-        tools_section = directives.SUPERVISOR_DIRECTIVE.get_tools_section(
-            self.tools,  # type: ignore[attr-defined]
-            prompt_tier=prompt_tier,
+        # Full tier: prepend env_block to existing prompt
+        tool_list = ", ".join(self.tools.keys())  # type: ignore[attr-defined]
+        codebase_ctx = self._build_codebase_context(readable_root)
+        workspace_line = (
+            f"Project root (read): {readable_root}\nWrite workspace: {writable_root}\n"
+            if readable_root != writable_root
+            else f"Working directory: {readable_root}\n"
         )
-        memo_section = directives.SUPERVISOR_DIRECTIVE.get_memo_section()
-        examples_section = ""
-        if prompt_tier == "full":
-            examples_section = _read_directive_section("supervisor", "Examples")
-            if examples_section:
-                examples_section = f"\n\n## Examples\n{examples_section}"
+        tool_args_block = (
+            "Tool args (each \"operation\" takes exactly ONE value, never comma-separated):\n"
+            '- text_analysis: {"text":"...", "operation":"word_count"} (one of: word_count|sentence_count|char_count|key_terms|full_report|complexity_score|paragraph_count|avg_word_length|unique_words)\n'
+            '- string_ops: {"text":"...", "operation":"uppercase"} (one of: uppercase|lowercase|reverse|length|trim|replace|split|count_words|startswith|endswith|contains)\n'
+            '- data_analysis: {"numbers":[...], "operation":"summary_stats"} (one of: summary_stats|outliers|percentiles|distribution|correlation|normalize|z_scores)\n'
+            '- math_stats: {"operation":"add", "a":1, "b":2} or {"operation":"mean", "numbers":[...]}\n'
+            '- sort_array: {"items":[...], "order":"asc"}\n'
+            '- write_file: {"path":"...", "content":"..."}\n'
+            '- read_file: {"path":"..."} — reads entire file; only use for small files\n'
+            '- read_file_chunk: {"path":"...", "offset":0, "limit":150} — read large files in 150-line chunks; use next_offset from result to continue\n'
+            '- outline_code: {"path":"..."} — show functions/classes/imports with line numbers; use before reading a large code file\n'
+            '- json_parser: {"text":"...", "operation":"parse"} (one of: parse|validate|extract_keys|flatten|get_path|pretty_print|count_elements)\n'
+            '- regex_matcher: {"text":"...", "pattern":"...", "operation":"find_all"} (one of: find_all|find_first|split|replace|match|count_matches|extract_groups)\n'
+            '- repeat_message: {"message":"..."}\n'
+            '- run_bash: {"command":"..."}\n'
+            f'- search_files: {{"pattern":"*.py", "path":"{readable_root}"}} — exclude .venv, __pycache__, .git, node_modules paths from results\n'
+            "- Other tools: see tool name for usage.\n\n"
+        )
 
-        parts = [
-            env_block,
-            "",
-            codebase_context,
-            "",
-            tools_section,
-            memo_section,
-            examples_section,
-        ]
-        return "\n".join(p for p in parts if p is not None)
+        # Build few-shot section (full tier only)
+        few_shot_text = _read_directive_section("supervisor", "FEW_SHOT")
+        few_shot_block = f"\n\n## Examples\n{few_shot_text}\n" if few_shot_text else ""
+
+        prompt = (
+            env_block
+            + "You are a deterministic tool-using agent.\n"
+            + workspace_line
+            + (f"Codebase context:\n{codebase_ctx}\n\n" if codebase_ctx else "")
+            + "Return exactly one JSON object per response. No XML, markdown, or prose outside JSON.\n"
+            f"Available tools: {tool_list}\n\n"
+            "Response schema:\n"
+            '{"action":"tool","tool_name":"<name>","args":{...}}\n'
+            '{"action":"finish","answer":"<summary>"}\n'
+            '{"action":"clarify","question":"<question>"}\n\n'
+            + tool_args_block
+            + "Rules:\n"
+            "- One tool call per response.\n"
+            "- Memoization is automatic. Do not emit extra planning subtasks.\n"
+            "- Obey system feedback messages. If a tool returns an error, fix the args.\n"
+            '- On unrecoverable failure: {"action":"finish","answer":"FAILED: <reason>"}\n'
+            "- Never claim success if tool results show errors.\n"
+            "Context management rules (critical — violating these causes context overflow):\n"
+            "- NEVER call read_file on a code file without checking its size first. Use outline_code to inspect structure, then read_file_chunk for sections you need.\n"
+            "- For any file likely over 200 lines, always use read_file_chunk (offset=0, limit=150) and loop using next_offset until has_more is false.\n"
+            "- After reading a chunk and writing partial output, continue with the next chunk — do not stop after one chunk.\n"
+            "- Message history is windowed automatically — completed mission summaries are preserved, raw history is evicted. Focus on the current task.\n"
+            "Context injections prefixed [Cross-run] show HISTORICAL similar missions from past runs.\n"
+            "They are reference examples only — they do NOT mean your current tasks are done.\n"
+            "Always execute tools to complete every task in your current mission list.\n"
+            + few_shot_block
+        )
+
+        # Per-role token budget enforcement
+        from agentic_workflows.orchestration.langgraph.orchestrator import (
+            _ROLE_TOKEN_BUDGETS,  # noqa: PLC0415
+        )
+        budget = _ROLE_TOKEN_BUDGETS.get("planner", 1000)
+        estimated = _estimate_prompt_tokens(prompt)
+        if estimated > budget:
+            logger = _LOG
+
+            # Step 1: Truncate tool descriptions to just name + required args
+            def _short_tool_desc(name: str, tool: object) -> str:
+                schema = tool.args_schema if hasattr(tool, "args_schema") else {}  # type: ignore[union-attr]
+                req_args = [k for k, v in schema.items() if v.get("required") == "true"]
+                return f"- {name}({', '.join(req_args)})" if req_args else f"- {name}"
+
+            short_tools = "\n".join(
+                _short_tool_desc(n, t) for n, t in self.tools.items()  # type: ignore[attr-defined]
+            )
+            prompt = prompt.replace(tool_args_block, f"Tool args:\n{short_tools}\n\n")
+            logger.warning(
+                "Prompt exceeded planner budget (%d > %d tokens), truncated tool descriptions",
+                estimated,
+                budget,
+            )
+            # Step 2: If still over, drop few-shot
+            if few_shot_block and _estimate_prompt_tokens(prompt) > budget:
+                prompt = prompt.replace(few_shot_block, "")
+                logger.warning("Prompt still over budget, dropped few-shot examples")
+
+        prompt += "/no_think"
+        return prompt
 
     def _invalidate_known_poisoned_cache_entries(self) -> None:
         """Purge known-bad cached write inputs discovered during run review."""
@@ -220,7 +303,9 @@ class PlannerHelpersMixin:
 
     def _emit_trace(self, state: RunState, stage: str, **fields: Any) -> None:
         """Append a pipeline trace event to policy_flags['pipeline_trace']."""
-        from agentic_workflows.orchestration.langgraph.orchestrator import _PIPELINE_TRACE_CAP  # noqa: PLC0415
+        from agentic_workflows.orchestration.langgraph.orchestrator import (
+            _PIPELINE_TRACE_CAP,  # noqa: PLC0415
+        )
 
         policy_flags = state.get("policy_flags")
         if not isinstance(policy_flags, dict):
@@ -432,75 +517,99 @@ class PlannerHelpersMixin:
         source: str,
     ) -> RunState:
         """Reject a premature finish action and set up recovery hints."""
-        rejection_count = int(state["retry_counts"].get("finish_rejected", 0)) + 1
-        state["retry_counts"]["finish_rejected"] = rejection_count
-        streak = int(state["policy_flags"].get("finish_rejection_streak", 0)) + 1
+        finish_rejected = int(state["retry_counts"].get("finish_rejected", 0)) + 1
+        state["retry_counts"]["finish_rejected"] = finish_rejected
+        requirements = self._next_incomplete_mission_requirements(state)  # type: ignore[attr-defined]
+        missing_tools = requirements.get("missing_tools", [])
+        missing_files = requirements.get("missing_files", [])
+        queue_depth = len(state.get("pending_action_queue", []))
+        purged_finishes = self._purge_queued_finish_actions(state)
+        fingerprint = (
+            f"{requirements.get('mission_id', 0)}|{','.join(str(item) for item in missing_tools)}|"
+            f"{','.join(str(item) for item in missing_files)}|"
+            f"{self._planner_action_preview(rejected_action)}"
+        )
+        last_fingerprint = str(state["policy_flags"].get("last_finish_rejection_fingerprint", ""))
+        streak = 1 if fingerprint != last_fingerprint else int(
+            state["policy_flags"].get("finish_rejection_streak", 0)
+        ) + 1
+        state["policy_flags"]["last_finish_rejection_fingerprint"] = fingerprint
         state["policy_flags"]["finish_rejection_streak"] = streak
 
-        answer_preview = str(rejected_action.get("answer", ""))[:80]
-        fingerprint = f"finish:{answer_preview}"
-        last_fingerprint = str(state["policy_flags"].get("last_finish_rejection_fingerprint", ""))
-
-        if fingerprint == last_fingerprint:
-            # Identical consecutive rejection — escalate immediately
-            streak = self.max_finish_rejections  # type: ignore[attr-defined]
-            state["policy_flags"]["finish_rejection_streak"] = streak
-
-        state["policy_flags"]["last_finish_rejection_fingerprint"] = fingerprint
-
-        self.logger.info(  # type: ignore[attr-defined]
-            "FINISH REJECTED step=%s source=%s rejection_count=%s streak=%s answer=%s",
+        self.logger.warning(  # type: ignore[attr-defined]
+            (
+                "FINISH REJECTED step=%s source=%s reason=incomplete_requirements "
+                "finish_rejected=%s queue_depth=%s purged_finishes=%s missing_tools=%s "
+                "missing_files=%s"
+            ),
             state["step"],
             source,
-            rejection_count,
-            streak,
-            answer_preview,
-        )
-        self._emit_trace(state, "finish_rejected",
-            source=source,
-            rejection_count=rejection_count,
-            streak=streak,
+            finish_rejected,
+            queue_depth,
+            purged_finishes,
+            missing_tools,
+            missing_files,
         )
 
-        if streak >= self.max_finish_rejections:  # type: ignore[attr-defined]
-            diagnosis = self._diagnose_incomplete_missions(state)
+        next_mission = self._next_incomplete_mission(state)  # type: ignore[attr-defined]
+        if finish_rejected > self.max_finish_rejections:  # type: ignore[attr-defined]
             fail_message = (
-                f"Run forced to stop after {streak} premature finish rejections. "
-                f"Incomplete missions remain. {diagnosis}"
-            )
-            self.logger.warning(  # type: ignore[attr-defined]
-                "FINISH REJECTION ESCALATED step=%s streak=%s — forcing stop",
-                state["step"],
-                streak,
+                "Run stopped: planner repeatedly requested finish while tasks remained "
+                f"incomplete (next task: {next_mission or 'unknown'})."
             )
             state["messages"].append({"role": "system", "content": fail_message})
             state["pending_action"] = {"action": "finish", "answer": fail_message}
-            self._purge_queued_finish_actions(state)
             self.checkpoint_store.save(  # type: ignore[attr-defined]
                 run_id=state["run_id"],
                 step=state["step"],
-                node_name="plan_finish_rejection_escalated",
+                node_name=f"plan_{source}_finish_fail_closed",
                 state=state,
             )
             return state
 
-        incomplete = self._diagnose_incomplete_missions(state)
-        next_mission = self._next_incomplete_mission(state)  # type: ignore[attr-defined]
-        hint_parts = [
-            "Incomplete missions remain — do not finish yet.",
-            incomplete,
-            f"Next task: {next_mission}" if next_mission else "",
-        ]
-        hint = " ".join(p for p in hint_parts if p)
+        fallback_action = self._deterministic_fallback_action(state)  # type: ignore[attr-defined]
+        if fallback_action is not None and fallback_action.get("action") != "finish":
+            state["messages"].append(
+                {
+                    "role": "system",
+                    "content": (
+                        "Finish rejected: missions remain incomplete. "
+                        + self._diagnose_incomplete_missions(state)
+                        + f" Next task: {next_mission or 'unknown'}. "
+                        "Orchestrator selected a deterministic recovery action."
+                    ),
+                }
+            )
+            self._log_planner_output(
+                state=state,
+                source=f"{source}_finish_recover",
+                action=fallback_action,
+                queue_remaining=len(state.get("pending_action_queue", [])),
+            )
+            state["pending_action"] = fallback_action
+            self.checkpoint_store.save(  # type: ignore[attr-defined]
+                run_id=state["run_id"],
+                step=state["step"],
+                node_name=f"plan_{source}_finish_recover",
+                state=state,
+            )
+            return state
+
         state["messages"].append(
-            {"role": "user", "content": f"[Orchestrator] {hint}"}
+            {
+                "role": "system",
+                "content": (
+                    "Finish rejected: missions remain incomplete. "
+                    + self._diagnose_incomplete_missions(state)
+                    + f" Next task: {next_mission or 'unknown'}"
+                ),
+            }
         )
         state["pending_action"] = None
-        self._purge_queued_finish_actions(state)
         self.checkpoint_store.save(  # type: ignore[attr-defined]
             run_id=state["run_id"],
             step=state["step"],
-            node_name="plan_finish_rejected",
+            node_name=f"plan_{source}_finish_rejected",
             state=state,
         )
         return state

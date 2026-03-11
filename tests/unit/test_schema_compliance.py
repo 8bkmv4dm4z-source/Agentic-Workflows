@@ -90,7 +90,7 @@ class TestReportSchemaCompliance:
 class TestSchemaComplianceWiring:
     """Integration test: graph.py calls report_schema_compliance after parse."""
 
-    @patch("agentic_workflows.orchestration.langgraph.graph.report_schema_compliance")
+    @patch("agentic_workflows.observability.report_schema_compliance")
     def test_graph_calls_compliance_on_parse(  # noqa: PLR6301
         self, mock_report: MagicMock
     ) -> None:

@@ -20,6 +20,7 @@ from typing import Any
 from agentic_workflows.orchestration.langgraph import (
     action_parser,
     content_validator,
+    directives,
     fallback_planner,
     memo_manager,
     mission_tracker,
@@ -33,7 +34,6 @@ from agentic_workflows.orchestration.langgraph.state_schema import (
     ensure_state_defaults,
     utc_now_iso,
 )
-from agentic_workflows.orchestration.langgraph import directives
 
 
 class LifecycleNodesMixin:
@@ -359,13 +359,27 @@ class LifecycleNodesMixin:
         return mission_tracker.progress_hint_message(state)
 
     def _mission_tool_hint(self, state: RunState) -> str:
-        return mission_tracker.mission_tool_hint(state)
+        """Return a focused tool hint for the current incomplete mission step."""
+        structured_plan = state.get("structured_plan")
+        if not structured_plan:
+            return ""
+        next_idx = self._next_incomplete_mission_index(state)
+        if next_idx < 0:
+            return ""
+        plan_obj = StructuredPlan.from_dict(structured_plan)
+        top_level = [s for s in plan_obj.steps if s.parent_id is None]
+        if next_idx >= len(top_level):
+            return ""
+        suggested = top_level[next_idx].suggested_tools
+        if not suggested:
+            return ""
+        return f"Suggested tools for this task: {', '.join(suggested)}"
 
     def _build_auto_finish_answer(self, state: RunState) -> str:
         return mission_tracker.build_auto_finish_answer(state)
 
     def _normalize_tool_args(self, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
-        return mission_tracker.normalize_tool_args(tool_name, args)
+        return fallback_planner.normalize_tool_args(tool_name, args)
 
     # ------------------------------------------------------------------ #
     # Memo lookup and cache helpers                                        #

@@ -43,10 +43,17 @@ from agentic_workflows.orchestration.langgraph import (
     mission_tracker,  # noqa: F401 — re-exported
     text_extractor,  # noqa: F401 — re-exported
 )
+from agentic_workflows.orchestration.langgraph import provider as _provider_module
 from agentic_workflows.orchestration.langgraph.checkpoint_store import SQLiteCheckpointStore
-from agentic_workflows.orchestration.langgraph.context_manager import ContextManager, MissionContext  # noqa: F401
+from agentic_workflows.orchestration.langgraph.context_manager import (  # noqa: F401
+    ContextManager,
+    MissionContext,
+)
 from agentic_workflows.orchestration.langgraph.executor_node import ExecutorNodeMixin
-from agentic_workflows.orchestration.langgraph.handoff import create_handoff, create_handoff_result  # noqa: F401
+from agentic_workflows.orchestration.langgraph.handoff import (  # noqa: F401
+    create_handoff,
+    create_handoff_result,
+)
 from agentic_workflows.orchestration.langgraph.lifecycle_nodes import LifecycleNodesMixin
 from agentic_workflows.orchestration.langgraph.memo_store import SQLiteMemoStore
 from agentic_workflows.orchestration.langgraph.mission_auditor import audit_run  # noqa: F401
@@ -72,9 +79,7 @@ from agentic_workflows.orchestration.langgraph.provider import (
     ChatProvider,
     LlamaCppChatProvider,
     ProviderTimeoutError,  # noqa: F401 — re-exported
-    _detect_llama_cpp_model,
-    build_provider,
-)
+    )
 from agentic_workflows.orchestration.langgraph.specialist_evaluator import build_evaluator_subgraph
 from agentic_workflows.orchestration.langgraph.specialist_executor import build_executor_subgraph
 from agentic_workflows.orchestration.langgraph.state_schema import (
@@ -241,7 +246,7 @@ class LangGraphOrchestrator(
         artifact_store: ArtifactStore | None = None,
         fallback_provider: ChatProvider | None = None,
     ) -> None:
-        self.provider = provider or build_provider()
+        self.provider = provider or _provider_module.build_provider()
         self._fallback_provider = fallback_provider
         self._consecutive_parse_failures = 0
         try:
@@ -270,7 +275,7 @@ class LangGraphOrchestrator(
             _executor_port = os.getenv("LLAMA_CPP_EXECUTOR_PORT")
             if _planner_port:
                 _p_url = _build_port_url(str(self.provider.client.base_url), int(_planner_port))
-                if _detect_llama_cpp_model(_p_url) is not None:
+                if _provider_module._detect_llama_cpp_model(_p_url) is not None:
                     self._planner_provider = self.provider.with_port(int(_planner_port))
                 else:
                     _LOG_ORCH = get_logger("langgraph.orchestrator")
@@ -280,7 +285,7 @@ class LangGraphOrchestrator(
                     )
             if _executor_port:
                 _e_url = _build_port_url(str(self.provider.client.base_url), int(_executor_port))
-                if _detect_llama_cpp_model(_e_url) is not None:
+                if _provider_module._detect_llama_cpp_model(_e_url) is not None:
                     self._executor_provider = self.provider.with_port(int(_executor_port))
                 else:
                     _LOG_ORCH = get_logger("langgraph.orchestrator")

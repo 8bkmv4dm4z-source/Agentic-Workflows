@@ -18,8 +18,8 @@ import os
 import re
 from typing import Any
 
+import agentic_workflows.observability as _observability_module
 from agentic_workflows.logger import get_logger
-from agentic_workflows.observability import report_schema_compliance
 from agentic_workflows.orchestration.langgraph.model_router import RoutingSignals
 from agentic_workflows.orchestration.langgraph.provider import ProviderTimeoutError
 from agentic_workflows.orchestration.langgraph.state_schema import RunState, ensure_state_defaults
@@ -374,7 +374,7 @@ class PlannerNodeMixin:
             if os.getenv("P1_PROVIDER", "ollama").lower() == "anthropic":
                 return state
             all_actions, _parse_used_fallback = self._parse_all_actions_json(model_output)  # type: ignore[attr-defined]
-            report_schema_compliance(
+            _observability_module.report_schema_compliance(
                 role=state.get("active_specialist", "supervisor"),
                 first_attempt_success=not _parse_used_fallback,
                 run_id=state.get("run_id"),
@@ -602,7 +602,7 @@ class PlannerNodeMixin:
                         state["messages"].append({"role": "assistant", "content": model_output})
                         state["policy_flags"]["planner_timeout_mode"] = False
                         all_actions, _pf = self._parse_all_actions_json(model_output)  # type: ignore[attr-defined]
-                        report_schema_compliance(
+                        _observability_module.report_schema_compliance(
                             role=state.get("active_specialist", "supervisor"),
                             first_attempt_success=not _pf,
                             run_id=state.get("run_id"),
@@ -711,7 +711,7 @@ class PlannerNodeMixin:
                         state["messages"].append({"role": "assistant", "content": model_output})
                         state["policy_flags"]["planner_timeout_mode"] = False
                         all_actions, _pf = self._parse_all_actions_json(model_output)  # type: ignore[attr-defined]
-                        report_schema_compliance(
+                        _observability_module.report_schema_compliance(
                             role=state.get("active_specialist", "supervisor"),
                             first_attempt_success=not _pf,
                             run_id=state.get("run_id"),

@@ -247,7 +247,9 @@ class ExecutorNodeMixin:
 
     def _execute_action(self, state: RunState) -> RunState:  # noqa: C901  # method is intentionally large
         """Execute planned tool action, including duplicate and policy checks."""
-        from agentic_workflows.orchestration.langgraph.orchestrator import MemoizationPolicyViolation  # noqa: PLC0415
+        from agentic_workflows.orchestration.langgraph.orchestrator import (
+            MemoizationPolicyViolation,  # noqa: PLC0415
+        )
 
         state = ensure_state_defaults(state, system_prompt=self.system_prompt)  # type: ignore[attr-defined]
         action = state.get("pending_action")
