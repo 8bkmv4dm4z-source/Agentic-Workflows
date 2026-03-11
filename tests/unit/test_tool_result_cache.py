@@ -88,9 +88,117 @@ class TestToolResultCacheArgsHash:
 
 class TestStructuralHealthTruncations:
     def test_structural_health_truncations_increments(self) -> None:
-        """ContextManager and LangGraphOrchestrator are importable (lazy import guard)."""
-        from agentic_workflows.orchestration.langgraph.context_manager import ContextManager  # noqa: F401
-        from agentic_workflows.orchestration.langgraph.graph import LangGraphOrchestrator  # noqa: F401
-        # Full behavioral test (with mock large-result + ContextManager interception)
-        # is deferred to an integration test once ContextManager wiring is complete in Plan 05.
-        assert True
+        """ContextManager accepts tool_result_cache param and intercepts large results."""
+        from agentic_workflows.orchestration.langgraph.context_manager import ContextManager
+
+        cache = ToolResultCache(pool=None)
+        cm = ContextManager(tool_result_cache=cache)
+        assert cm._tool_result_cache is cache
+
+    def test_build_planner_context_injection_replaces_large_result_with_compact_pointer(self) -> None:
+        """build_planner_context_injection() replaces large tool results with compact pointer format."""
+        import json as _json
+
+        from agentic_workflows.orchestration.langgraph.context_manager import ContextManager
+
+        cache = ToolResultCache(pool=None)
+        cm = ContextManager(tool_result_cache=cache)
+
+        # Build a state with a mission context (completed) and a large tool_history result
+        large_result = {"data": "x" * 2100}
+        large_result_str = _json.dumps(large_result)
+
+        state: dict = {
+            "mission_contexts": {
+                "1": {
+                    "mission_id": 1,
+                    "goal": "Test mission",
+                    "status": "completed",
+                    "tools_used": ["big_tool"],
+                    "key_results": {},
+                    "artifacts": [],
+                    "sub_missions": {},
+                    "summary": "Test mission | Tools: big_tool",
+                    "step_range": None,
+                }
+            },
+            "tool_history": [
+                {
+                    "call": 1,
+                    "tool": "big_tool",
+                    "args": {"input": "test"},
+                    "result": large_result,
+                }
+            ],
+            "step": 2,
+            "run_id": "test-run-001",
+            "structural_health": {
+                "tool_result_truncations": 0,
+            },
+        }
+
+        injection = cm.build_planner_context_injection(state)
+        # The compact pointer format must be in the injection string
+        assert "[Result truncated" in injection, f"Expected compact pointer in: {injection!r}"
+        assert "big_tool" in injection
+        # The raw 2100-char result must NOT appear in full — compact pointer caps at ~400 chars total
+        # Summary is first 200 chars of result_str; the full "x" * 2100 raw string must not appear
+        assert "x" * 500 not in injection, "Raw large result leaked into injection"
+
+    def test_structural_health_incremented_after_truncation(self) -> None:
+        """structural_health['tool_result_truncations'] increments when large result intercepted."""
+        import json as _json
+
+        from agentic_workflows.orchestration.langgraph.context_manager import ContextManager
+
+        cm = ContextManager(tool_result_cache=None)
+        large_result = {"data": "y" * 2100}
+
+        state: dict = {
+            "mission_contexts": {},
+            "tool_history": [
+                {
+                    "call": 1,
+                    "tool": "big_tool",
+                    "args": {"k": "v"},
+                    "result": large_result,
+                }
+            ],
+            "step": 1,
+            "run_id": "test-run-002",
+            "structural_health": {
+                "tool_result_truncations": 0,
+            },
+        }
+
+        cm.build_planner_context_injection(state)
+        assert state["structural_health"]["tool_result_truncations"] >= 1
+
+    def test_tool_result_cache_not_none_stores_result(self) -> None:
+        """With tool_result_cache=ToolResultCache(pool=None), store is called (no-op) without error."""
+        import json as _json
+
+        from agentic_workflows.orchestration.langgraph.context_manager import ContextManager
+
+        cache = ToolResultCache(pool=None)
+        cm = ContextManager(tool_result_cache=cache)
+        large_result = {"data": "z" * 2100}
+
+        state: dict = {
+            "mission_contexts": {},
+            "tool_history": [
+                {
+                    "call": 1,
+                    "tool": "cache_tool",
+                    "args": {"x": 1},
+                    "result": large_result,
+                }
+            ],
+            "step": 1,
+            "run_id": "test-run-003",
+            "structural_health": {"tool_result_truncations": 0},
+        }
+
+        # Must not raise even with pool=None cache
+        injection = cm.build_planner_context_injection(state)
+        assert "[Result truncated" in injection

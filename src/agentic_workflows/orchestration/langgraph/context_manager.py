@@ -11,6 +11,7 @@ Phase 7.1 — CTX-01, CTX-02, CTX-03, CTX-04, CTX-05, CTX-06, CTX-08, CTX-09, CT
 from __future__ import annotations
 
 import json
+import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any
 
@@ -22,6 +23,9 @@ if TYPE_CHECKING:
     from agentic_workflows.context.embedding_provider import EmbeddingProvider
     from agentic_workflows.storage.artifact_store import ArtifactStore
     from agentic_workflows.storage.mission_context_store import MissionContextStore
+    from agentic_workflows.storage.tool_result_cache import ToolResultCache
+
+_LARGE_RESULT_THRESHOLD: int = int(os.getenv("LARGE_RESULT_THRESHOLD", "2000"))
 
 _logger = get_logger("context_manager")
 
@@ -250,6 +254,7 @@ class ContextManager:
         mission_context_store: MissionContextStore | None = None,
         embedding_provider: EmbeddingProvider | None = None,
         artifact_store: ArtifactStore | None = None,
+        tool_result_cache: ToolResultCache | None = None,
     ) -> None:
         self.large_result_threshold = large_result_threshold
         self.sliding_window_cap = sliding_window_cap
@@ -257,6 +262,7 @@ class ContextManager:
         self._store = mission_context_store
         self._embedding_provider = embedding_provider
         self._artifact_store = artifact_store
+        self._tool_result_cache = tool_result_cache
         self._logger = _logger
         # Per-run caches keyed by f"{run_id}:{goal_text}" to prevent cross-run contamination
         self._cascade_cache: dict[str, list] = {}   # cache_key → cached hits
@@ -754,7 +760,52 @@ class ContextManager:
 
         Format: "[Orchestrator] Prior missions: {summary1}; {summary2}. Available artifacts: {key=value, ...}"
         Returns empty string if no completed missions exist.
+
+        Phase 08-05 (BTLNK-01): Scans recent tool_history for large results (>LARGE_RESULT_THRESHOLD
+        chars). Each large result is stored via ToolResultCache (if wired) and replaced with a compact
+        pointer in the injection string. tool_history is NEVER modified — only the injection is compact.
+        structural_health["tool_result_truncations"] is incremented for each large result intercepted.
         """
+        # ── BTLNK-01: Large-result interception ──────────────────────────────────
+        _truncation_map: dict[str, str] = {}  # args_hash → compact pointer string
+        _truncations = 0
+        _tool_compact_lines: list[str] = []
+        for record in state.get("tool_history", [])[-10:]:
+            import json as _json  # noqa: PLC0415
+
+            from agentic_workflows.storage.tool_result_cache import make_args_hash  # noqa: PLC0415
+
+            result_str = _json.dumps(record.get("result", ""), default=str)
+            if len(result_str) <= _LARGE_RESULT_THRESHOLD:
+                continue
+            tool_name = record.get("tool", "unknown")
+            args = record.get("args", {})
+            args_hash = make_args_hash(tool_name, args)
+            summary = result_str[:200]
+            if self._tool_result_cache is not None:
+                self._tool_result_cache.store(
+                    tool_name=tool_name,
+                    args_hash=args_hash,
+                    full_result=result_str,
+                    summary=summary,
+                )
+            _compact = (
+                f"[Result truncated — {len(result_str)} chars stored] "
+                f"Tool: {tool_name} | Key: {args_hash[:8]} | Summary: {summary}..."
+            )
+            _truncation_map[args_hash] = _compact
+            _tool_compact_lines.append(_compact)
+            _truncations += 1
+
+        # Increment structural_health counter
+        if _truncations > 0:
+            structural_health: dict[str, Any] = state.get("structural_health") or {}
+            structural_health["tool_result_truncations"] = (
+                structural_health.get("tool_result_truncations", 0) + _truncations
+            )
+            state["structural_health"] = structural_health
+        # ── End BTLNK-01 ─────────────────────────────────────────────────────────
+
         mission_contexts: dict[str, Any] = state.get("mission_contexts", {})
         summaries: list[str] = []
         all_artifacts: list[str] = []
@@ -773,6 +824,11 @@ class ContextManager:
             if all_artifacts:
                 parts.append(f"Available artifacts: {', '.join(all_artifacts)}")
             base_result = ". ".join(parts)
+
+        # Prepend compact pointers for large tool results (BTLNK-01)
+        if _tool_compact_lines:
+            compact_block = "\n".join(_tool_compact_lines)
+            base_result = compact_block + ("\n" + base_result if base_result else "")
 
         # Phase 7.3: append cross-run similar missions from cascade store
         _CONTEXT_CAP = 1500  # total chars across all injected content
