@@ -588,6 +588,31 @@ class LlamaCppChatProvider(_RetryingProviderBase):
         clone.model = alias
         return clone
 
+    def with_port(self, port: int) -> LlamaCppChatProvider:
+        """Return a new provider instance targeting *port* on the same host.
+
+        Creates a fresh OpenAI client with an updated base URL. All retry,
+        timeout, grammar, and model settings are copied from the source.
+        Composable with with_alias(): provider.with_alias("planner").with_port(8081).
+        """
+        from urllib.parse import urlparse, urlunparse
+
+        clone = LlamaCppChatProvider.__new__(LlamaCppChatProvider)
+        # _RetryingProviderBase attributes
+        clone.timeout_seconds = self.timeout_seconds
+        clone.max_retries = self.max_retries
+        clone.retry_backoff_seconds = self.retry_backoff_seconds
+        # LlamaCpp-specific attributes
+        clone._grammar_enabled = self._grammar_enabled
+        clone.model = self.model
+
+        old_url = str(self.client.base_url)
+        parsed = urlparse(old_url)
+        new_netloc = f"{parsed.hostname}:{port}"
+        new_url = urlunparse(parsed._replace(netloc=new_netloc))
+        clone.client = OpenAI(api_key="llama-cpp", base_url=new_url, timeout=self.timeout_seconds)
+        return clone
+
     @observe(name="provider.generate")
     def generate(self, messages: Sequence[AgentMessage], response_schema: dict | None = None) -> str:
         enable_thinking = os.getenv("LLAMA_CPP_THINKING", "").strip().lower() in ("1", "true", "yes")
