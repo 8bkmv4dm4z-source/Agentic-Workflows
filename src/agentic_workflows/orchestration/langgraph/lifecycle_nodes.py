@@ -260,10 +260,6 @@ class LifecycleNodesMixin:
     def _validate_action(self, model_output: str) -> tuple[dict[str, Any], bool]:
         return action_parser.validate_action(model_output, self.tools)  # type: ignore[attr-defined]
 
-    def _parse_action_json(self, model_output: str, state: RunState | None = None) -> tuple[dict[str, Any], bool]:
-        step = (state or {}).get("step", 0)
-        return action_parser.parse_action_json(model_output, step=step)
-
     def _extract_first_json_object(self, text: str) -> str | None:
         return action_parser.extract_first_json_object(text)
 

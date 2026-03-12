@@ -57,7 +57,7 @@ Role:
 
 Important methods:
 - Graph wiring: `_compile_graph()`
-- Planning: `_plan_next_action()`, `_validate_action()`, `_parse_action_json()`
+- Planning: `_plan_next_action()`, `_validate_action()`
 - Execution: `_execute_action()`, `_normalize_tool_args()`
 - Policy: `_enforce_memo_policy()`
 - Finalization/audit: `_finalize()`, `_build_derived_snapshot()`
