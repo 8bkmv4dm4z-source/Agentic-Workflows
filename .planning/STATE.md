@@ -3,10 +3,10 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
 status: completed
-last_updated: "2026-03-11T15:06:35.992Z"
+last_updated: "2026-03-12T00:13:47.700Z"
 last_activity: "2026-03-10 — Quick-6: spaCy clause splitting, partial mission persistence, provider fix"
 progress:
-  total_phases: 17
+  total_phases: 18
   completed_phases: 16
   total_plans: 72
   completed_plans: 73
@@ -253,11 +253,15 @@ Recent decisions affecting current work:
 - [Phase 08 extend]: Option A key design: full 64-char args_hash in compact pointer (not truncated); planner passes verbatim to retrieve_tool_result — zero new SQL
 - [Phase 08 extend]: get_by_key() added to ToolResultCache for hash-only lookup; pool=None returns None safely; lazy TTL eviction with WARNING log
 - [Phase 08 extend]: Four-element compact pointer format locked: size+chunks hint, tool+full_key, summary, → call hint with example
+- [Phase 08 fix]: _completion_marker is now position-aware: "Proceed to Mission N+1" for intermediate missions, "call finish" only for last mission
+- [Phase 08 fix]: extract_summary_from_result has dedicated list_directory handler (20 filenames, 10 paths) replacing 200-char generic truncation
+- [Phase 08 fix]: retrieve_tool_result progress hint upgraded when has_more=False: names next_mission explicitly instead of generic "continue" message
 
 ### Roadmap Evolution
 
 - Phase 7.1 inserted after Phase 7: context manipulation for better sub-agent multi-task handling (URGENT)
 - Phase 7.2 inserted after Phase 7.1: Architecture Review Implementation - Critical Bug Fixes and Systemic Hardening (URGENT)
+- Phase 8.1 inserted after Phase 8: handle the concerns of the .planning/codebase (URGENT)
 
 ### Pending Todos
 
@@ -281,6 +285,7 @@ Recent decisions affecting current work:
 | 7.2 | Wave 3: auto-derived annotated fields + prepare_state single source of truth | Refactor | 2026-03-08 | 6ed752b | ✓ Complete |
 | 7.2 | Wave 3 final: P1_BASH_ENABLED guard, memoize prompt removal, 144 tool contract tests | Security+Test | 2026-03-08 | e3f3214 | ✓ Complete |
 | 8 | retrieve_tool_result tool — planner-callable cache retrieval with chunking | Extend | 2026-03-11 | b51dee8 | ✓ Complete |
+| 8 | Multi-mission context loop fix — position-aware marker, list_directory extraction, retrieve hint | Fix | 2026-03-11 | 050fd4e | ✓ Complete |
 
 ### Quick Tasks Completed
 
@@ -297,5 +302,5 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last activity: 2026-03-11 - Completed Extend feature for Phase 08: retrieve_tool_result tool — planner-callable cache retrieval with chunking
-Resume file: None
+Last activity: 2026-03-11 - Diagnosed and fixed 3 multi-mission context loop causes (position-aware completion marker, list_directory summary extraction, retrieve_tool_result progress hint)
+Resume file: .planning/phases/08.1-handle-the-concerns-of-the-planning-codebase/08.1-CONTEXT.md
