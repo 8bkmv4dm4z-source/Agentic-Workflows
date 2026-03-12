@@ -1,4 +1,4 @@
-"""Unit tests for ModelRouter routing split and backward compatibility.
+"""Unit tests for ModelRouter routing split.
 
 Tests verify:
 - Planning/evaluation/error_recovery tasks route to strong provider
@@ -6,11 +6,8 @@ Tests verify:
 - Single-provider mode has has_dual_providers=False
 - LangGraphOrchestrator wires self._router correctly
 - Signal-based routing via route_by_signals()
-- route_by_intent() deprecated shim still works (backward compat until Plan 03)
 """
 from __future__ import annotations
-
-import warnings
 
 import pytest
 
@@ -173,66 +170,3 @@ def test_route_by_signals_has_dual_providers() -> None:
 
     single = ModelRouter(strong_provider=s)
     assert single.has_dual_providers is False
-
-
-# --- Deprecated route_by_intent backward-compat tests ---
-
-
-def test_route_by_intent_deprecated_emits_warning() -> None:
-    """route_by_intent() emits DeprecationWarning when called."""
-    s = _StrongProvider()
-    f = _FastProvider()
-    router = ModelRouter(strong_provider=s, fast_provider=f)
-
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        router.route_by_intent(intent_classification={"complexity": "complex"})
-        assert len(w) == 1
-        assert issubclass(w[0].category, DeprecationWarning)
-        assert "route_by_signals" in str(w[0].message)
-
-
-def test_route_by_intent_complex_returns_strong() -> None:
-    """route_by_intent with complexity='complex' should return strong provider (backward compat)."""
-    s = _StrongProvider()
-    f = _FastProvider()
-    router = ModelRouter(strong_provider=s, fast_provider=f)
-
-    intent = {"complexity": "complex", "mission_type": "analysis", "confidence": 0.8, "source": "llm"}
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        assert router.route_by_intent(intent_classification=intent) is s
-
-
-def test_route_by_intent_simple_returns_fast() -> None:
-    """route_by_intent with complexity='simple' should return fast provider (backward compat)."""
-    s = _StrongProvider()
-    f = _FastProvider()
-    router = ModelRouter(strong_provider=s, fast_provider=f)
-
-    intent = {"complexity": "simple", "mission_type": "file_io", "confidence": 0.7, "source": "deterministic_fallback"}
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        assert router.route_by_intent(intent_classification=intent) is f
-
-
-def test_route_by_intent_none_falls_back_to_task_complexity() -> None:
-    """route_by_intent with None intent should fall back to task_complexity routing."""
-    s = _StrongProvider()
-    f = _FastProvider()
-    router = ModelRouter(strong_provider=s, fast_provider=f)
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        assert router.route_by_intent(intent_classification=None, fallback_complexity="tool_selection") is f
-
-
-def test_route_by_intent_none_planning_returns_strong() -> None:
-    """route_by_intent with None intent AND fallback_complexity='planning' returns strong (backward compat)."""
-    s = _StrongProvider()
-    f = _FastProvider()
-    router = ModelRouter(strong_provider=s, fast_provider=f)
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        assert router.route_by_intent(intent_classification=None, fallback_complexity="planning") is s

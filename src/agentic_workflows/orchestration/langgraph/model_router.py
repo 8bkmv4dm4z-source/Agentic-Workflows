@@ -13,7 +13,6 @@ Threshold logic (route_by_signals):
 - otherwise -> fast
 """
 
-import warnings
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 if TYPE_CHECKING:
@@ -100,33 +99,6 @@ class ModelRouter:
 
         # 6. Default -> fast
         return self._fast
-
-    def route_by_intent(
-        self,
-        intent_classification: dict[str, Any] | None = None,
-        fallback_complexity: TaskComplexity = "planning",
-    ) -> ChatProvider:
-        """Deprecated: use route_by_signals() instead.
-
-        Kept as backward-compat shim until all callers migrate (Plan 03).
-        Delegates to route_by_signals with default signal values.
-        """
-        warnings.warn(
-            "route_by_intent() is deprecated; use route_by_signals()",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        signals: RoutingSignals = {
-            "token_budget_remaining": 100_000,
-            "mission_type": "unknown",
-            "retry_count": 0,
-            "step": 0,
-            "intent_classification": intent_classification,
-        }
-        if intent_classification is not None:
-            return self.route_by_signals(signals)
-        # No intent: fall back to task complexity routing
-        return self.route(fallback_complexity)
 
     @property
     def has_dual_providers(self) -> bool:
