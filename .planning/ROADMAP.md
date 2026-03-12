@@ -335,6 +335,18 @@ Plans:
 
 ---
 
+### Phase 08.1: handle the concerns of the .planning/codebase (INSERTED)
+
+**Goal:** Remove confirmed dead code (_parse_action_json shim, route_by_intent deprecated shim), update Nyquist VALIDATION.md for phases 07.1 and 07.9 to reflect passing tests, produce a ContextManager redesign specification document covering 4 failure modes, and update the v1.5 milestone audit to status: passed.
+**Requirements**: dead-code-01, dead-code-02, nyquist-07.1, nyquist-07.9, context-audit, milestone-exit
+**Depends on:** Phase 8
+**Plans:** 3 plans
+
+Plans:
+- [ ] 08.1-01-PLAN.md — Remove _parse_action_json shim + route_by_intent deprecated shim (dead-code-01, dead-code-02)
+- [ ] 08.1-02-PLAN.md — Update Phase 07.1 and 07.9 VALIDATION.md to nyquist_compliant: true (nyquist-07.1, nyquist-07.9)
+- [ ] 08.1-03-PLAN.md — Write ContextManager audit spec + update v1.5 milestone audit to passed (context-audit, milestone-exit)
+
 ### Phase 07.5: Wire ArtifactStore to Runtime (INSERTED)
 
 **Goal:** Connect the currently-dead `ArtifactStore` to the live mission execution path. `MissionContext.artifacts` (already computed at `context_manager.py:492`) should be persisted to Postgres via `ArtifactStore.upsert()` inside `_persist_mission_context()`. Add `artifact_store` parameter to `LangGraphOrchestrator` and `ContextManager`, wire it in `run.py` and `user_run.py`, and add an integration test confirming artifacts appear in the DB after a mission completes.
