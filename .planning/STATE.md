@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: milestone
 status: completed
-last_updated: "2026-03-12T00:34:16.973Z"
+last_updated: "2026-03-12T00:35:53.759Z"
 last_activity: "2026-03-10 — Quick-6: spaCy clause splitting, partial mission persistence, provider fix"
 progress:
   total_phases: 18
   completed_phases: 16
   total_plans: 75
-  completed_plans: 74
+  completed_plans: 75
   percent: 100
 ---
 
@@ -103,6 +103,7 @@ Progress: [██████████] 100% (69/69 plans complete, Phase 7.9
 | Phase 08 P03 | 90 | 2 tasks | 8 files |
 | Phase 08 P05 | 7 | 2 tasks | 7 files |
 | Phase 08.1 P02 | 2min | 2 tasks | 2 files |
+| Phase 08.1 P01 | 5 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -259,6 +260,8 @@ Recent decisions affecting current work:
 - [Phase 08 fix]: retrieve_tool_result progress hint upgraded when has_more=False: names next_mission explicitly instead of generic "continue" message
 - [Phase 08.1-02]: Marked Phase 07.1 VALIDATION.md nyquist_compliant: true after confirming 57 tests pass in test_context_manager.py
 - [Phase 08.1-02]: Marked Phase 07.9 VALIDATION.md wave_0_complete: true after confirming 31 unit tests pass across test_query_context.py, test_memory_consolidation.py, test_schema_compliance.py
+- [Phase 08.1-01]: Verified zero src/ callers for _parse_action_json via grep --include='*.py' before deletion — safe removal confirmed
+- [Phase 08.1-01]: Removed import warnings from model_router.py after route_by_intent deletion rendered it unused
 
 ### Roadmap Evolution
 

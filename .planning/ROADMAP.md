@@ -340,7 +340,7 @@ Plans:
 **Goal:** Remove confirmed dead code (_parse_action_json shim, route_by_intent deprecated shim), update Nyquist VALIDATION.md for phases 07.1 and 07.9 to reflect passing tests, produce a ContextManager redesign specification document covering 4 failure modes, and update the v1.5 milestone audit to status: passed.
 **Requirements**: dead-code-01, dead-code-02, nyquist-07.1, nyquist-07.9, context-audit, milestone-exit
 **Depends on:** Phase 8
-**Plans:** 3 plans
+**Plans:** 2/3 plans executed
 
 Plans:
 - [ ] 08.1-01-PLAN.md — Remove _parse_action_json shim + route_by_intent deprecated shim (dead-code-01, dead-code-02)
